@@ -1,0 +1,81 @@
+apply plugin: 'com.android.application'
+
+android {
+    namespace "ai.myalfred.myllm"
+    compileSdk rootProject.ext.compileSdkVersion
+    defaultConfig {
+        applicationId "ai.myalfred.myllm"
+        minSdkVersion rootProject.ext.minSdkVersion
+        targetSdkVersion rootProject.ext.targetSdkVersion
+        // Surchargeables par la CI : ./gradlew -PversionName=$(cat ../../VERSION) -PversionCode=N
+        versionCode project.hasProperty('versionCode') ? project.property('versionCode').toInteger() : 1
+        versionName project.hasProperty('versionName') ? project.property('versionName') : "1.0"
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        aaptOptions {
+             // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
+             // Default: https://android.googlesource.com/platform/frameworks/base/+/282e181b58cf72b6ca770dc7ca5f91f135444502/tools/aapt/AaptAssets.cpp#61
+            ignoreAssetsPattern '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
+        }
+    }
+    // Signature release pilotée par variables d'environnement (CI GitHub Actions).
+    // Sans keystore configuré, le build release reste non signé (dev local).
+    signingConfigs {
+        // Keystore debug COMMITÉ (mobile/android/debug.keystore, mots de passe
+        // standard Android non secrets) : SHA-1 stable entre les postes et la CI,
+        // indispensable pour Google Sign-In (l'empreinte est déclarée dans la
+        // console Google Cloud ; un keystore auto-généré changerait à chaque
+        // runner et casserait la connexion Google).
+        debug {
+            storeFile file('../debug.keystore')
+            storePassword 'android'
+            keyAlias 'androiddebugkey'
+            keyPassword 'android'
+        }
+        release {
+            if (System.getenv('ANDROID_KEYSTORE_PATH')) {
+                storeFile file(System.getenv('ANDROID_KEYSTORE_PATH'))
+                storePassword System.getenv('ANDROID_KEYSTORE_PASSWORD')
+                keyAlias System.getenv('ANDROID_KEY_ALIAS')
+                keyPassword System.getenv('ANDROID_KEY_PASSWORD')
+            }
+        }
+    }
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            if (System.getenv('ANDROID_KEYSTORE_PATH')) {
+                signingConfig signingConfigs.release
+            }
+        }
+    }
+}
+
+repositories {
+    flatDir{
+        dirs '../capacitor-cordova-android-plugins/src/main/libs', 'libs'
+    }
+}
+
+dependencies {
+    implementation fileTree(include: ['*.jar'], dir: 'libs')
+    implementation "androidx.appcompat:appcompat:$androidxAppCompatVersion"
+    implementation "androidx.coordinatorlayout:coordinatorlayout:$androidxCoordinatorLayoutVersion"
+    implementation "androidx.core:core-splashscreen:$coreSplashScreenVersion"
+    implementation project(':capacitor-android')
+    testImplementation "junit:junit:$junitVersion"
+    androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
+    androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
+    implementation project(':capacitor-cordova-android-plugins')
+}
+
+apply from: 'capacitor.build.gradle'
+
+try {
+    def servicesJSON = file('google-services.json')
+    if (servicesJSON.text) {
+        apply plugin: 'com.google.gms.google-services'
+    }
+} catch(Exception e) {
+    logger.info("google-services.json not found, google-services plugin not applied. Push Notifications won't work")
+}

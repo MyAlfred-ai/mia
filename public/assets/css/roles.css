@@ -1,0 +1,837 @@
+/* =========================================================
+   Utilisateurs → Rôles (/admin/roles) — templates/admin/roles.php, roles.js
+   Feuille propre à la page : chargée après main.css, elle n'en reprend que
+   les jetons (--accent, --border, --text…). `--role-color` = couleur du rôle
+   (pastilles, carte choisie, en-tête de l'éditeur) ; les cases cochées
+   restent à l'accent de l'organisation, comme partout ailleurs.
+   Page COMPACTE : aucune légende posée dans la page — les définitions vivent
+   dans des infobulles (`.role-tip`, posée par roles.js au-dessus de l'élément).
+   ========================================================= */
+
+/* Masqué à l'écran, lu par les lecteurs d'écran. */
+.sr-only {
+    position: absolute !important;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+}
+
+body.admin-page .admin-content.roles-content > * { max-width: 1280px; }
+
+/* Desktop : c'est la fenêtre qui défile, mais l'overflow de `.admin-content`
+   (qui défile sur mobile) en ferait le « scrollport » immobile de la barre
+   d'actions collante — même remède que les pages des tâches et des assistants. */
+@media (min-width: 769px) {
+    .admin-content.roles-content { overflow: visible; }
+}
+
+/* ---- En-tête ---------------------------------------------------------- */
+.roles-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+    margin-bottom: 16px;
+}
+.roles-head-text { min-width: 0; flex: 1 1 420px; }
+.roles-head h1 { margin-bottom: 6px; }
+.roles-lead {
+    margin: 0;
+    max-width: 760px;
+    font-size: 13.5px;
+    line-height: 1.6;
+    color: var(--text-muted);
+}
+.roles-lead strong { color: var(--text); font-weight: 600; }
+.roles-lead a { color: var(--accent); text-decoration: none; }
+.roles-lead a:hover { text-decoration: underline; }
+.roles-tiphint {
+    display: flex;
+    align-items: flex-start;
+    gap: 7px;
+    margin: 6px 0 0;
+    font-size: 12.5px;
+    line-height: 1.5;
+    color: var(--text-muted);
+}
+.roles-tiphint svg { flex-shrink: 0; margin-top: 2px; width: 14px; height: 14px; color: var(--accent); }
+.roles-new-btn { gap: 8px; white-space: nowrap; flex-shrink: 0; }
+/* Le sélecteur de langue flotte en haut à droite : le bouton lui laisse sa
+   place (même réserve que la page des tâches). Sur mobile, il vit dans le
+   header, au-dessus du contenu. */
+@media (min-width: 769px) {
+    .roles-head { padding-right: var(--lang-switcher-reserve); }
+}
+.roles-new-btn:disabled { opacity: .5; cursor: not-allowed; }
+.roles-alert { margin-bottom: 14px; }
+.roles-alert a { color: inherit; text-decoration: underline; }
+
+/* ---- Mise en page : liste à gauche, droits à droite --------------------- */
+.roles-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 16px;
+    align-items: start;
+}
+.roles-main { min-width: 0; }
+@media (min-width: 1240px) {
+    .roles-layout { grid-template-columns: 264px minmax(0, 1fr); gap: 22px; }
+    .roles-list {
+        position: sticky;
+        top: 24px;
+        max-height: calc(calc(100vh / var(--ui-zoom, 1)) - 48px);
+        overflow-y: auto;
+        padding-right: 2px;
+    }
+}
+
+/* ---- Liste des rôles ---------------------------------------------------- */
+.roles-list { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.roles-list-label {
+    padding: 12px 4px 2px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: .05em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+}
+.roles-list-label:first-child { padding-top: 0; }
+.roles-list-empty {
+    margin: 0 4px 2px;
+    font-size: 12.5px;
+    line-height: 1.5;
+    color: var(--text-muted);
+}
+.role-card {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 11px 12px 11px 14px;
+    border: 1px solid var(--border);
+    border-radius: 11px;
+    background: var(--bg-sidebar);
+    color: var(--text);
+    text-decoration: none;
+    transition: border-color .15s, background .15s, box-shadow .15s;
+}
+.role-card:hover { border-color: color-mix(in srgb, var(--role-color) 55%, var(--border)); }
+.role-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.role-card.is-current {
+    border-color: color-mix(in srgb, var(--role-color) 70%, var(--border));
+    background: color-mix(in srgb, var(--role-color) 9%, var(--bg-sidebar));
+    box-shadow: inset 3px 0 0 var(--role-color);
+}
+.role-card-dot {
+    width: 10px;
+    height: 10px;
+    flex-shrink: 0;
+    border-radius: 50%;
+    background: var(--role-color);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--role-color) 22%, transparent);
+}
+.role-card-text { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1; }
+.role-card-name {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    font-size: 14px;
+    font-weight: 600;
+}
+.role-card-name-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.role-card-lock { display: inline-flex; color: var(--text-muted); flex-shrink: 0; }
+.role-card-line {
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    font-size: 12px;
+    line-height: 1.4;
+    color: var(--text-muted);
+}
+.role-card-count {
+    flex-shrink: 0;
+    min-width: 26px;
+    height: 22px;
+    padding: 0 7px;
+    display: inline-grid;
+    place-items: center;
+    border-radius: 11px;
+    font-size: 12px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    color: var(--text-muted);
+    background: color-mix(in srgb, var(--text) 8%, transparent);
+}
+.role-card.is-current .role-card-count {
+    color: var(--text);
+    background: color-mix(in srgb, var(--role-color) 24%, transparent);
+}
+/* Tablette et téléphone : la liste passe au-dessus, en grille. */
+@media (max-width: 1239px) {
+    .roles-list {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(min(230px, 100%), 1fr));
+        gap: 8px;
+    }
+    .roles-list-label, .roles-list-empty { grid-column: 1 / -1; }
+    .roles-list-label { padding-top: 4px; }
+}
+
+/* ---- Pastilles (rôle livré, verrouillé, modifié) ------------------------- */
+.role-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 2px 9px;
+    border-radius: 999px;
+    font-size: 11.5px;
+    font-weight: 500;
+    white-space: nowrap;
+    color: var(--text-muted);
+    background: color-mix(in srgb, var(--text) 8%, transparent);
+}
+.role-chip svg { width: 12px; height: 12px; flex-shrink: 0; }
+.role-chip.is-lock {
+    color: var(--text);
+    background: color-mix(in srgb, var(--role-color, var(--accent)) 15%, transparent);
+}
+.role-chip.is-mod { color: #d97706; background: rgba(245, 158, 11, .14); }
+[data-theme="light"] .role-chip.is-mod { color: #b45309; }
+
+/* ---- Éditeur ------------------------------------------------------------ */
+.roles-editor {
+    margin: 0;
+    padding: 0;
+    container-type: inline-size;
+}
+/* Sur mobile, main.css fait défiler chaque carte de l'administration
+   (`overflow-x: auto`, pour ses tableaux) : la carte deviendrait le
+   « scrollport » immobile de la barre d'actions collante. La matrice passe en
+   cartes à cette largeur, rien ne déborde. */
+body.admin-page .card.roles-editor { overflow: visible; }
+#roleForm {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    padding: 20px 22px 0;
+}
+.role-editor-head { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.role-editor-badge {
+    width: 48px;
+    height: 48px;
+    flex-shrink: 0;
+    display: grid;
+    place-items: center;
+    border-radius: 13px;
+    color: var(--role-color);
+    background: color-mix(in srgb, var(--role-color) 15%, transparent);
+    border: 1px solid color-mix(in srgb, var(--role-color) 35%, transparent);
+}
+.role-editor-badge svg { width: 24px; height: 24px; }
+.role-editor-id { display: flex; flex-direction: column; gap: 7px; min-width: 0; flex: 1 1 260px; }
+.role-editor-title { margin: 0; font-size: 21px; font-weight: 600; line-height: 1.2; }
+.role-name-input {
+    width: 100%;
+    max-width: 460px;
+    margin-left: -9px;
+    padding: 2px 8px;
+    font: inherit;
+    font-size: 21px;
+    font-weight: 600;
+    line-height: 1.3;
+    color: var(--text);
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    transition: border-color .15s, background .15s;
+}
+.role-name-input:hover { border-color: var(--border); }
+.role-name-input:focus { outline: none; border-color: var(--accent); background: var(--bg-input); }
+.role-editor-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.role-members {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12.5px;
+    color: var(--text-muted);
+    text-decoration: none;
+}
+.role-members:hover { color: var(--accent); }
+
+/* Pastilles de couleur (rôle personnalisé). */
+.role-colors { display: flex; flex-wrap: wrap; gap: 7px; }
+.role-color { position: relative; display: block; cursor: pointer; }
+.role-color input { position: absolute; inset: 0; margin: 0; opacity: 0; cursor: pointer; }
+.role-color-dot {
+    display: block;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    background: var(--swatch);
+    box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .15);
+    transition: transform .12s, box-shadow .12s;
+}
+.role-color:hover .role-color-dot { transform: scale(1.1); }
+.role-color input:checked + .role-color-dot { box-shadow: 0 0 0 2px var(--bg-sidebar), 0 0 0 4px var(--swatch); }
+.role-color input:focus-visible + .role-color-dot { outline: 2px solid var(--accent); outline-offset: 4px; }
+
+.role-description { margin: 0; font-size: 13.5px; line-height: 1.55; color: var(--text-muted); }
+.role-description-input {
+    width: 100%;
+    min-height: 46px;
+    padding: 9px 12px;
+    font: inherit;
+    font-size: 13.5px;
+    line-height: 1.5;
+    color: var(--text);
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: 9px;
+    resize: vertical;
+}
+.role-description-input:focus { outline: none; border-color: var(--accent); }
+
+.role-locked-note {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 12px 14px;
+    font-size: 13px;
+    line-height: 1.5;
+    border-radius: 10px;
+    background: color-mix(in srgb, var(--role-color) 9%, transparent);
+    border: 1px solid color-mix(in srgb, var(--role-color) 32%, transparent);
+}
+.role-locked-note svg { flex-shrink: 0; margin-top: 2px; color: var(--role-color); }
+
+/* ---- En résumé ---------------------------------------------------------- */
+.role-summary {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    padding: 10px 13px;
+    border-radius: 11px;
+    background: color-mix(in srgb, var(--text) 4%, transparent);
+    border: 1px dashed color-mix(in srgb, var(--text) 18%, transparent);
+}
+.role-summary-label {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: .05em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+}
+.role-summary-body { display: flex; flex-direction: column; gap: 8px; font-size: 13px; line-height: 1.5; }
+.role-sum-group { display: flex; align-items: baseline; gap: 6px 10px; flex-wrap: wrap; }
+.role-sum-title { flex: 0 0 116px; font-size: 12px; color: var(--text-muted); }
+.role-sum-chips { display: flex; flex-wrap: wrap; gap: 6px; flex: 1 1 260px; min-width: 0; }
+.role-sum-chip {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 5px;
+    padding: 3px 10px;
+    border-radius: 999px;
+    font-size: 12.5px;
+    color: var(--text);
+    background: color-mix(in srgb, var(--accent) 11%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent) 26%, transparent);
+}
+.role-sum-chip em { font-style: normal; font-size: 12px; color: var(--text-muted); }
+.role-sum-none { font-size: 12.5px; color: var(--text-muted); font-style: italic; }
+
+/* ---- Sections et matrice ------------------------------------------------
+   Lignes resserrées : le nom de la ligne tient sur une ligne, sa phrase et
+   le détail de ses cases sont dans l'infobulle de son nom. */
+.role-section { display: flex; flex-direction: column; gap: 4px; }
+.role-section-head { display: flex; align-items: center; gap: 6px; }
+.role-section-head h3 { margin: 0; font-size: 15px; font-weight: 600; }
+
+/* Bouton « i » (et tout élément porteur d'infobulle) : discret, net au focus. */
+.role-info-btn {
+    width: 26px;
+    height: 26px;
+    display: inline-grid;
+    place-items: center;
+    padding: 0;
+    color: var(--text-muted);
+    background: none;
+    border: 0;
+    border-radius: 7px;
+    cursor: help;
+    transition: color .15s, background .15s;
+}
+.role-info-btn svg { width: 15px; height: 15px; }
+.role-info-btn:hover, .role-info-btn.has-tip { color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.role-info-btn:focus-visible, .role-col-btn:focus-visible, .role-row-btn:focus-visible, .role-adminonly-item:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+}
+
+.role-matrix { width: 100%; table-layout: fixed; border-collapse: collapse; font-size: 13.5px; }
+.role-matrix th, .role-matrix td { border-bottom: 1px solid color-mix(in srgb, var(--border) 75%, transparent); }
+/* main.css retire le filet des cellules de la dernière ligne (`tr:last-child td`) :
+   celui de son nom part aussi, sinon il s'arrête au milieu du tableau. */
+.role-matrix tbody tr:last-child > th { border-bottom: 0; }
+.role-matrix thead th {
+    padding: 0 0 4px;
+    vertical-align: bottom;
+    text-align: center;
+    font-size: 11.5px;
+    font-weight: 600;
+    color: var(--text-muted);
+    border-bottom-color: var(--border);
+}
+.role-matrix thead .role-col-feature { width: auto; text-align: left; }
+.role-cols-label { display: none; }
+.role-matrix .role-col-action { width: 70px; }
+.role-col-btn {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 3px;
+    padding: 5px 2px 4px;
+    font: inherit;
+    color: inherit;
+    background: none;
+    border: 0;
+    border-radius: 8px;
+    cursor: help;
+    transition: color .15s, background .15s;
+}
+.role-col-btn:hover, .role-col-btn.has-tip { color: var(--text); background: color-mix(in srgb, var(--text) 6%, transparent); }
+.role-col-ic { display: flex; justify-content: center; opacity: .8; }
+.role-col-label { display: block; white-space: nowrap; }
+/* « Gérer » : la colonne qui va au-delà des siens, séparée d'un filet. */
+.role-matrix [data-action="manage"] { border-left: 1px dashed color-mix(in srgb, var(--border) 90%, transparent); }
+
+.role-row > th, .role-row > td { transition: background .12s; }
+.role-row:hover > th, .role-row:hover > td { background: color-mix(in srgb, var(--text) 3%, transparent); }
+.role-row-name { text-align: left; font-weight: 400; color: var(--text); }
+.role-row-btn {
+    max-width: 100%;
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+    padding: 3px 8px 3px 3px;
+    font: inherit;
+    text-align: left;
+    color: var(--text);
+    background: none;
+    border: 0;
+    border-radius: 9px;
+    cursor: help;
+    transition: background .15s;
+}
+.role-row-btn:hover, .role-row-btn.has-tip { background: color-mix(in srgb, var(--text) 6%, transparent); }
+.role-row-ic {
+    width: 28px;
+    height: 28px;
+    flex-shrink: 0;
+    display: grid;
+    place-items: center;
+    border-radius: 8px;
+    color: var(--text-muted);
+    background: color-mix(in srgb, var(--text) 6%, transparent);
+    transition: color .15s, background .15s;
+}
+.role-row-ic svg { width: 16px; height: 16px; }
+.role-row.is-on .role-row-ic { color: var(--accent); background: color-mix(in srgb, var(--accent) 13%, transparent); }
+.role-row-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13.5px; font-weight: 600; }
+.role-row-tag {
+    flex-shrink: 0;
+    padding: 1px 7px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 500;
+    white-space: nowrap;
+    color: var(--text-muted);
+    border: 1px dashed color-mix(in srgb, var(--text) 25%, transparent);
+}
+
+.role-cell-td { text-align: center; }
+.role-cell {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 4px;
+    border-radius: 9px;
+    cursor: pointer;
+}
+.role-cb { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
+/* Case verrouillée (Administrateur) : le toucher atteint l'étiquette, qui
+   porte l'infobulle — un champ désactivé n'émet rien. */
+.role-cb:disabled { cursor: default; pointer-events: none; }
+.role-tick {
+    width: 22px;
+    height: 22px;
+    display: grid;
+    place-items: center;
+    border-radius: 7px;
+    border: 1.5px solid color-mix(in srgb, var(--text) 30%, transparent);
+    color: #fff;
+    background: transparent;
+    transition: background .12s, border-color .12s, box-shadow .2s;
+}
+.role-tick svg { opacity: 0; transform: scale(.55); transition: opacity .12s, transform .15s; }
+.role-cell:hover .role-tick, .role-cell.has-tip .role-tick { border-color: var(--accent); }
+.role-cb:checked + .role-tick { background: var(--accent); border-color: var(--accent); }
+.role-cb:checked + .role-tick svg { opacity: 1; transform: scale(1); }
+.role-cb:focus-visible + .role-tick { outline: 2px solid var(--accent); outline-offset: 3px; }
+/* Administrateur : tout coché, verrouillé — lisible, mais visiblement figé. */
+.role-cb:disabled + .role-tick { border-style: dashed; }
+.role-cb:disabled:checked + .role-tick { border-style: solid; opacity: .7; }
+.role-cell:has(.role-cb:disabled) { cursor: help; }
+.role-cell:has(.role-cb:disabled):hover .role-tick { border-color: color-mix(in srgb, var(--text) 30%, transparent); }
+.role-cell:has(.role-cb:disabled:checked):hover .role-tick { border-color: var(--accent); }
+.role-cell-label { display: none; font-size: 13px; }
+.role-na {
+    display: inline-grid;
+    place-items: center;
+    width: 26px;
+    height: 26px;
+    border-radius: 7px;
+    color: color-mix(in srgb, var(--text) 22%, transparent);
+    font-size: 14px;
+    cursor: help;
+}
+.role-na:hover, .role-na.has-tip { color: var(--text-muted); background: color-mix(in srgb, var(--text) 5%, transparent); }
+
+/* Changement non enregistré : un anneau ambre autour de la case. */
+.role-cell-td.is-changed .role-tick { box-shadow: 0 0 0 3px rgba(245, 158, 11, .5); }
+/* Case cochée (ou décochée) par implication : elle pulse, pour qu'on la voie. */
+@keyframes role-implied {
+    0%   { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 65%, transparent); }
+    100% { box-shadow: 0 0 0 12px transparent; }
+}
+.role-cell-td.is-implied .role-tick { animation: role-implied .9s ease-out; }
+@media (prefers-reduced-motion: reduce) {
+    .role-cell-td.is-implied .role-tick { animation: none; }
+    .role-tick, .role-tick svg { transition: none; }
+}
+
+/* Sous 768 px, main.css pose un rembourrage, une taille et un alignement à
+   TOUTES les cellules de l'administration (`body.admin-page .admin-content
+   td`) : la matrice garde les siens, à la même force. */
+body.admin-page .admin-content .role-matrix th,
+body.admin-page .admin-content .role-matrix td { font-size: inherit; vertical-align: middle; overflow-wrap: normal; }
+body.admin-page .admin-content .role-matrix thead th { padding: 0 0 4px; }
+body.admin-page .admin-content .role-matrix .role-row > th,
+body.admin-page .admin-content .role-matrix .role-row > td { padding: 3px 4px; }
+body.admin-page .admin-content .role-matrix .role-row > th.role-row-name { padding-left: 2px; }
+
+/* ---- Réservé aux administrateurs : une rangée de pastilles ------------- */
+.role-adminonly {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 8px 10px;
+    border: 1px dashed var(--border);
+    border-radius: 10px;
+}
+.role-adminonly-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin-right: 4px;
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--text-muted);
+}
+.role-adminonly-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 4px 6px 4px 5px;
+    font: inherit;
+    font-size: 13px;
+    color: var(--text);
+    background: none;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    cursor: help;
+    transition: border-color .15s, background .15s;
+}
+.role-adminonly-item:hover, .role-adminonly-item.has-tip { border-color: color-mix(in srgb, var(--accent) 50%, var(--border)); }
+.role-adminonly-ic { display: inline-flex; color: var(--text-muted); }
+.role-adminonly-ic svg { width: 15px; height: 15px; }
+
+/* ---- Infobulle (une seule, posée sur <body> par roles.js) ---------------
+   Au-dessus de l'élément, dessous faute de place ; la flèche vise l'élément
+   même quand la bulle est décalée pour tenir dans la fenêtre. */
+.role-tip {
+    position: fixed;
+    z-index: 950;
+    width: max-content;
+    max-width: min(360px, calc(calc(100vw / var(--ui-zoom, 1)) - 16px));
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    padding: 10px 12px;
+    font-size: 12.5px;
+    line-height: 1.5;
+    text-align: left;
+    color: var(--text);
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    box-shadow: 0 10px 28px rgba(0, 0, 0, .32);
+    pointer-events: none;
+    opacity: 0;
+    transform: translateY(3px);
+    transition: opacity .12s, transform .12s;
+}
+[data-theme="light"] .role-tip { box-shadow: 0 10px 26px rgba(15, 23, 42, .16); }
+.role-tip[hidden] { display: none !important; }
+.role-tip.is-visible { opacity: 1; transform: none; }
+.role-tip.is-below { transform: translateY(-3px); }
+.role-tip.is-below.is-visible { transform: none; }
+.role-tip::before, .role-tip::after {
+    content: '';
+    position: absolute;
+    top: 100%;
+    left: clamp(12px, var(--tip-arrow, 50%), calc(100% - 12px));
+    transform: translateX(-50%);
+    border: 7px solid transparent;
+    border-top-color: var(--border);
+}
+.role-tip::after { margin-top: -1px; border-width: 6px; border-top-color: var(--bg-surface); }
+.role-tip.is-below::before, .role-tip.is-below::after { top: auto; bottom: 100%; border-top-color: transparent; border-bottom-color: var(--border); }
+.role-tip.is-below::after { margin-top: 0; margin-bottom: -1px; border-bottom-color: var(--bg-surface); }
+.role-tip .rt-title { font-size: 13px; font-weight: 600; }
+.role-tip .rt-body { color: var(--text); }
+.role-tip .rt-list { display: flex; flex-direction: column; gap: 3px; margin-top: 1px; color: var(--text-muted); }
+.role-tip .rt-key { font-weight: 600; color: var(--text); }
+.role-tip .rt-note {
+    display: flex;
+    align-items: flex-start;
+    gap: 7px;
+    margin-top: 2px;
+    padding: 7px 9px;
+    font-size: 12px;
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--accent) 9%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent) 24%, transparent);
+}
+.role-tip .rt-note svg { flex-shrink: 0; width: 13px; height: 13px; margin-top: 2px; color: var(--accent); }
+.role-tip .rt-foot { font-size: 12px; color: var(--text-muted); }
+@media (prefers-reduced-motion: reduce) {
+    .role-tip { transition: none; transform: none; }
+}
+
+/* ---- Barre d'actions ---------------------------------------------------- */
+.role-actions-bar {
+    position: sticky;
+    bottom: 0;
+    z-index: 3;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px 14px;
+    flex-wrap: wrap;
+    margin: 2px -24px 0;
+    padding: 12px 24px;
+    background: color-mix(in srgb, var(--bg-sidebar) 94%, transparent);
+    -webkit-backdrop-filter: blur(8px);
+    backdrop-filter: blur(8px);
+    border-top: 1px solid var(--border);
+    border-radius: 0 0 var(--radius) var(--radius);
+}
+.role-actions-bar.is-static { position: static; }
+.role-actions-bar.is-dirty { box-shadow: 0 -10px 28px rgba(0, 0, 0, .22); }
+[data-theme="light"] .role-actions-bar.is-dirty { box-shadow: 0 -8px 22px rgba(15, 23, 42, .1); }
+.role-actions-left, .role-actions-right { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.role-actions-right { margin-left: auto; }
+.role-actions-right .btn-primary, .role-actions-right .btn-secondary { white-space: nowrap; }
+.role-actions-right .btn-primary:disabled, .role-actions-right .btn-secondary:disabled { opacity: .45; cursor: not-allowed; }
+.role-dirty { font-size: 12.5px; font-weight: 500; color: #d97706; }
+[data-theme="light"] .role-dirty { color: #b45309; }
+.roles-link-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 9px;
+    font: inherit;
+    font-size: 13px;
+    color: var(--text-muted);
+    background: none;
+    border: 0;
+    border-radius: 7px;
+    cursor: pointer;
+    transition: color .15s, background .15s;
+}
+.roles-link-btn:hover { color: var(--text); background: color-mix(in srgb, var(--text) 7%, transparent); }
+.role-actions-bar .btn-danger-link { font: inherit; font-size: 13px; }
+
+/* ---- Vue en cartes : quand l'éditeur est étroit (tablette, téléphone) ----
+   L'en-tête du tableau devient une rangée de pastilles « Colonnes » (toucher
+   une pastille = sa définition) ; chaque ligne, une carte dont le nom ouvre
+   le détail de ses cases ; les cases, des pastilles libellées. */
+@container (max-width: 640px) {
+    #roleForm { padding: 16px 14px 0; gap: 14px; }
+    .role-actions-bar { margin: 2px -14px 0; padding: 12px 14px; }
+    .role-matrix, .role-matrix thead, .role-matrix tbody, .role-matrix tr, .role-matrix th, .role-matrix td { display: block; width: auto; }
+    .role-matrix th, .role-matrix td { border-bottom: 0; }
+    .role-matrix [data-action="manage"] { border-left: 0; }
+    .role-matrix thead tr { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; padding: 2px 0 8px; }
+    body.admin-page .admin-content .role-matrix thead th { padding: 0; }
+    .role-matrix .role-col-action { width: auto; }
+    .role-matrix thead .role-col-feature { flex-basis: 100%; }
+    .role-cols-label { display: block; font-size: 11px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; color: var(--text-muted); }
+    .role-col-btn {
+        flex-direction: row;
+        gap: 5px;
+        padding: 5px 10px 5px 8px;
+        font-size: 12.5px;
+        font-weight: 500;
+        color: var(--text);
+        border: 1px solid var(--border);
+        border-radius: 999px;
+    }
+    .role-col-ic svg { width: 14px; height: 14px; }
+    .role-matrix tbody { display: flex; flex-direction: column; gap: 8px; }
+    .role-matrix tr.role-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        padding: 10px;
+        border: 1px solid var(--border);
+        border-radius: 11px;
+    }
+    .role-row:hover > th, .role-row:hover > td { background: none; }
+    body.admin-page .admin-content .role-matrix .role-row > th,
+    body.admin-page .admin-content .role-matrix .role-row > td { padding: 0; }
+    body.admin-page .admin-content .role-matrix .role-row > th.role-row-name { flex: 1 1 100%; padding: 0 0 2px; }
+    .role-cell-td.is-na { display: none; }
+    .role-cell {
+        padding: 6px 12px 6px 7px;
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        transition: border-color .15s, background .15s;
+    }
+    .role-cell:has(.role-cb:checked) { border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); background: color-mix(in srgb, var(--accent) 8%, transparent); }
+    .role-tick { width: 20px; height: 20px; border-radius: 6px; }
+    .role-tick svg { width: 12px; height: 12px; }
+    .role-cell-label { display: inline; }
+    .role-cell-td.is-changed .role-cell { box-shadow: 0 0 0 3px rgba(245, 158, 11, .4); }
+    .role-cell-td.is-changed .role-tick { box-shadow: none; }
+    .role-editor-badge { width: 40px; height: 40px; border-radius: 11px; }
+    .role-editor-title, .role-name-input { font-size: 18px; }
+    .role-sum-title { flex-basis: 100%; }
+}
+/* Au doigt : les cibles font 44 px de haut (cases, pastilles, noms de ligne). */
+@media (pointer: coarse) {
+    .role-cell, .role-col-btn, .role-row-btn, .role-adminonly-item { min-height: 44px; }
+    .role-info-btn { width: 44px; height: 44px; }
+    .role-na { width: 44px; height: 44px; }
+}
+/* Mobile : c'est `.admin-content` qui défile, et son rembourrage du bas
+   (16 px, 14 px sous 420 px, plus la zone sûre) n'est pas une zone de collage —
+   la barre s'arrêterait au-dessus, le contenu défilant dessous. Elle descend
+   donc d'autant, et garde la zone sûre dans son propre rembourrage. */
+@media (max-width: 768px) {
+    .role-actions-bar {
+        bottom: calc(-1 * (16px + var(--safe-bottom)));
+        padding-bottom: calc(12px + var(--safe-bottom));
+        background: var(--bg-sidebar);
+    }
+}
+@media (max-width: 420px) {
+    .role-actions-bar { bottom: calc(-1 * (14px + var(--safe-bottom))); }
+}
+@media (max-width: 640px) {
+    .roles-head { margin-bottom: 14px; }
+    /* Au téléphone, la barre ne colle que lorsqu'il y a quelque chose à
+       enregistrer — et ne garde alors que l'essentiel. */
+    .role-actions-bar:not(.is-dirty) { position: static; }
+    .role-actions-bar.is-dirty .role-actions-left { display: none; }
+    .roles-new-btn { width: 100%; justify-content: center; }
+    .role-actions-left, .role-actions-right { width: 100%; }
+    .role-actions-right { margin-left: 0; }
+    .role-actions-right .role-dirty { flex-basis: 100%; }
+    .role-actions-right .btn-primary, .role-actions-right .btn-secondary { flex: 1; justify-content: center; text-align: center; }
+    /* Au doigt : 44 px. */
+    .role-actions-bar button { min-height: 44px; }
+}
+
+/* ---- Fenêtres (nouveau rôle, suppression) ------------------------------- */
+.modal-box.roles-modal {
+    width: min(540px, calc(94vw / var(--ui-zoom, 1)));
+    max-height: calc(90vh / var(--ui-zoom, 1));
+    padding: 0;
+    gap: 0;
+    overflow: auto;
+}
+.roles-modal-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 18px 22px 6px; }
+.roles-modal-head h3 { margin: 0; font-size: 17px; }
+.roles-modal-x {
+    width: 34px;
+    height: 34px;
+    flex-shrink: 0;
+    font-size: 22px;
+    line-height: 1;
+    color: var(--text-muted);
+    background: none;
+    border: 0;
+    border-radius: 8px;
+    cursor: pointer;
+}
+.roles-modal-x:hover { color: var(--text); background: color-mix(in srgb, var(--text) 8%, transparent); }
+.roles-modal-body { display: flex; flex-direction: column; padding: 8px 22px 4px; }
+.roles-modal-body > p { margin: 0 0 12px; font-size: 13.5px; line-height: 1.5; }
+.roles-modal-body .form-group { margin-bottom: 16px; }
+/* `.modal-box label` empile ses enfants : « (facultative) » passait à la ligne. */
+.roles-modal .form-group > label { display: block; }
+.roles-modal-alert { margin-bottom: 14px; }
+.roles-modal-foot {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+    padding: 12px 22px 18px;
+    border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+}
+.roles-field-label { font-size: 13px; color: var(--text-muted); }
+.roles-optional { opacity: .75; }
+.roles-hint { margin: 2px 0 0; font-size: 12px; line-height: 1.5; color: var(--text-muted); }
+.roles-from { display: flex; flex-wrap: wrap; gap: 7px; }
+/* `.modal-box label` pose une colonne : on la défait pour ces étiquettes. */
+.roles-modal .roles-from-opt {
+    position: relative;
+    display: inline-flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 13px 6px 11px;
+    font-size: 13px;
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    cursor: pointer;
+    transition: border-color .15s, background .15s;
+}
+.roles-from-opt input { position: absolute; inset: 0; margin: 0; opacity: 0; cursor: pointer; }
+.roles-from-opt .role-card-dot { width: 9px; height: 9px; }
+.roles-modal .roles-from-opt:hover { border-color: color-mix(in srgb, var(--role-color) 60%, var(--border)); }
+.roles-modal .roles-from-opt:has(input:checked) {
+    border-color: var(--role-color);
+    background: color-mix(in srgb, var(--role-color) 13%, transparent);
+}
+.roles-from-opt:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
+.roles-modal .role-color { display: block; }
+.roles-modal .role-color input:checked + .role-color-dot { box-shadow: 0 0 0 2px var(--bg-sidebar), 0 0 0 4px var(--swatch); }
+[data-theme="light"] .roles-modal .role-color input:checked + .role-color-dot { box-shadow: 0 0 0 2px #fff, 0 0 0 4px var(--swatch); }
+@media (max-width: 640px) {
+    .roles-modal-foot .btn-primary, .roles-modal-foot .btn-secondary, .roles-modal-foot .btn-danger { flex: 1; min-height: 44px; }
+}

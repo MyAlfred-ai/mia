@@ -1,0 +1,19 @@
+node_modules/
+ios/App/Pods/
+ios/App/App.xcworkspace/xcuserdata/
+ios/App/App.xcodeproj/xcuserdata/
+ios/DerivedData/
+android/.gradle/
+android/.idea/
+android/app/build/
+android/build/
+android/capacitor-cordova-android-plugins/build/
+android/local.properties
+*.keystore
+# Exception : keystore DEBUG commité volontairement (SHA-1 stable pour le
+# Google Sign-In ; mots de passe standard « android », aucune valeur secrète).
+!android/debug.keystore
+*.jks
+*.mobileprovision
+*.p12
+.DS_Store

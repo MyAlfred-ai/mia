@@ -1,0 +1,663 @@
+/* =========================================================
+   Volet Présentation — options, plan, diaporama
+   Réutilise la coque .html-viewer de main.css (position, largeur,
+   redimensionnement, responsive) ; ce fichier ne style que l'intérieur.
+
+   Note : --bg-card / --bg-hover / --success / --danger n'existent pas dans
+   main.css. On s'en tient aux tokens réellement définis (--bg, --bg-sidebar,
+   --bg-surface, --bg-input, --accent, --text, --text-muted, --border,
+   --radius, --radius-sm) et à color-mix pour les nuances.
+   ========================================================= */
+
+.deck-viewer { background: var(--bg-sidebar); }
+
+/* Les règles ci-dessous posent des display:flex/grid sur des éléments que le
+   JS masque via l'attribut `hidden` (voile de progression, champ images…).
+   Une déclaration d'auteur l'emporte sur le `display:none` de la feuille du
+   navigateur : sans cette règle, `hidden` n'aurait aucun effet. */
+.deck-viewer [hidden] { display: none !important; }
+
+/* Carte de création dans le fil : même gabarit que .msg-html-card, teinte
+   propre à la présentation pour la distinguer d'un coup d'œil. */
+.msg-deck-card .msg-html-card-icon { color: #f59e0b; }
+
+/* ---------------------------------------------------- fil d'étapes */
+
+.deck-steps {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border);
+    flex: none;
+}
+
+.deck-step {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: none;
+    border: none;
+    padding: 4px 6px;
+    border-radius: var(--radius-sm);
+    color: var(--text-muted);
+    font-family: var(--font);
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: color .15s, background .15s;
+}
+.deck-step:disabled { cursor: default; opacity: .45; }
+.deck-step:not(:disabled):hover { background: var(--bg-surface); color: var(--text); }
+.deck-step.is-current { color: var(--text); }
+.deck-step.is-done { color: color-mix(in srgb, var(--accent) 90%, var(--text)); }
+
+.deck-step-num {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    border: 1px solid currentColor;
+    font-size: 10px;
+    font-weight: 700;
+    flex: none;
+}
+.deck-step.is-current .deck-step-num { background: var(--accent); border-color: var(--accent); color: #fff; }
+.deck-step.is-done .deck-step-num { background: color-mix(in srgb, var(--accent) 18%, transparent); }
+
+.deck-step-sep { flex: 1; height: 1px; background: var(--border); min-width: 8px; }
+
+/* ---------------------------------------------------- panneaux */
+
+.deck-body { position: relative; flex: 1; min-height: 0; overflow: hidden; }
+
+.deck-pane {
+    position: absolute;
+    inset: 0;
+    display: none;
+    flex-direction: column;
+    min-height: 0;
+}
+.deck-pane.is-active { display: flex; }
+
+/* Glissement horizontal court entre étapes : donne le sens de la navigation
+   sans retarder l'interaction. Neutralisé si l'utilisateur préfère peu d'animations. */
+.deck-pane.is-entering { animation: deckSlideIn .18s ease-out; }
+.deck-pane.is-entering-back { animation: deckSlideInBack .18s ease-out; }
+@keyframes deckSlideIn { from { opacity: 0; transform: translateX(14px); } to { opacity: 1; transform: none; } }
+@keyframes deckSlideInBack { from { opacity: 0; transform: translateX(-14px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) {
+    .deck-pane.is-entering, .deck-pane.is-entering-back { animation: none; }
+}
+
+.deck-scrollarea {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 16px 14px 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+}
+
+/* Barre d'action collée en bas : le bouton principal reste toujours visible. */
+.deck-actions {
+    flex: none;
+    padding: 12px 14px;
+    border-top: 1px solid var(--border);
+    background: var(--bg-sidebar);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+.deck-btn-main { flex: 1; font-size: 13px; padding: 10px 18px; }
+.deck-btn-main:disabled { opacity: .5; cursor: not-allowed; }
+.deck-btn-small { font-size: 12px; padding: 6px 12px; }
+.deck-actions-deck { justify-content: space-between; }
+.deck-position { font-size: 12px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+
+/* Menu d'export : s'ouvre vers le haut, la barre d'actions étant en pied de volet. */
+.deck-export { position: relative; }
+#deckExport { display: inline-flex; align-items: center; gap: 6px; }
+#deckExport svg { transition: transform .15s ease; }
+#deckExport[aria-expanded="true"] svg { transform: rotate(180deg); }
+.deck-export-menu {
+    position: absolute;
+    bottom: calc(100% + 8px);
+    right: 0;
+    min-width: 190px;
+    padding: 5px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--bg-surface);
+    box-shadow: 0 10px 30px rgba(0, 0, 0, .22);
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    z-index: 20;
+}
+.deck-export-menu button {
+    border: 0;
+    background: transparent;
+    color: var(--text);
+    font-size: 13px;
+    text-align: left;
+    padding: 8px 10px;
+    border-radius: 7px;
+    cursor: pointer;
+    white-space: nowrap;
+}
+.deck-export-menu button:hover { background: color-mix(in srgb, var(--text) 8%, transparent); }
+.deck-export-menu button:disabled { opacity: .5; cursor: progress; }
+
+/* ---------------------------------------------------- champs */
+
+.deck-field { display: flex; flex-direction: column; gap: 8px; }
+.deck-field-label { font-size: 12px; font-weight: 600; color: var(--text-muted); }
+
+.deck-subject {
+    width: 100%;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    color: var(--text);
+    font-family: var(--font);
+    font-size: 13px;
+    line-height: 1.45;
+    padding: 10px 12px;
+    resize: vertical;
+}
+.deck-subject:focus { outline: none; border-color: var(--accent); }
+
+.deck-switch-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+
+/* Chips (nombre de slides, style d'image) */
+.deck-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.deck-chip {
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    color: var(--text-muted);
+    font-family: var(--font);
+    font-size: 12px;
+    padding: 6px 13px;
+    cursor: pointer;
+    transition: border-color .15s, color .15s, background .15s;
+}
+.deck-chip:hover { color: var(--text); border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
+.deck-chip.is-selected {
+    background: color-mix(in srgb, var(--accent) 15%, var(--bg-surface));
+    border-color: var(--accent);
+    color: var(--text);
+    font-weight: 600;
+}
+.deck-chip-input {
+    width: 62px;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    color: var(--text);
+    font-family: var(--font);
+    font-size: 12px;
+    padding: 6px 10px;
+    text-align: center;
+}
+.deck-chip-input:focus { outline: none; border-color: var(--accent); }
+
+/* Cartes-radio (longueur, ton) */
+.deck-cards { display: flex; flex-direction: column; gap: 6px; }
+.deck-cards-compact { flex-direction: row; flex-wrap: wrap; }
+.deck-cards-compact .deck-card { flex: 1 1 calc(50% - 3px); }
+
+.deck-card {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    text-align: left;
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 9px 12px;
+    color: var(--text);
+    font-family: var(--font);
+    cursor: pointer;
+    transition: border-color .15s, background .15s;
+}
+.deck-card:hover { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
+.deck-card.is-selected {
+    border-color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 8%, var(--bg-surface));
+}
+.deck-card-title { font-size: 13px; font-weight: 600; }
+.deck-card-desc { font-size: 11px; color: var(--text-muted); line-height: 1.35; }
+
+/* Vignettes de thème : de vraies mini-slides, pas des pastilles de couleur —
+   le choix se fait à l'œil, sans avoir à lire. */
+.deck-themes { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 8px; }
+.deck-theme {
+    background: none;
+    border: 2px solid transparent;
+    border-radius: var(--radius-sm);
+    padding: 0;
+    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-family: var(--font);
+}
+.deck-theme-preview {
+    aspect-ratio: 16 / 9;
+    border-radius: 5px;
+    border: 1px solid var(--border);
+    position: relative;
+    overflow: hidden;
+    transition: border-color .15s, transform .15s;
+}
+.deck-theme:hover .deck-theme-preview { transform: translateY(-1px); }
+.deck-theme.is-selected .deck-theme-preview { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 40%, transparent); }
+.deck-theme-bar { position: absolute; left: 0; top: 0; width: 100%; height: 9%; }
+.deck-theme-title { position: absolute; left: 10%; top: 32%; width: 62%; height: 15%; border-radius: 2px; }
+.deck-theme-line { position: absolute; left: 10%; height: 7%; border-radius: 2px; opacity: .55; }
+.deck-theme-name { font-size: 11px; color: var(--text-muted); text-align: center; }
+.deck-theme.is-selected .deck-theme-name { color: var(--text); font-weight: 600; }
+
+/* ---------------------------------------------------- plan */
+
+.deck-outline-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.deck-count { font-size: 12px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.deck-count.is-off { color: #f59e0b; }
+
+.deck-link {
+    background: none;
+    border: none;
+    color: var(--accent);
+    font-family: var(--font);
+    font-size: 12px;
+    cursor: pointer;
+    padding: 2px 4px;
+    border-radius: 4px;
+}
+.deck-link:hover { text-decoration: underline; }
+
+.deck-outline { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+
+.deck-slide-card {
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-left: 3px solid color-mix(in srgb, var(--accent) 55%, var(--border));
+    border-radius: var(--radius-sm);
+    padding: 10px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+.deck-slide-card.is-dragging { opacity: .4; }
+.deck-slide-card.is-drop-target { border-top: 2px solid var(--accent); }
+
+.deck-slide-head { display: flex; align-items: center; gap: 8px; }
+.deck-slide-num {
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+    flex: none;
+}
+.deck-slide-title {
+    flex: 1;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text);
+    outline: none;
+    border-radius: 3px;
+    padding: 1px 3px;
+    min-width: 0;
+}
+.deck-slide-title:focus { background: var(--bg-input); box-shadow: 0 0 0 1px var(--accent); }
+.deck-slide-title:empty::before { content: 'Titre de la slide'; color: var(--text-muted); }
+
+.deck-slide-btn {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 3px;
+    border-radius: 4px;
+    display: inline-flex;
+    flex: none;
+}
+.deck-slide-btn:hover { background: var(--bg-input); color: var(--text); }
+.deck-slide-btn.is-danger:hover { color: #ef4444; }
+.deck-slide-drag { cursor: grab; }
+.deck-slide-drag:active { cursor: grabbing; }
+
+.deck-slide-points { list-style: none; margin: 0; padding: 0 0 0 2px; display: flex; flex-direction: column; gap: 3px; }
+.deck-slide-point {
+    position: relative;
+    padding-left: 12px;
+    font-size: 12px;
+    line-height: 1.45;
+    color: var(--text-muted);
+    outline: none;
+    border-radius: 3px;
+}
+.deck-slide-point::before {
+    content: '';
+    position: absolute;
+    left: 2px;
+    top: .55em;
+    width: 4px;
+    height: 4px;
+    border-radius: 50%;
+    background: color-mix(in srgb, var(--accent) 70%, transparent);
+}
+.deck-slide-point:focus { background: var(--bg-input); color: var(--text); box-shadow: 0 0 0 1px var(--accent); }
+.deck-slide-point:empty::before { background: var(--border); }
+
+.deck-slide-badge {
+    font-size: 10px;
+    padding: 1px 6px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--accent) 14%, transparent);
+    color: color-mix(in srgb, var(--accent) 90%, var(--text));
+    flex: none;
+}
+
+.deck-add {
+    background: none;
+    border: 1px dashed var(--border);
+    border-radius: var(--radius-sm);
+    color: var(--text-muted);
+    font-family: var(--font);
+    font-size: 12px;
+    padding: 9px;
+    cursor: pointer;
+    width: 100%;
+}
+.deck-add:hover { border-color: var(--accent); color: var(--text); }
+
+/* ---------------------------------------------------- diaporama */
+
+.deck-stage {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 12px;
+    background: #0b0b0d;
+}
+.deck-frame { width: 100%; height: 100%; border: none; background: #0b0b0d; }
+
+.deck-filmstrip-wrap {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 8px 8px 4px;
+    border-top: 1px solid var(--border);
+}
+.deck-filmstrip {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    gap: 6px;
+    overflow-x: auto;
+    scroll-behavior: smooth;
+    padding-bottom: 4px;
+}
+.deck-filmstrip::-webkit-scrollbar { height: 4px; }
+
+.deck-nav {
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 6px 4px;
+    display: inline-flex;
+    flex: none;
+}
+.deck-nav:hover { color: var(--text); border-color: var(--accent); }
+.deck-nav:disabled { opacity: .35; cursor: default; }
+
+.deck-thumb {
+    flex: none;
+    width: 84px;
+    aspect-ratio: 16 / 9;
+    border-radius: 4px;
+    border: 2px solid transparent;
+    outline: 1px solid var(--border);
+    overflow: hidden;
+    position: relative;
+    cursor: pointer;
+    padding: 0;
+    background: var(--bg-surface);
+}
+.deck-thumb.is-active { border-color: var(--accent); }
+.deck-thumb-bar { position: absolute; left: 0; top: 0; width: 100%; height: 10%; }
+.deck-thumb-title {
+    position: absolute;
+    left: 8%;
+    right: 8%;
+    top: 26%;
+    font-size: 7px;
+    line-height: 1.25;
+    text-align: left;
+    overflow: hidden;
+    max-height: 52%;
+}
+.deck-thumb-num {
+    position: absolute;
+    right: 4%;
+    bottom: 3%;
+    font-size: 6px;
+    opacity: .6;
+}
+
+/* Squelette d'attente : les slides non encore générées se remplissent une à
+   une, ce qui rend la progression lisible sans barre de chargement. */
+.deck-thumb.is-pending { background: var(--bg-input); }
+.deck-thumb.is-pending::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--text) 8%, transparent), transparent);
+    animation: deckShimmer 1.3s infinite;
+}
+@keyframes deckShimmer { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
+@media (prefers-reduced-motion: reduce) { .deck-thumb.is-pending::after { animation: none; } }
+
+/* ---------------------------------------------------- voile de progression */
+
+.deck-loading {
+    position: absolute;
+    inset: 0;
+    z-index: 5;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    background: color-mix(in srgb, var(--bg-sidebar) 92%, transparent);
+    color: var(--text-muted);
+    font-size: 13px;
+    text-align: center;
+    padding: 20px;
+}
+
+/* ---------------------------------------------------- barre de mise en forme */
+
+.deck-format {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 6px 8px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-sidebar);
+    overflow-x: auto;
+}
+.deck-fmt-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    flex: none;
+    height: 26px;
+    padding: 0 7px;
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--text-muted);
+    font-family: var(--font);
+    font-size: 12px;
+    cursor: pointer;
+}
+.deck-fmt-btn:hover:not(:disabled) { background: var(--bg-surface); color: var(--text); }
+.deck-fmt-btn[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
+.deck-fmt-btn:disabled { opacity: .4; cursor: default; }
+.deck-fmt-add { color: var(--text); border-color: var(--border); }
+.deck-fmt-sep { width: 1px; height: 16px; background: var(--border); flex: none; margin: 0 2px; }
+
+.deck-fmt-select {
+    flex: none;
+    height: 26px;
+    max-width: 110px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--bg-surface);
+    color: var(--text);
+    font-family: var(--font);
+    font-size: 12px;
+    padding: 0 4px;
+}
+.deck-fmt-select:disabled { opacity: .4; }
+
+/* L'input natif porte la pastille de couleur : pas de double indicateur. */
+.deck-fmt-color { display: inline-flex; flex: none; }
+.deck-fmt-color input {
+    width: 26px;
+    height: 26px;
+    padding: 2px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--bg-surface);
+    cursor: pointer;
+}
+.deck-fmt-color input:disabled { opacity: .4; cursor: default; }
+
+/* Choix de la source d'image : ouvert sous le bouton, dans le volet. */
+.deck-imgpick-wrap { position: relative; flex: none; }
+.deck-imgpick {
+    position: absolute;
+    top: calc(100% + 6px);
+    left: 0;
+    z-index: 20;
+    width: 264px;
+    padding: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--bg-surface);
+    box-shadow: 0 10px 30px rgba(0, 0, 0, .22);
+}
+.deck-imgpick-file {
+    border: 1px dashed var(--border);
+    border-radius: 8px;
+    background: transparent;
+    color: var(--text);
+    font-family: var(--font);
+    font-size: 12.5px;
+    padding: 9px 10px;
+    cursor: pointer;
+}
+.deck-imgpick-file:hover { border-color: var(--accent); color: var(--accent); }
+.deck-imgpick-gen { display: flex; gap: 6px; }
+.deck-imgpick-gen input {
+    flex: 1;
+    min-width: 0;
+    height: 28px;
+    padding: 0 8px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font);
+    font-size: 12.5px;
+}
+.deck-imgpick-note { font-size: 11.5px; color: var(--text-muted); }
+
+.deck-loading-text { font-size: 13px; color: var(--text); font-weight: 500; }
+
+/* Avancement chiffré : une génération de 10 slides + illustrations dure une
+   minute ou deux, l'utilisateur doit voir où elle en est. */
+.deck-progress {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    width: min(260px, 80%);
+}
+.deck-progress-track {
+    width: 100%;
+    height: 5px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--text) 12%, transparent);
+    overflow: hidden;
+}
+.deck-progress-fill {
+    display: block;
+    height: 100%;
+    width: 0;
+    border-radius: 999px;
+    background: var(--accent);
+    transition: width .25s ease;
+}
+.deck-progress-count { font-size: 12px; font-variant-numeric: tabular-nums; }
+.deck-progress-elapsed { font-size: 11px; opacity: .7; font-variant-numeric: tabular-nums; }
+
+/* Réordonnancement au doigt : réservé aux pointeurs non précis, le
+   glisser-déposer restant plus rapide à la souris. */
+.deck-slide-move { display: none; flex: none; }
+
+/* ---------------------------------------------------- responsive */
+
+@media (hover: none), (max-width: 768px) {
+    .deck-slide-move { display: inline-flex; flex-direction: column; gap: 1px; }
+    .deck-slide-move .deck-slide-btn { padding: 1px 3px; }
+    .deck-slide-drag { display: none; }
+}
+
+@media (max-width: 768px) {
+    .deck-scrollarea { padding: 12px 12px 6px; gap: 14px; }
+    /* Écran portrait : une slide 16:9 ne remplit qu'un quart de la hauteur.
+       Plutôt que de la centrer dans une grande zone noire, on donne à
+       l'aperçu la hauteur exacte d'une slide pleine largeur et on rend
+       l'espace restant à la bande de vignettes, qui passe en grille. */
+    .deck-stage {
+        flex: none;
+        height: min(calc((calc(100vw / var(--ui-zoom, 1)) - 16px) * 9 / 16 + 12px), calc(55vh / var(--ui-zoom, 1)));
+        padding: 6px 8px;
+    }
+    .deck-filmstrip-wrap { flex: 1; min-height: 0; align-items: flex-start; }
+    .deck-filmstrip { flex-wrap: wrap; justify-content: center; overflow-y: auto; align-content: flex-start; }
+    .deck-thumb { width: 88px; }
+    /* Grille de vignettes : les flèches de défilement latéral n'ont plus d'objet.
+       On change de slide en touchant une vignette ou l'aperçu lui-même. */
+    .deck-nav { display: none; }
+    .deck-themes { grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); }
+    .deck-cards-compact .deck-card { flex-basis: 100%; }
+    /* Fil d'étapes : les traits de liaison mangent la place sur un écran étroit. */
+    .deck-steps { gap: 2px; padding: 8px 10px; }
+    .deck-step { font-size: 11px; padding: 4px; }
+    .deck-step-sep { min-width: 4px; }
+    /* L'édition au doigt sur une slide de 300 px n'est pas exploitable :
+       consultation et export restent disponibles, la retouche se fait sur
+       grand écran (le bouton est masqué, pas seulement désactivé). */
+    #deckViewerEdit { display: none !important; }
+    .deck-export-menu { min-width: 160px; }
+}

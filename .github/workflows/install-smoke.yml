@@ -1,0 +1,41 @@
+name: Installation de bout en bout
+
+# Rejoue une installation complète depuis un dépôt vierge : c'est le chemin que
+# personne n'exécute au quotidien, donc celui qui casse sans qu'on le voie.
+# L'installeur officiel est resté inopérant plusieurs mois — un heredoc jamais
+# fermé — sans qu'aucun contrôle ne s'en aperçoive.
+#
+# Sur les pull requests vers `main` : c'est la branche depuis laquelle on
+# installe. Pas sur chaque push de `develop` : 6 minutes, trop lent pour la
+# boucle quotidienne, et la vérification statique (InstallationContractTest)
+# tourne déjà là.
+
+on:
+  pull_request:
+    branches: ["main"]
+  workflow_dispatch:
+  schedule:
+    # Lundi 4 h UTC : détecte les ruptures venues de l'extérieur (image de base
+    # PHP, mysql:8.4, qdrant) même sans modification de notre code.
+    - cron: "0 4 * * 1"
+
+jobs:
+  installation:
+    # Ce libellé est le NOM DE LA VÉRIFICATION affiché dans les pull requests,
+    # et celui déclaré comme obligatoire dans la protection de `main` : le
+    # changer ici sans le changer là ferait attendre indéfiniment une
+    # vérification qui ne remonte plus.
+    name: Installation depuis un dépôt vierge
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache des couches Docker
+        uses: docker/setup-buildx-action@v3
+
+      - name: Installation et vérification
+        env:
+          COMPOSE_PROGRESS: quiet
+        run: ./scripts/smoke-install.sh

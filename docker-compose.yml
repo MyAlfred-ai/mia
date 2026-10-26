@@ -1,0 +1,185 @@
+# =============================================================================
+# MIA — socle commun à TOUS les modes d'installation.
+# -----------------------------------------------------------------------------
+# Ce fichier ne publie aucun port et ne déclare aucun reverse-proxy : ce qui
+# change d'une plateforme à l'autre vit dans docker/compose/*.yml, sélectionnés
+# par la variable COMPOSE_FILE du .env. `install.sh` la renseigne pour vous.
+#
+#   Autonome (aucun proxy)   COMPOSE_FILE=docker-compose.yml:docker/compose/db.yml:docker/compose/ports.yml
+#   Derrière Traefik         COMPOSE_FILE=docker-compose.yml:docker/compose/db.yml:docker/compose/traefik.yml
+#   Derrière nginx / Caddy   comme « autonome », avec APP_BIND=127.0.0.1
+#   Base MySQL externe       retirez docker/compose/db.yml et renseignez DB_HOST / DB_PORT
+#
+# COMPOSE_FILE étant lu par docker compose lui-même, toute commande
+# `docker compose …` fonctionne ensuite SANS `-f` — c'est ce qui rend update.sh,
+# backup.sh et rollback.sh indépendants du mode d'installation.
+# =============================================================================
+
+# Environnement PARTAGÉ par `app` et `worker` — un SEUL bloc, aliasé par les
+# deux services. Depuis que la génération de chat vit dans le worker, les deux
+# conteneurs exécutent le MÊME code métier : une variable présente d'un seul
+# côté produit une panne invisible. C'est exactement ce qui est arrivé aux
+# connecteurs Google (Drive, Gmail, Agenda) — sans GOOGLE_CLIENT_ID/SECRET
+# dans le worker, `GoogleDriveOAuth::isConfigured()` renvoyait false, les
+# outils n'étaient jamais exposés au LLM et l'assistant répondait qu'il ne
+# pouvait pas les utiliser, alors que tout était vert côté web.
+x-app-env: &app-env
+  APP_URL: ${APP_URL:?APP_URL est obligatoire — adresse publique complète, ex. https://mia.exemple.fr}
+  APP_ENV: ${APP_ENV:-production}
+  APP_SECRET: ${APP_SECRET:?APP_SECRET est obligatoire — générez-le avec openssl rand -hex 32}
+  ENCRYPTION_KEY: ${ENCRYPTION_KEY:?ENCRYPTION_KEY est obligatoire — générez-la avec openssl rand -hex 32}
+  GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+  GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+  GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI:-}
+  GOOGLE_CLIENT_ID_IOS: ${GOOGLE_CLIENT_ID_IOS:-}
+  LOCAL_PASSWORD_HASH: ${LOCAL_PASSWORD_HASH:-}
+  # Paramétrables : permettent de brancher une base MySQL externe ou managée
+  # sans toucher aux fichiers compose (il suffit de retirer db.yml).
+  DB_HOST: ${DB_HOST:-db}
+  DB_PORT: ${DB_PORT:-3306}
+  DB_NAME: ${DB_NAME:-myllm}
+  DB_USER: ${DB_USER:-myllm}
+  DB_PASS: ${DB_PASS:?DB_PASS est obligatoire — mot de passe de l'utilisateur MySQL}
+  QDRANT_URL: ${QDRANT_URL:-http://qdrant:6333}
+  # À 1 UNIQUEMENT derrière un proxy de confiance qui termine le TLS : autorise
+  # la dérivation du cookie « Secure » depuis X-Forwarded-Proto. Faire confiance
+  # à cet en-tête sans proxy devant permettrait à un client de le forger.
+  TRUSTED_PROXY: ${TRUSTED_PROXY:-0}
+
+services:
+  app:
+    build: .
+    # Tag explicite PARTAGÉ avec le worker : les deux conteneurs tournent
+    # forcément sur le même code. Avec deux `build: .`, compose produisait deux
+    # images distinctes — et un déploiement qui ne reconstruisait que `app`
+    # laissait le worker sur du code périmé, en silence.
+    # Paramétrable : deux instances de MIA sur la même machine ne se marchent
+    # plus dessus (mia-app:latest était codé en dur).
+    image: ${APP_IMAGE:-mia-app:latest}
+    restart: unless-stopped
+    environment: *app-env
+    volumes:
+      # variables_order=EGPCS + session.gc_maxlifetime. Monté dans TOUS les
+      # modes : il ne l'était qu'en production, si bien que $_ENV était vide en
+      # développement et peuplé en production — une divergence qui a déjà
+      # produit une panne visible d'un seul côté.
+      - ./php-env.ini:/usr/local/etc/php/conf.d/zz-env.ini:ro
+      # APK de l'app mobile déposé par la CI sur l'hôte (~/…/public/downloads),
+      # servi statiquement sur /downloads/ (page publique /app).
+      - ./public/downloads:/var/www/html/public/downloads:ro
+      - storage_uploads:/var/www/html/storage/uploads
+      - storage_logs:/var/www/html/storage/logs
+      - storage_cache:/var/www/html/storage/cache
+      - storage_ratelimit:/var/www/html/storage/ratelimit
+      - storage_profile_docs:/var/www/html/storage/profile_documents
+      - storage_kb_docs:/var/www/html/storage/knowledge_bases
+      - generated_media:/var/www/html/public/assets/img/generated
+      # Vidéos générées : volume DÉDIÉ. Sans lui, elles vivaient dans la couche
+      # éphémère du conteneur → perdues à chaque redeploy (bug historique).
+      - generated_media_video:/var/www/html/public/assets/video/generated
+      - branding_logos:/var/www/html/public/assets/img/branding
+      # Modèle PowerPoint de l'entreprise (Marque & apparence) : HORS de la racine
+      # web, sur son propre volume — perdu au redeploy sinon.
+      - storage_branding:/var/www/html/storage/branding
+      - user_avatars:/var/www/html/public/assets/img/avatars
+      - profile_avatars:/var/www/html/public/assets/img/profils
+      # Lecture seule : mesure exacte du stockage Qdrant sur le dashboard admin.
+      - qdrant_data:/qdrant-data:ro
+    networks:
+      - myllm
+
+  # Worker de générations asynchrones (outil « Page HTML »…). Même image que
+  # l'app, sans serveur web : il boucle sur la table `async_jobs`.
+  # Son absence n'est pas bloquante — l'app retombe sur le fork POSIX puis sur
+  # l'exécution en ligne : le job aboutit toujours, seule la latence change.
+  # Nombre de workers : MIA_WORKERS dans le .env (4 par défaut, cf. `deploy`).
+  worker:
+    # PAS de `build:` — l'image est celle construite par le service `app`.
+    image: ${APP_IMAGE:-mia-app:latest}
+    restart: unless-stopped
+    command: php /var/www/html/scripts/worker.php
+    # OBLIGATOIRE : l'image `php:*-apache` déclare `STOPSIGNAL SIGWINCH`
+    # (arrêt gracieux d'Apache). Le worker ne fait PAS tourner Apache : il
+    # recevait donc SIGWINCH, que PHP ignore par défaut — son handler pcntl
+    # n'était jamais appelé. Docker attendait les 90s de grâce PLEINES puis
+    # l'abattait au SIGKILL : l'arrêt propre promis ci-dessous n'a jamais eu
+    # lieu (job en cours tué net), et CHAQUE déploiement payait 90 s d'attente.
+    stop_signal: SIGTERM
+    # Arrêt propre : le worker finit le job en cours sur SIGTERM (pcntl).
+    # Au-delà, Docker l'abat et le reaper reprend la main. Idle, il sort en
+    # moins d'une seconde — c'est ce plafond qui rend le déploiement rapide.
+    stop_grace_period: 90s
+    # Plusieurs workers EN PARALLÈLE : chacun mène une génération à la fois.
+    # Un seul worker faisait attendre chaque utilisateur derrière les réponses
+    # de tous les autres (et derrière les synchronisations de bases). Nombre
+    # réglé par MIA_WORKERS dans le .env, déclaré ICI et non par `--scale` :
+    # un `--scale` à la main disparaît au déploiement suivant (`up -d` revient
+    # au nombre déclaré). L'ordre et les couloirs sériels (une conversation à
+    # la fois, une maintenance à la fois) sont tenus par la file — cf. JobQueue.
+    # Un worker au repos occupe ~25 Mo (mesuré), un peu plus en génération.
+    deploy:
+      replicas: ${MIA_WORKERS:-4}
+    # Strictement le même environnement que `app` (cf. x-app-env plus haut) :
+    # le worker exécute le même code métier, il lui faut la même config.
+    environment: *app-env
+    volumes:
+      - ./php-env.ini:/usr/local/etc/php/conf.d/zz-env.ini:ro
+      - storage_uploads:/var/www/html/storage/uploads
+      - storage_logs:/var/www/html/storage/logs
+      - storage_cache:/var/www/html/storage/cache
+      - storage_profile_docs:/var/www/html/storage/profile_documents
+      - storage_kb_docs:/var/www/html/storage/knowledge_bases
+      # Les images générées doivent atterrir dans le MÊME volume que celui
+      # servi par l'app, sinon les pages illustrées pointent dans le vide.
+      - generated_media:/var/www/html/public/assets/img/generated
+      # Idem pour les vidéos (le worker produit les générations Sora).
+      - generated_media_video:/var/www/html/public/assets/video/generated
+      # Logos et modèles PowerPoint / Word de l'entreprise : les fichiers fabriqués
+      # HORS de l'application (« Réaliser avec … » d'une carte, livrables des workflows)
+      # le sont ici. Sans ces deux montages, le worker ne voyait ni modèle ni logo :
+      # chaque fichier sortait sans l'habillage de l'entreprise, sans une erreur.
+      # Lecture-écriture : l'entrypoint fait un chown de storage/branding (set -e).
+      - branding_logos:/var/www/html/public/assets/img/branding
+      - storage_branding:/var/www/html/storage/branding
+    # Surcharge OBLIGATOIRE du HEALTHCHECK de l'image : celui du Dockerfile
+    # interroge http://127.0.0.1/healthz, or le worker ne fait pas tourner
+    # Apache — il serait déclaré malade en permanence. On lit son battement de
+    # cœur, avec la même règle que JobQueue::workerAlive() (contrôle de version
+    # compris : un worker sur une image périmée doit être signalé malade).
+    healthcheck:
+      test: ["CMD", "php", "/var/www/html/scripts/worker-health.php"]
+      interval: 30s
+      timeout: 10s
+      start_period: 120s
+      retries: 3
+    networks:
+      - myllm
+
+  # Base vectorielle embarquée (bases de connaissances). L'app tolère son
+  # absence (fallback lexical MySQL) → pas de depends_on côté app.
+  qdrant:
+    image: qdrant/qdrant:v1.15.1
+    restart: unless-stopped
+    volumes:
+      - qdrant_data:/qdrant/storage
+    networks:
+      - myllm
+
+volumes:
+  qdrant_data:
+  storage_kb_docs:
+  storage_uploads:
+  storage_logs:
+  storage_cache:
+  storage_ratelimit:
+  storage_profile_docs:
+  generated_media:
+  generated_media_video:
+  branding_logos:
+  storage_branding:
+  user_avatars:
+  profile_avatars:
+
+networks:
+  myllm:
+    driver: bridge

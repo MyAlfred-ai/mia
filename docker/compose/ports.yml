@@ -1,0 +1,23 @@
+# Publication des ports sur l'hôte — modes « autonome », « proxy tiers » et
+# développement local.
+#
+# À NE PAS combiner avec traefik.yml : Traefik joint les conteneurs par le
+# réseau Docker, publier en plus le port 80 de l'hôte entrerait en conflit avec
+# Traefik lui-même et exposerait l'application en clair, hors TLS.
+#
+#   APP_BIND  interface d'écoute. 0.0.0.0 (défaut) = accessible depuis
+#             l'extérieur. Derrière un nginx/Caddy installé sur la MÊME machine,
+#             mettez 127.0.0.1 : le proxy y accède, personne d'autre.
+#   APP_PORT  port de l'hôte. 8080 par défaut pour ne pas exiger les droits
+#             root ni entrer en conflit avec un serveur web déjà en place.
+
+# Le port de Qdrant n'est PAS publié ici : l'application le joint par le réseau
+# Docker, personne d'autre n'en a besoin. Le publier ajoutait une surface
+# d'attaque inutile (son tableau de bord n'a aucune authentification) et faisait
+# échouer toute seconde instance de MIA sur la même machine — le port 6333 était
+# déjà pris. Le mode développement le publie, lui, sur la boucle locale.
+
+services:
+  app:
+    ports:
+      - "${APP_BIND:-0.0.0.0}:${APP_PORT:-8080}:80"

@@ -1,0 +1,36 @@
+# Confort de développement — OPTIONNEL, à ajouter à COMPOSE_FILE seulement sur
+# un poste de travail.
+#
+# Monte le code source de l'hôte dans les conteneurs : une modification est
+# visible au rechargement de la page, sans reconstruire l'image. Sans cela,
+# `docker compose up -d` redémarre l'ANCIEN code et on teste sans le savoir une
+# version périmée — l'erreur la plus coûteuse de ce projet en temps perdu.
+#
+# Les volumes nommés de storage/ restent prioritaires : Docker applique les
+# montages du plus superficiel au plus profond, ils recouvrent donc le
+# bind-mount pour leurs sous-répertoires.
+#
+# Le bind-mount recouvre AUSSI vendor/ : les dépendances utilisées sont celles
+# de l'hôte. Lancez donc `composer install` sur l'hôte avant d'activer ce mode,
+# sinon les exports PDF, Word et PowerPoint échoueront. Et reconstruisez l'image
+# avant tout déploiement : c'est elle, et non l'hôte, qui part en production.
+
+services:
+  app:
+    environment:
+      APP_ENV: local          # trace complète des erreurs à l'écran
+    volumes:
+      - .:/var/www/html
+
+  worker:
+    environment:
+      APP_ENV: local
+    volumes:
+      - .:/var/www/html
+
+  qdrant:
+    ports:
+      # Tableau de bord Qdrant, pour inspecter les collections pendant le
+      # développement. Toujours lié à la boucle locale : il n'a AUCUNE
+      # authentification, l'exposer livrerait l'index vectoriel.
+      - "127.0.0.1:${QDRANT_PORT:-6333}:6333"

@@ -1,0 +1,17 @@
+# Fins de ligne LF partout : les scripts tournent dans des conteneurs Linux et
+# sur les serveurs, un CRLF venu d'un poste Windows les casse.
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.webp binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.pdf binary
+*.jar binary
+# Scripts Windows : CRLF obligatoire.
+*.bat text eol=crlf
+*.cmd text eol=crlf

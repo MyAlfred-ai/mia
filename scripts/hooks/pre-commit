@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Hook pre-commit : no-op pour le versioning.
+#
+# Le calcul de VERSION + public/changelog.json est délégué au hook
+# post-commit qui :
+#   - voit le commit qui vient d'être fait (présent dans HEAD),
+#   - peut l'inclure dans le compte exact,
+#   - amende silencieusement le commit pour y intégrer VERSION et le
+#     changelog mis à jour.
+exit 0

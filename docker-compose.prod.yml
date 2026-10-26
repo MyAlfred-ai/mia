@@ -1,0 +1,217 @@
+# Environnement PARTAGÉ par `app` et `worker` — un SEUL bloc, aliasé par les
+# deux services. Depuis que la génération de chat vit dans le worker, les deux
+# conteneurs exécutent le MÊME code métier : une variable présente d'un seul
+# côté produit une panne invisible. C'est exactement ce qui est arrivé aux
+# connecteurs Google (Drive, Gmail, Agenda) — sans GOOGLE_CLIENT_ID/SECRET
+# dans le worker, `GoogleDriveOAuth::isConfigured()` renvoyait false, les
+# outils n'étaient jamais exposés au LLM et l'assistant répondait qu'il ne
+# pouvait pas les utiliser, alors que tout était vert côté web.
+x-app-env: &app-env
+  APP_URL: ${APP_URL:?APP_URL required}
+  APP_ENV: production
+  APP_SECRET: ${APP_SECRET:?APP_SECRET required (32+ hex chars)}
+  ENCRYPTION_KEY: ${ENCRYPTION_KEY:?ENCRYPTION_KEY required (32+ hex chars)}
+  GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+  GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+  GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI:-}
+  GOOGLE_CLIENT_ID_IOS: ${GOOGLE_CLIENT_ID_IOS:-}
+  LOCAL_PASSWORD_HASH: ${LOCAL_PASSWORD_HASH:-}
+  DB_HOST: db
+  DB_PORT: 3306
+  DB_NAME: ${DB_NAME:-myllm}
+  DB_USER: ${DB_USER:-myllm}
+  DB_PASS: ${DB_PASS:?DB_PASS required}
+  QDRANT_URL: ${QDRANT_URL:-http://qdrant:6333}
+
+services:
+    app:
+      build: .
+      # Tag explicite PARTAGÉ avec le worker : les deux conteneurs tournent
+      # forcément sur le même code. Avec deux `build: .`, compose produisait
+      # deux images distinctes — et un déploiement qui ne reconstruisait que
+      # `app` laissait le worker sur du code périmé, en silence.
+      image: mia-app:latest
+      restart: unless-stopped
+      # Noms Traefik paramétrables : chaque environnement (prod / recette) a son
+      # propre Traefik avec des entrypoints / resolver / réseau différents.
+      # Défauts = prod ; recette surcharge via son .env (TRAEFIK_*).
+      labels:
+        - "traefik.enable=true"
+        - "traefik.docker.network=${TRAEFIK_NETWORK:-ubuntu_default}"
+        # HTTPS
+        - "traefik.http.routers.${TRAEFIK_ROUTER:-myllm}.rule=Host(`${DOMAIN}`)"
+        - "traefik.http.routers.${TRAEFIK_ROUTER:-myllm}.entrypoints=${TRAEFIK_ENTRYPOINT_HTTPS:-web-secure}"
+        - "traefik.http.routers.${TRAEFIK_ROUTER:-myllm}.tls.certresolver=${TRAEFIK_CERTRESOLVER:-le}"
+        - "traefik.http.services.${TRAEFIK_ROUTER:-myllm}.loadbalancer.server.port=80"
+        # HTTP → HTTPS redirect
+        - "traefik.http.routers.${TRAEFIK_ROUTER:-myllm}-http.rule=Host(`${DOMAIN}`)"
+        - "traefik.http.routers.${TRAEFIK_ROUTER:-myllm}-http.entrypoints=${TRAEFIK_ENTRYPOINT_HTTP:-web}"
+        - "traefik.http.routers.${TRAEFIK_ROUTER:-myllm}-http.middlewares=${TRAEFIK_ROUTER:-myllm}-redirect-https"
+        - "traefik.http.middlewares.${TRAEFIK_ROUTER:-myllm}-redirect-https.redirectscheme.scheme=https"
+      environment: *app-env
+      volumes:
+        - ./php-env.ini:/usr/local/etc/php/conf.d/zz-env.ini:ro
+        # APK de l'app mobile déposé par la CI sur l'hôte (~/…/public/downloads),
+        # servi statiquement sur /downloads/ (page publique /app).
+        - ./public/downloads:/var/www/html/public/downloads:ro
+        - storage_uploads:/var/www/html/storage/uploads
+        - storage_logs:/var/www/html/storage/logs
+        - storage_cache:/var/www/html/storage/cache
+        - storage_ratelimit:/var/www/html/storage/ratelimit
+        - storage_profile_docs:/var/www/html/storage/profile_documents
+        - storage_kb_docs:/var/www/html/storage/knowledge_bases
+        - generated_media:/var/www/html/public/assets/img/generated
+        # Vidéos générées : volume DÉDIÉ. Sans lui, elles vivaient dans la couche
+        # éphémère du conteneur → perdues à chaque redeploy (bug historique).
+        - generated_media_video:/var/www/html/public/assets/video/generated
+        - branding_logos:/var/www/html/public/assets/img/branding
+        # Modèle PowerPoint de l'entreprise (Marque & apparence) : HORS de la racine
+        # web, sur son propre volume — perdu au redeploy sinon.
+        - storage_branding:/var/www/html/storage/branding
+        - user_avatars:/var/www/html/public/assets/img/avatars
+        - profile_avatars:/var/www/html/public/assets/img/profils
+        # Lecture seule : mesure exacte du stockage Qdrant sur le dashboard admin.
+        - qdrant_data:/qdrant-data:ro
+      depends_on:
+        db:
+          condition: service_healthy
+      networks:
+        - ubuntu_default
+        - myllm
+
+    # Worker de générations asynchrones (outil « Page HTML »…). Même image que
+    # l'app, sans serveur web : il boucle sur la table `async_jobs`, ce qui
+    # permet à l'utilisateur de quitter la page pendant une génération.
+    # Son absence n'est pas bloquante (repli fork POSIX puis exécution en ligne).
+    # Nombre de workers : MIA_WORKERS dans le .env (4 par défaut, cf. `deploy`).
+    worker:
+      # PAS de `build:` — l'image est celle construite par le service `app`.
+      image: mia-app:latest
+      restart: unless-stopped
+      command: php /var/www/html/scripts/worker.php
+      # OBLIGATOIRE : l'image `php:*-apache` déclare `STOPSIGNAL SIGWINCH`
+      # (arrêt gracieux d'Apache). Le worker ne fait PAS tourner Apache : il
+      # recevait donc SIGWINCH, que PHP ignore par défaut — son handler pcntl
+      # n'était jamais appelé. Docker attendait les 90s de grâce PLEINES puis
+      # l'abattait au SIGKILL : l'arrêt propre promis ci-dessous n'a jamais eu
+      # lieu (job en cours tué net), et CHAQUE déploiement payait 90 s d'attente.
+      stop_signal: SIGTERM
+      # Arrêt propre : le worker finit le job en cours sur SIGTERM (pcntl).
+      # Au-delà, Docker l'abat et le reaper reprend la main. Idle, il sort en
+      # moins d'une seconde — c'est ce plafond qui rend le déploiement rapide.
+      stop_grace_period: 90s
+      # Plusieurs workers EN PARALLÈLE : chacun mène une génération à la fois.
+      # Un seul worker faisait attendre chaque utilisateur derrière les réponses
+      # de tous les autres (et derrière les synchronisations de bases). Nombre
+      # réglé par MIA_WORKERS dans le .env, déclaré ICI et non par `--scale` :
+      # un `--scale` à la main disparaît au déploiement suivant (`up -d` revient
+      # au nombre déclaré). L'ordre et les couloirs sériels (une conversation à
+      # la fois, une maintenance à la fois) sont tenus par la file — cf. JobQueue.
+      # Un worker au repos occupe ~25 Mo (mesuré), un peu plus en génération.
+      deploy:
+        replicas: ${MIA_WORKERS:-4}
+      labels:
+        - "traefik.enable=false"
+      # Strictement le même environnement que `app` (cf. x-app-env plus haut) :
+      # le worker exécute le même code métier, il lui faut la même config.
+      environment: *app-env
+      volumes:
+        - ./php-env.ini:/usr/local/etc/php/conf.d/zz-env.ini:ro
+        - storage_uploads:/var/www/html/storage/uploads
+        - storage_logs:/var/www/html/storage/logs
+        - storage_cache:/var/www/html/storage/cache
+        - storage_profile_docs:/var/www/html/storage/profile_documents
+        - storage_kb_docs:/var/www/html/storage/knowledge_bases
+        # Les images générées doivent atterrir dans le MÊME volume que celui
+        # servi par l'app, sinon les pages illustrées pointent dans le vide.
+        - generated_media:/var/www/html/public/assets/img/generated
+        # Idem pour les vidéos (le worker produit les générations Sora).
+        - generated_media_video:/var/www/html/public/assets/video/generated
+        # Logos et modèles PowerPoint / Word de l'entreprise : les fichiers fabriqués
+        # HORS de l'application (« Réaliser avec … » d'une carte, livrables des workflows)
+        # le sont ici. Sans ces deux montages, le worker ne voyait ni modèle ni logo :
+        # chaque fichier sortait sans l'habillage de l'entreprise, sans une erreur.
+        # Lecture-écriture : l'entrypoint fait un chown de storage/branding (set -e).
+        - branding_logos:/var/www/html/public/assets/img/branding
+        - storage_branding:/var/www/html/storage/branding
+      # Surcharge OBLIGATOIRE du HEALTHCHECK de l'image : celui du Dockerfile
+      # interroge http://127.0.0.1/healthz, or le worker ne fait pas tourner
+      # Apache — il serait déclaré malade en permanence. On lit son battement de
+      # cœur, avec la même règle que JobQueue::workerAlive() (contrôle de
+      # version compris : un worker sur une image périmée est bien malade).
+      healthcheck:
+        test: ["CMD", "php", "/var/www/html/scripts/worker-health.php"]
+        interval: 30s
+        timeout: 10s
+        start_period: 120s
+        retries: 3
+      depends_on:
+        db:
+          condition: service_healthy
+      networks:
+        # `myllm` est `internal: true` : AUCUN accès sortant. Le worker appelle
+        # les API des fournisseurs (LLM, images, Google) — sans ce second
+        # réseau, non-internal, tout job échouait en « impossible de contacter
+        # OpenAI », alors que les tests d'administration (lancés depuis `app`,
+        # qui lui est sur les deux réseaux) restaient au vert.
+        - ubuntu_default
+        - myllm
+
+    # Base vectorielle embarquée (bases de connaissances). Réseau interne
+    # uniquement — jamais exposée publiquement. L'app tolère son absence
+    # (fallback lexical MySQL) → pas de depends_on côté app.
+    qdrant:
+      image: qdrant/qdrant:v1.15.1
+      restart: unless-stopped
+      labels:
+        - "traefik.enable=false"
+      volumes:
+        - qdrant_data:/qdrant/storage
+      networks:
+        - myllm
+
+    db:
+      image: mysql:8.4
+      restart: unless-stopped
+      labels:
+        - "traefik.enable=false"
+      environment:
+        MYSQL_DATABASE: ${DB_NAME:-myllm}
+        MYSQL_USER: ${DB_USER:-myllm}
+        MYSQL_PASSWORD: ${DB_PASS:?DB_PASS required}
+        MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASS:?DB_ROOT_PASS required}
+      volumes:
+        - mysql_data:/var/lib/mysql
+      healthcheck:
+        test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${DB_ROOT_PASS}"]
+        interval: 5s
+        timeout: 5s
+        retries: 10
+      networks:
+        - myllm
+
+volumes:
+    mysql_data:
+    qdrant_data:
+    storage_kb_docs:
+    storage_uploads:
+    storage_logs:
+    storage_cache:
+    storage_ratelimit:
+    storage_profile_docs:
+    generated_media:
+    generated_media_video:
+    branding_logos:
+    storage_branding:
+    user_avatars:
+    profile_avatars:
+
+networks:
+    # Réseau du reverse-proxy Traefik (externe, pré-existant). Nom réel défini
+    # par environnement : ubuntu_default en prod, webproxy en recette, etc.
+    ubuntu_default:
+      external: true
+      name: ${TRAEFIK_NETWORK:-ubuntu_default}
+    myllm:
+      driver: bridge
+      internal: true

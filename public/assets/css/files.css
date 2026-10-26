@@ -1,0 +1,890 @@
+/* =========================================================
+   Fichiers livrés dans une conversation — cartes, aperçus, boutons
+   de téléchargement (generated-files.js).
+
+   S'en tient aux jetons de main.css (--bg, --bg-surface, --bg-input,
+   --accent, --text, --text-muted, --border, --radius, --radius-sm) : le
+   thème clair, le thème sombre et la couleur d'accent de l'instance
+   s'appliquent sans variante écrite ici.
+   ========================================================= */
+
+/* PIÈGE MAISON : une règle `display:…` d'auteur l'emporte sur l'attribut
+   `hidden`. Le menu, la source et la zone d'état sont masqués par `hidden` ET
+   mis en page par flex/grid plus bas — sans cette règle ils resteraient
+   visibles (cf. .kb-card, .pf-ai-panel, .lang-switcher-list…). */
+.file-card [hidden],
+.file-menu[hidden],
+.file-polish-panel [hidden] { display: none !important; }
+
+/* ------------------------------------------------ carte de fichier */
+
+.file-card {
+    /* Couleur du type, posée par [data-tone] ci-dessous. */
+    --file-tone: #6b7280;
+    margin: .7em 0;
+    max-width: 720px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--bg-input);
+    /* Pas d'overflow:hidden : le menu « Autres formats » déborde de la carte.
+       Les coins arrondis sont donc portés par les enfants de bord. */
+    white-space: normal;
+    line-height: 1.4;
+}
+.file-card[data-tone="sheet"] { --file-tone: #1d8a4f; }
+.file-card[data-tone="doc"]   { --file-tone: #2b6cb0; }
+.file-card[data-tone="pdf"]   { --file-tone: #c53030; }
+.file-card[data-tone="slides"] { --file-tone: #b7472a; }
+.file-card[data-tone="text"]  { --file-tone: #64748b; }
+.file-card[data-tone="data"]  { --file-tone: #b7791f; }
+.file-card[data-tone="web"]   { --file-tone: #c05621; }
+.file-card[data-tone="code"]  { --file-tone: #6b46c1; }
+
+.file-card-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px 12px;
+    padding: 10px 12px;
+}
+
+/* Pastille du type : l'extension, sur la couleur de sa famille. */
+.file-card-badge {
+    flex: 0 0 auto;
+    display: grid;
+    place-items: center;
+    width: 42px;
+    height: 42px;
+    border-radius: 9px;
+    background: var(--file-tone);
+    color: #fff;
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: .04em;
+    font-family: var(--font);
+}
+
+.file-card-info {
+    /* Le nom garde au moins 200 px : quand les boutons ne tiennent plus à
+       côté (présentation : Modifier, Version soignée, Télécharger), ils passent
+       dessous au lieu de l'écraser lettre par lettre. */
+    flex: 1 1 200px;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+.file-card-name {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.file-card-meta {
+    font-size: 12px;
+    color: var(--text-muted);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+/* Motif d'un refus : ambre, comme les autres avertissements (thème sombre par
+   défaut, variante claire — même convention que main.css). */
+.file-card.is-refused .file-card-meta { color: #fbbf24; }
+[data-theme="light"] .file-card.is-refused .file-card-meta { color: #b45309; }
+.file-card.is-empty .file-card-meta { font-style: italic; }
+
+/* Point fixe pendant l'écriture du fichier. Pas d'animation : la carte est
+   recréée à chaque fragment reçu, une animation repartirait de zéro en
+   continu et ne montrerait qu'un clignotement. C'est le compteur de lignes,
+   à côté, qui dit que le fichier avance. */
+.file-card-pulse {
+    flex: 0 0 auto;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--accent);
+}
+
+.file-card-actions {
+    flex: 0 1 auto;
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    align-items: center;
+    gap: 6px;
+    margin-left: auto;
+}
+
+.file-card-icon {
+    display: grid;
+    place-items: center;
+    width: 34px;
+    height: 34px;
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: background .12s, color .12s, border-color .12s;
+}
+.file-card-icon.is-done { color: var(--accent); }
+
+/* Bouton scindé : « Télécharger » + chevron des autres formats. */
+.file-split {
+    position: relative;
+    display: flex;
+    align-items: stretch;
+}
+.file-download,
+.file-more {
+    border: none;
+    background: var(--accent);
+    color: #fff;
+    cursor: pointer;
+    font-family: var(--font);
+    transition: background .12s, opacity .12s;
+}
+.file-download {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    height: 34px;
+    padding: 0 13px;
+    border-radius: var(--radius-sm);
+    font-size: 13px;
+    font-weight: 600;
+    white-space: nowrap;
+}
+.file-split .file-download:not(:last-child) { border-radius: var(--radius-sm) 0 0 var(--radius-sm); }
+.file-more {
+    display: grid;
+    place-items: center;
+    width: 30px;
+    border-left: 1px solid rgba(255, 255, 255, .28);
+    border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+}
+.file-download.is-done { background: #1d8a4f; }
+.file-download:disabled,
+.file-more:disabled,
+.file-card-icon:disabled { cursor: default; opacity: .55; }
+
+/* « Modifier les slides » et « Version soignée » (présentations, classeurs) :
+   boutons secondaires, le téléchargement reste l'action principale de la
+   carte. */
+.file-polish,
+.file-edit-deck {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    height: 34px;
+    padding: 0 11px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--text);
+    font-family: var(--font);
+    font-size: 13px;
+    font-weight: 500;
+    white-space: nowrap;
+    cursor: pointer;
+    transition: background .12s, border-color .12s, opacity .12s;
+}
+.file-polish svg { flex: 0 0 auto; color: var(--accent); }
+.file-edit-deck svg { flex: 0 0 auto; }
+.file-edit-deck:disabled { cursor: default; opacity: .6; }
+.file-edit-deck.is-busy svg { animation: file-spin 1.4s linear infinite; }
+.file-polish:disabled { cursor: default; opacity: .6; }
+.file-polish.is-busy svg { animation: file-spin 1.4s linear infinite; }
+.file-polish[aria-expanded="true"] { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); }
+/* Rien ne peut le faire : grisé mais cliquable — le clic dit pourquoi. */
+.file-polish.is-unavailable { color: var(--text-muted); border-style: dashed; }
+.file-polish.is-unavailable svg { color: var(--text-muted); }
+
+/* Fabrication en cours : l'icône cède la place à un indicateur. */
+.file-card.is-busy .file-download svg { display: none; }
+.file-card.is-busy .file-download::before {
+    content: '';
+    width: 13px;
+    height: 13px;
+    border: 2px solid rgba(255, 255, 255, .45);
+    border-top-color: #fff;
+    border-radius: 50%;
+    animation: file-spin .7s linear infinite;
+}
+@keyframes file-spin { to { transform: rotate(360deg); } }
+
+/* ------------------------------------------------ menu des formats */
+
+.file-menu {
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    z-index: 40;
+    min-width: 190px;
+    padding: 5px;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--bg-surface);
+    box-shadow: 0 10px 28px rgba(0, 0, 0, .28);
+}
+[data-theme="light"] .file-menu { box-shadow: 0 10px 28px rgba(15, 23, 42, .14); }
+/* Menu d'un bloc de code : posé sur la page, hors du bloc (qui défile). */
+.file-menu.is-floating { position: fixed; top: 0; left: 0; right: auto; z-index: 300; }
+
+.file-menu-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+    width: 100%;
+    padding: 8px 10px;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text);
+    font-family: var(--font);
+    font-size: 13px;
+    text-align: left;
+    white-space: nowrap;
+    cursor: pointer;
+}
+.file-menu-item.is-current::after {
+    content: '';
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--accent);
+}
+
+/* ------------------------------------------------ état, avertissements */
+
+.file-card-status,
+.file-card-warning {
+    padding: 8px 12px;
+    border-top: 1px solid var(--border);
+    font-size: 12.5px;
+    line-height: 1.45;
+    color: var(--text);
+    background: color-mix(in srgb, #f59e0b 13%, transparent);
+}
+.file-card-status {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 10px;
+}
+.file-card-status.is-info { background: color-mix(in srgb, var(--accent) 11%, transparent); }
+.file-card-status-text { flex: 1 1 220px; }
+.file-card-status-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.file-status-btn {
+    padding: 5px 10px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg-surface);
+    color: var(--text);
+    font-family: var(--font);
+    font-size: 12px;
+    cursor: pointer;
+    transition: border-color .12s;
+}
+.file-status-btn:disabled { cursor: default; opacity: .55; }
+
+.file-card-note {
+    padding: 6px 12px;
+    border-top: 1px solid var(--border);
+    font-size: 11.5px;
+    color: var(--text-muted);
+}
+
+/* ------------------------------------------------ aperçu */
+
+.file-card-preview {
+    position: relative;
+    border-top: 1px solid var(--border);
+    background: var(--bg);
+    overflow: auto;
+    max-height: min(calc(70vh / var(--ui-zoom, 1)), 620px);
+}
+.file-card-preview:last-child { border-radius: 0 0 var(--radius) var(--radius); }
+
+/* Aperçu réduit : les premières lignes, fondu vers le bas.
+   Le fondu est un MASQUE et non un voile posé par-dessus : un tableau large
+   reste défilable à l'horizontale, et un voile en position absolue suivrait
+   ce défilement au lieu de rester au bas du cadre. */
+.file-card-preview.is-clamped {
+    max-height: 226px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 56px), transparent);
+    mask-image: linear-gradient(to bottom, #000 calc(100% - 56px), transparent);
+}
+
+/* Tableau : une grille lisible, en-tête fixé pendant le défilement. */
+.file-preview-table table {
+    width: max-content;
+    min-width: 100%;
+    margin: 0;
+    border-collapse: separate;
+    border-spacing: 0;
+    font-size: 12.5px;
+}
+.file-preview-table th,
+.file-preview-table td {
+    max-width: 320px;
+    padding: 6px 11px;
+    border: none;
+    border-right: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
+    text-align: left;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    background: transparent;
+}
+.file-preview-table th {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    background: var(--bg-surface);
+    font-weight: 600;
+}
+.file-preview-table tr > :last-child { border-right: none; }
+.file-preview-table tr:last-child > * { border-bottom: none; }
+
+/* Document : le Markdown rendu, avec les marges d'une page. */
+.file-preview-markdown { padding: 14px 18px; font-size: 13.5px; }
+.file-preview-markdown > div > :first-child { margin-top: 0; }
+.file-preview-markdown > div > :last-child { margin-bottom: 0; }
+.file-preview-markdown pre { white-space: pre; }
+
+/* Texte et code : le contenu tel quel. */
+.file-preview-text,
+.file-preview-code { padding: 12px 14px; }
+.file-preview-plain {
+    font-size: 13px;
+    line-height: 1.55;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+.file-preview-mono {
+    font-family: 'Fira Code', 'Cascadia Code', 'Consolas', monospace;
+    font-size: 12.5px;
+    line-height: 1.55;
+    white-space: pre;
+    tab-size: 4;
+}
+
+.file-card-toggle {
+    display: block;
+    width: 100%;
+    padding: 7px 12px;
+    border: none;
+    border-top: 1px solid var(--border);
+    border-radius: 0 0 var(--radius) var(--radius);
+    background: transparent;
+    color: var(--text-muted);
+    font-family: var(--font);
+    font-size: 12px;
+    cursor: pointer;
+    transition: color .12s, background .12s;
+}
+
+/* ------------------------------------------------ bloc de code ordinaire */
+
+.code-block-actions {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+}
+.btn-download-code {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 6px;
+    border: none;
+    border-radius: 4px;
+    background: none;
+    color: var(--text-muted);
+    font-size: 11px;
+    cursor: pointer;
+    transition: background .1s, color .1s;
+}
+.btn-download-code svg { width: 12px; height: 12px; }
+.btn-download-code:disabled { opacity: .55; cursor: progress; }
+
+/* ------------------------------------------------ images */
+
+.md-render .msg-img-frame {
+    position: relative;
+    display: inline-block;
+    max-width: min(100%, 480px);
+    margin-top: 8px;
+    line-height: 0;
+    vertical-align: top;
+}
+.md-render .msg-img-frame img {
+    max-width: 100%;
+    margin-top: 0;
+}
+.msg-img-download,
+.image-lightbox-download {
+    display: grid;
+    place-items: center;
+    border: none;
+    color: #fff;
+    cursor: pointer;
+    transition: background .15s, opacity .15s;
+}
+.msg-img-download {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    width: 34px;
+    height: 34px;
+    border-radius: 9px;
+    background: rgba(17, 17, 17, .72);
+    opacity: 0;
+}
+.msg-img-frame:hover .msg-img-download,
+.msg-img-download:focus-visible { opacity: 1; }
+.msg-img-download:disabled { opacity: .6; cursor: progress; }
+
+.image-lightbox-download {
+    position: absolute;
+    top: 18px;
+    right: 72px;
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    background: rgba(0, 0, 0, .45);
+}
+
+/* ------------------------------------------------ « Version soignée »
+   Un bouton, un menu (modèle ou Gamma, présentation seulement), une fenêtre
+   de confirmation : dans la carte sur ordinateur, en feuille au bas de
+   l'écran sur téléphone (posée sur <body>, d'où sa propre règle [hidden]). */
+
+.file-polish-wrap { position: relative; display: inline-flex; }
+
+.file-polish-menu {
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    z-index: 40;
+    width: 340px;
+    max-width: min(340px, calc(calc(100vw / var(--ui-zoom, 1)) - 32px));
+    padding: 6px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--bg-surface);
+    box-shadow: 0 10px 28px rgba(0, 0, 0, .28);
+}
+[data-theme="light"] .file-polish-menu { box-shadow: 0 10px 28px rgba(15, 23, 42, .14); }
+.file-polish-menu[hidden] { display: none !important; }
+
+.file-polish-item {
+    display: grid;
+    grid-template-columns: 22px minmax(0, 1fr) auto;
+    column-gap: 10px;
+    row-gap: 2px;
+    align-items: start;
+    width: 100%;
+    padding: 9px 10px;
+    border: none;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--text);
+    font-family: var(--font);
+    text-align: left;
+    cursor: pointer;
+}
+.file-polish-item[aria-disabled="true"] { cursor: default; }
+.file-polish-item[aria-disabled="true"] .file-polish-item-label { color: var(--text-muted); }
+.file-polish-item-icon {
+    grid-column: 1;
+    grid-row: 1 / span 2;
+    display: grid;
+    place-items: center;
+    width: 22px;
+    height: 22px;
+    color: var(--accent);
+}
+.file-polish-item-icon img { width: 16px; height: 16px; }
+.file-polish-item-label {
+    grid-column: 2;
+    grid-row: 1;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    font-size: 13.5px;
+    font-weight: 600;
+}
+.file-polish-item-sub {
+    grid-column: 2;
+    grid-row: 2;
+    font-size: 12px;
+    line-height: 1.4;
+    color: var(--text-muted);
+}
+.file-polish-item-meta {
+    grid-column: 3;
+    grid-row: 1 / span 2;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 2px;
+    font-size: 11.5px;
+    color: var(--text-muted);
+    white-space: nowrap;
+}
+.file-polish-pill {
+    padding: 1px 7px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--accent) 16%, transparent);
+    color: var(--text);
+    font-size: 10.5px;
+    font-weight: 600;
+}
+.file-polish-menu-foot {
+    margin-top: 4px;
+    padding: 8px 10px 4px;
+    border-top: 1px solid var(--border);
+    font-size: 11.5px;
+    line-height: 1.4;
+    color: var(--text-muted);
+}
+
+/* Fenêtre de confirmation */
+.file-polish-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    padding: 14px 16px 16px;
+    border-top: 1px solid var(--border);
+    background: color-mix(in srgb, var(--accent) 4%, var(--bg-input));
+    font-size: 13px;
+    line-height: 1.45;
+    color: var(--text);
+}
+.file-polish-panel:last-child { border-radius: 0 0 var(--radius) var(--radius); }
+.file-polish-panel:focus { outline: none; }
+.file-polish-head { display: flex; align-items: flex-start; gap: 10px; }
+.file-polish-icon {
+    flex: 0 0 auto;
+    display: grid;
+    place-items: center;
+    width: 32px;
+    height: 32px;
+    border-radius: 9px;
+    background: color-mix(in srgb, var(--accent) 18%, transparent);
+    color: var(--accent);
+}
+.file-polish-titles { flex: 1 1 auto; min-width: 0; }
+.file-polish-title { margin: 0; font-size: 15px; font-weight: 600; color: var(--text); }
+.file-polish-intro { margin: 2px 0 0; font-size: 12.5px; color: var(--text-muted); }
+.file-polish-close {
+    flex: 0 0 auto;
+    display: grid;
+    place-items: center;
+    width: 34px;
+    height: 34px;
+    border: none;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+}
+.file-polish-section { display: flex; flex-direction: column; gap: 6px; }
+.file-polish-heading { font-size: 12.5px; font-weight: 600; color: var(--text); }
+.file-polish-optional { font-weight: 400; color: var(--text-muted); }
+.file-polish-notice {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 8px 10px;
+    border-radius: var(--radius-sm);
+    background: color-mix(in srgb, var(--accent) 10%, transparent);
+    font-size: 12.5px;
+}
+.file-polish-notice svg { flex: 0 0 auto; margin-top: 2px; color: var(--accent); }
+.file-polish-models,
+.file-polish-list {
+    display: flex;
+    flex-direction: column;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    overflow: hidden;
+    background: var(--bg);
+}
+.file-polish-model,
+.file-polish-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-height: 44px;
+    padding: 7px 12px;
+    cursor: pointer;
+}
+.file-polish-model + .file-polish-model,
+.file-polish-row + .file-polish-row { border-top: 1px solid var(--border); }
+.file-polish-model:has(input:checked) { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.file-polish-model input,
+.file-polish-row input {
+    flex: 0 0 auto;
+    width: 18px;
+    height: 18px;
+    margin: 0;
+    accent-color: var(--accent);
+}
+.file-polish-model-text,
+.file-polish-row-text,
+.file-polish-chosen-text {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+}
+.file-polish-model-name,
+.file-polish-row-name { font-size: 13.5px; color: var(--text); overflow-wrap: anywhere; }
+.file-polish-model-note,
+.file-polish-row-note { font-size: 12px; color: var(--text-muted); overflow-wrap: anywhere; }
+.file-polish-model-cost,
+.file-polish-tag { flex: 0 0 auto; font-size: 12px; color: var(--text-muted); white-space: nowrap; }
+.file-polish-row.is-locked { cursor: default; background: color-mix(in srgb, var(--text) 3%, transparent); }
+.file-polish-row:has(input:not(:checked)) .file-polish-row-name { color: var(--text-muted); text-decoration: line-through; }
+.file-polish-hint { font-size: 11.5px; color: var(--text-muted); }
+.file-polish-chosen {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-height: 48px;
+    padding: 6px 6px 6px 12px;
+    border: 1px solid color-mix(in srgb, var(--accent) 55%, var(--border));
+    border-radius: var(--radius-sm);
+    background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+.file-polish-change {
+    flex: 0 0 auto;
+    height: 36px;
+    padding: 0 12px;
+    border: none;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--accent);
+    font-family: var(--font);
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+}
+.file-polish-note {
+    height: 38px;
+    padding: 0 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font);
+    font-size: 13.5px;
+}
+.file-polish-note::placeholder { color: var(--text-muted); }
+.file-polish-foot {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px 16px;
+    padding-top: 12px;
+    border-top: 1px solid var(--border);
+}
+.file-polish-cost { flex: 1 1 240px; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.file-polish-cost-main { font-size: 13.5px; font-weight: 600; color: var(--text); }
+.file-polish-cost-basis { font-size: 11.5px; color: var(--text-muted); }
+.file-polish-error {
+    flex: 1 1 100%;
+    padding: 8px 10px;
+    border-radius: var(--radius-sm);
+    background: color-mix(in srgb, #f59e0b 13%, transparent);
+    font-size: 12.5px;
+    color: var(--text);
+}
+.file-polish-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-left: auto; }
+.file-polish-cancel,
+.file-polish-launch,
+.file-polish-retry {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 7px;
+    height: 36px;
+    padding: 0 14px;
+    border-radius: var(--radius-sm);
+    font-family: var(--font);
+    font-size: 13px;
+    white-space: nowrap;
+    cursor: pointer;
+    transition: background .12s, border-color .12s, opacity .12s;
+}
+.file-polish-cancel { border: 1px solid var(--border); background: transparent; color: var(--text); font-weight: 500; }
+.file-polish-launch,
+.file-polish-retry { border: none; background: var(--accent); color: #fff; font-weight: 600; }
+.file-polish-launch svg { color: #fff; }
+.file-polish-cancel:disabled,
+.file-polish-launch:disabled { cursor: default; opacity: .55; }
+.file-polish-panel.is-busy .file-polish-launch svg { animation: file-spin 1.4s linear infinite; }
+.file-polish-loading { display: flex; align-items: center; gap: 10px; padding: 4px 0 2px; color: var(--text-muted); }
+.file-polish-spinner {
+    width: 14px;
+    height: 14px;
+    border: 2px solid color-mix(in srgb, var(--accent) 35%, transparent);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: file-spin .7s linear infinite;
+}
+
+/* Téléphone : feuille au bas de l'écran, sous les fenêtres modales (1000),
+   au-dessus des volets (400). */
+.file-polish-backdrop { position: fixed; inset: 0; z-index: 950; background: rgba(0, 0, 0, .55); }
+.file-polish-panel.is-sheet {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 951;
+    max-height: calc(90dvh / var(--ui-zoom, 1));
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 8px 16px calc(16px + var(--safe-bottom, 0px));
+    border-top: none;
+    border-radius: 16px 16px 0 0;
+    background: var(--bg-surface);
+    box-shadow: 0 -10px 30px rgba(0, 0, 0, .35);
+}
+.file-polish-panel.is-sheet::before {
+    content: '';
+    flex: 0 0 auto;
+    align-self: center;
+    width: 36px;
+    height: 4px;
+    border-radius: 4px;
+    background: var(--border);
+}
+.file-polish-panel.is-sheet .file-polish-head { align-items: center; }
+.file-polish-panel.is-sheet .file-polish-intro { display: none; }
+.file-polish-panel.is-sheet .file-polish-close { width: 44px; height: 44px; }
+.file-polish-panel.is-sheet .file-polish-foot { flex-direction: column; align-items: stretch; }
+.file-polish-panel.is-sheet .file-polish-actions { flex-direction: column-reverse; margin-left: 0; }
+.file-polish-panel.is-sheet .file-polish-cancel,
+.file-polish-panel.is-sheet .file-polish-launch,
+.file-polish-panel.is-sheet .file-polish-retry { width: 100%; height: 48px; font-size: 15px; }
+.file-polish-panel.is-sheet .file-polish-note { height: 46px; font-size: 16px; }
+
+/* ------------------------------------------------ survols
+   Sous @media (hover: hover) : au doigt, un :hover reste collé au dernier
+   bouton touché et passe pour un état actif. */
+@media (hover: hover) {
+    .file-card-icon:hover { background: var(--bg-surface); color: var(--text); border-color: var(--border); }
+    .file-download:hover:not(:disabled),
+    .file-more:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 84%, black); }
+    .file-download.is-done:hover { background: #1d8a4f; }
+    .file-menu-item:hover { background: color-mix(in srgb, var(--accent) 14%, transparent); }
+    .file-status-btn:hover:not(:disabled) { border-color: var(--accent); }
+    .file-edit-deck:hover:not(:disabled),
+    .file-polish:hover:not(:disabled):not(.is-unavailable) { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); }
+    .file-polish-item:hover:not([aria-disabled="true"]) { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+    .file-polish-close:hover,
+    .file-polish-change:hover { background: color-mix(in srgb, var(--text) 7%, transparent); color: var(--text); }
+    .file-polish-cancel:hover:not(:disabled) { border-color: var(--accent); }
+    .file-polish-launch:hover:not(:disabled),
+    .file-polish-retry:hover { background: color-mix(in srgb, var(--accent) 84%, black); }
+    .file-polish-model:hover,
+    .file-polish-row:not(.is-locked):hover { background: color-mix(in srgb, var(--accent) 6%, transparent); }
+    .file-card-toggle:hover { color: var(--text); background: color-mix(in srgb, var(--text) 5%, transparent); }
+    .btn-download-code:hover { background: var(--bg-surface); color: var(--text); }
+    .msg-img-download:hover { background: var(--accent); }
+    .image-lightbox-download:hover { background: rgba(0, 0, 0, .75); }
+}
+.file-menu-item:focus-visible,
+.file-download:focus-visible,
+.file-more:focus-visible,
+.file-card-icon:focus-visible,
+.file-polish:focus-visible,
+.file-polish-item:focus-visible,
+.file-polish-close:focus-visible,
+.file-polish-change:focus-visible,
+.file-polish-cancel:focus-visible,
+.file-polish-launch:focus-visible,
+.file-polish-retry:focus-visible,
+.file-polish-note:focus-visible,
+.file-edit-deck:focus-visible,
+.file-card-toggle:focus-visible,
+.file-status-btn:focus-visible {
+    outline: 2px solid color-mix(in srgb, var(--accent) 70%, white);
+    outline-offset: 1px;
+}
+
+/* ------------------------------------------------ écrans étroits et tactiles */
+
+/* Sans survol, le bouton de l'image doit être visible d'emblée. */
+@media (hover: none) {
+    .msg-img-download { opacity: 1; }
+}
+
+@media (max-width: 640px) {
+    .file-card-head { flex-wrap: wrap; gap: 10px; }
+    /* Nom et type sur la première ligne, les boutons sur la seconde, pleine
+       largeur : le bouton principal reste le plus grand de la carte. */
+    .file-card-info { flex: 1 1 calc(100% - 54px); }
+    /* Un nom long passe à la ligne plutôt que d'être coupé : sur un écran
+       étroit, l'extension — l'information qui compte — serait la première
+       victime des points de suspension. */
+    .file-card-name { white-space: normal; overflow-wrap: anywhere; }
+    .file-card-actions { flex: 1 1 100%; }
+    .file-split { flex: 1 1 auto; }
+    .file-download { flex: 1 1 auto; justify-content: center; }
+    .file-card-status-actions { width: 100%; }
+    .file-status-btn { flex: 1 1 auto; }
+    /* Le menu « Version soignée » prend toute la rangée des boutons : posé
+       sous un bouton du bord gauche, il déborderait de l'écran. */
+    .file-card-actions { position: relative; }
+    .file-polish-wrap { position: static; }
+    .file-polish-menu { left: 0; right: 0; width: auto; max-width: none; }
+    .file-preview-markdown { padding: 12px 14px; }
+    .image-lightbox-download { top: 12px; right: 62px; }
+}
+
+/* Cibles tactiles de 44 px : le doigt n'a pas la précision d'un pointeur. */
+/* Téléphone étroit : « Modifier les slides » se réduit à son icône (le titre
+   du bouton dit le reste) ; « Version soignée », seule porte vers la mise en
+   page par un modèle ou par Gamma, garde son libellé. */
+@media (max-width: 400px) {
+    .file-edit-deck .file-edit-deck-label { display: none; }
+    .file-polish, .file-edit-deck { padding: 0 10px; }
+}
+
+@media (pointer: coarse) {
+    .file-download, .file-more, .file-polish, .file-edit-deck { height: 44px; }
+    .file-polish, .file-edit-deck { min-width: 44px; justify-content: center; }
+    .file-polish-item { padding: 12px; }
+    .file-polish-model, .file-polish-row { min-height: 48px; }
+    .file-polish-close, .file-polish-change { min-width: 44px; min-height: 44px; }
+    .file-polish-cancel, .file-polish-launch, .file-polish-retry { min-height: 44px; }
+    /* 16 px : en dessous, iOS zoome au focus et ne revient pas. */
+    .file-polish-note { height: 46px; font-size: 16px; }
+    .file-more { width: 42px; }
+    .file-card-icon { width: 44px; height: 44px; }
+    .file-menu-item { padding: 12px 12px; font-size: 14px; }
+    .file-status-btn { padding: 10px 12px; font-size: 13px; }
+    .file-card-toggle { padding: 12px; font-size: 13px; }
+    .msg-img-download { width: 44px; height: 44px; }
+    .btn-download-code { padding: 8px 8px; }
+}

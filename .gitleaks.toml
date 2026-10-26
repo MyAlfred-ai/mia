@@ -1,0 +1,13 @@
+# Configuration gitleaks : règles par défaut, plus les exceptions ci-dessous.
+# Toute exception ajoutée ici doit citer le fichier et la raison.
+[extend]
+useDefault = true
+
+# Valeurs factices, reconnues une à une : un fichier entier n'est jamais exclu,
+# une vraie clé collée à côté serait signalée.
+# Fichier : scripts/smoke-install.sh (mot de passe du test d'installation).
+[allowlist]
+description = "Valeurs factices des tests"
+regexes = [
+  '''^UnAutreMotDePasse456$''',
+]

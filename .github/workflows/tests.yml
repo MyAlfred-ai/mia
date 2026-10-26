@@ -1,0 +1,65 @@
+name: Tests
+
+on:
+  push:
+    branches: ["develop"]
+  pull_request:
+    branches: ["main"]
+  workflow_call:
+
+jobs:
+  phpunit:
+    name: PHPUnit (PHP 8.5 + MySQL 8)
+    runs-on: ubuntu-latest
+
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: myllm_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -proot"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@bf6b4fbd49ca58e4608c9c89fba0b8d90bd2a39f # 2.35.5
+        with:
+          php-version: '8.5'
+          extensions: pdo_mysql, mbstring
+          coverage: none
+
+      - name: Installer les dépendances PHP
+        run: composer install --no-interaction --prefer-dist
+
+      - name: Attendre MySQL
+        run: |
+          for i in $(seq 1 30); do
+            if php -r 'new PDO("mysql:host=127.0.0.1;port=3306;dbname=myllm_test","root","root");' 2>/dev/null; then
+              echo "MySQL prêt"; exit 0
+            fi
+            echo "MySQL en attente (tentative $i/30)"
+            sleep 2
+          done
+          echo "MySQL indisponible"; exit 1
+
+      - name: Télécharger PHPUnit
+        run: |
+          curl -fsSL https://phar.phpunit.de/phpunit-11.phar -o phpunit.phar
+          php phpunit.phar --version
+
+      - name: Lancer la suite
+        env:
+          TEST_DB_HOST: 127.0.0.1
+          TEST_DB_PORT: 3306
+          TEST_DB_NAME: myllm_test
+          TEST_DB_USER: root
+          TEST_DB_PASS: root
+        run: php phpunit.phar --colors=never

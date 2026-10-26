@@ -1,0 +1,18 @@
+{
+    "license": "AGPL-3.0-only",
+    "require": {
+        "php": ">=8.3",
+        "ext-pdo_mysql": "*",
+        "ext-mbstring": "*",
+        "ext-json": "*",
+        "ext-openssl": "*",
+        "ext-curl": "*",
+        "ext-fileinfo": "*",
+        "ext-session": "*",
+        "dompdf/dompdf": "^3.1",
+        "smalot/pdfparser": "^2.12",
+        "phpoffice/phpword": "^1.4",
+        "phpoffice/phppresentation": "^1.2",
+        "phpoffice/phpspreadsheet": "^3.10"
+    }
+}

@@ -1,0 +1,312 @@
+[
+  {
+    "name": "point-virgule",
+    "source": "a;b;c\n1;2;3",
+    "rows": [
+      [
+        "a",
+        "b",
+        "c"
+      ],
+      [
+        "1",
+        "2",
+        "3"
+      ]
+    ]
+  },
+  {
+    "name": "virgule",
+    "source": "a,b\n1,2",
+    "rows": [
+      [
+        "a",
+        "b"
+      ],
+      [
+        "1",
+        "2"
+      ]
+    ]
+  },
+  {
+    "name": "tabulation",
+    "source": "a\tb\n1\t2",
+    "rows": [
+      [
+        "a",
+        "b"
+      ],
+      [
+        "1",
+        "2"
+      ]
+    ]
+  },
+  {
+    "name": "guillemets, séparateur cité, guillemet doublé, saut de ligne cité",
+    "source": "Nom;Note\n\"Dupont; Jean\";\"Il a dit \"\"oui\"\"\"\n\"Multi\nligne\";x",
+    "rows": [
+      [
+        "Nom",
+        "Note"
+      ],
+      [
+        "Dupont; Jean",
+        "Il a dit \"oui\""
+      ],
+      [
+        "Multi\nligne",
+        "x"
+      ]
+    ]
+  },
+  {
+    "name": "virgule décimale dans un CSV à point-virgule",
+    "source": "Produit;Prix\nA;1,5\nB;2,5\nC;3",
+    "rows": [
+      [
+        "Produit",
+        "Prix"
+      ],
+      [
+        "A",
+        "1,5"
+      ],
+      [
+        "B",
+        "2,5"
+      ],
+      [
+        "C",
+        "3"
+      ]
+    ]
+  },
+  {
+    "name": "espaces autour des séparateurs",
+    "source": "a, b , c\n1, 2, 3",
+    "rows": [
+      [
+        "a",
+        "b",
+        "c"
+      ],
+      [
+        "1",
+        "2",
+        "3"
+      ]
+    ]
+  },
+  {
+    "name": "ligne de titre avant l'en-tête",
+    "source": "Budget 2026\nPoste;Montant\nLoyer;1200",
+    "rows": [
+      [
+        "Budget 2026",
+        ""
+      ],
+      [
+        "Poste",
+        "Montant"
+      ],
+      [
+        "Loyer",
+        "1200"
+      ]
+    ]
+  },
+  {
+    "name": "séparateur en fin de ligne",
+    "source": "a;b;\n1;2;",
+    "rows": [
+      [
+        "a",
+        "b"
+      ],
+      [
+        "1",
+        "2"
+      ]
+    ]
+  },
+  {
+    "name": "lignes vides ignorées",
+    "source": "a;b\n\n1;2\n\n",
+    "rows": [
+      [
+        "a",
+        "b"
+      ],
+      [
+        "1",
+        "2"
+      ]
+    ]
+  },
+  {
+    "name": "table Markdown",
+    "source": "| A | B |\n|---|:-:|\n| 1 | **2** |\n| x \\| y | `z` |",
+    "rows": [
+      [
+        "A",
+        "B"
+      ],
+      [
+        "1",
+        "2"
+      ],
+      [
+        "x | y",
+        "z"
+      ]
+    ]
+  },
+  {
+    "name": "une seule colonne",
+    "source": "pomme\npoire",
+    "rows": [
+      [
+        "pomme"
+      ],
+      [
+        "poire"
+      ]
+    ]
+  },
+  {
+    "name": "formule non citée contenant le séparateur",
+    "source": "T;=SI(A1>0;\"oui\";\"non\");x",
+    "rows": [
+      [
+        "T",
+        "=SI(A1>0;\"oui\";\"non\")",
+        "x"
+      ]
+    ]
+  },
+  {
+    "name": "BOM et CRLF",
+    "source": "\ufeffa;b\r\n1;2\r\n",
+    "rows": [
+      [
+        "a",
+        "b"
+      ],
+      [
+        "1",
+        "2"
+      ]
+    ]
+  },
+  {
+    "name": "lignes inégales complétées",
+    "source": "a;b;c\n1;2\n3",
+    "rows": [
+      [
+        "a",
+        "b",
+        "c"
+      ],
+      [
+        "1",
+        "2",
+        ""
+      ],
+      [
+        "3",
+        "",
+        ""
+      ]
+    ]
+  },
+  {
+    "name": "blancs avant et après une cellule citée",
+    "source": "a; \"b c\" ;d\n1;2;3",
+    "rows": [
+      [
+        "a",
+        "b c",
+        "d"
+      ],
+      [
+        "1",
+        "2",
+        "3"
+      ]
+    ]
+  },
+  {
+    "name": "barres verticales sans ligne de tirets",
+    "source": "a | b\n1 | 2",
+    "rows": [
+      [
+        "a",
+        "b"
+      ],
+      [
+        "1",
+        "2"
+      ]
+    ]
+  },
+  {
+    "name": "guillemet au milieu d'une cellule non citée",
+    "source": "5\" écran;x\n7\" écran;y",
+    "rows": [
+      [
+        "5\" écran",
+        "x"
+      ],
+      [
+        "7\" écran",
+        "y"
+      ]
+    ]
+  },
+  {
+    "name": "guillemet jamais refermé",
+    "source": "a;\"bcd\nef",
+    "rows": [
+      [
+        "a",
+        "bcd\nef"
+      ]
+    ]
+  },
+  {
+    "name": "cellule citée vide et cellule vide",
+    "source": "a;\"\";c\n1;;3",
+    "rows": [
+      [
+        "a",
+        "",
+        "c"
+      ],
+      [
+        "1",
+        "",
+        "3"
+      ]
+    ]
+  },
+  {
+    "name": "accents et caractères multi-octets",
+    "source": "Prénom;Ville\nZoé;Orléans\nŒdipe;Saint-Étienne 😀",
+    "rows": [
+      [
+        "Prénom",
+        "Ville"
+      ],
+      [
+        "Zoé",
+        "Orléans"
+      ],
+      [
+        "Œdipe",
+        "Saint-Étienne 😀"
+      ]
+    ]
+  }
+]

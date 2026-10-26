@@ -1,0 +1,397 @@
+{
+    "version": "1.5.1.32",
+    "nouveautes": [
+        {
+            "id": "workflows-pieces-dans-email",
+            "titre": "Workflows : l'email contient vraiment les pièces citées",
+            "corps": "Une action « Préparer ou envoyer un email » qui devait contenir une pièce du dossier n'en reprenait que le nom, et l'image citée n'apparaissait pas. Désormais la pièce figure telle quelle, dans la mise en forme de chaque destination (email, message Slack, tâche, évènement, document), l'image s'affiche dans le corps du message, et une pièce rédigée à partir d'autres pièces arrive complète, avec le contenu de celles qu'elle cite. Par sécurité, un texte venu de l'extérieur, comme un email reçu, n'est jamais complété ainsi.",
+            "genre": "correctif",
+            "pour": "createurs",
+            "date": "2026-10-26",
+            "version": "1.5.1.30"
+        },
+        {
+            "id": "workflows-contenu-relu",
+            "titre": "Workflows : relire ce qui a circulé d'une étape à l'autre",
+            "corps": "Dans l'historique des exécutions, chaque pièce se déplie désormais en entier — texte, tableau, Fiche, fichier reçu, image, page web — et chaque action montre ce qu'elle a porté : **Voir l'email** affiche les destinataires, l'objet et le message tel qu'il est parti, ses pièces jointes, et dit s'il a été **envoyé** ou seulement rangé en **brouillon**. La page d'une exécution montre de même, brique par brique, les emails écrits, les messages publiés et les livraisons.",
+            "genre": "amelioration",
+            "pour": "createurs",
+            "date": "2026-10-26",
+            "version": "1.5.1.29"
+        },
+        {
+            "id": "onedrive-application-de-connexion",
+            "titre": "OneDrive sans inscription Azure de plus",
+            "corps": "OneDrive peut désormais passer par l'application Microsoft de la connexion, comme Outlook : il suffit d'y ajouter la permission Files.Read.All, listée sur Organisation → Authentification. L'inscription dédiée de Capacités → Sources synchronisées devient facultative, et la carte OneDrive dit en tête quelle application sert. Quand Microsoft refuse une liaison, y compris depuis l'application mobile, l'écran en donne la cause (secret expiré, consentement manquant…) au lieu d'un simple échec.",
+            "genre": "amelioration",
+            "pour": "administrateurs",
+            "date": "2026-10-22",
+            "version": "1.5.1.25"
+        },
+        {
+            "id": "administration-en-anglais",
+            "titre": "L'administration dans votre langue",
+            "corps": "Avec l'anglais choisi, toute l'administration s'affiche en anglais : menu, tableau de bord, Comptes, Groupes, Rôles, Modèles IA, Outils, Connecteurs, Budget, Consommation, Tarifs & crédits, Entreprise, Marque & apparence, Authentification, Diagnostic, Journaux, Sauvegarde et Élagage, avec leurs messages et les points à régler.",
+            "genre": "amelioration",
+            "pour": "administrateurs",
+            "date": "2026-10-21",
+            "version": "1.5.1.24"
+        },
+        {
+            "id": "langue-choisie-partout",
+            "titre": "MIA parle la langue que vous avez choisie",
+            "corps": "Avec l'anglais choisi (sélecteur de langue en haut à droite, ou Réglages → Mon profil), MIA répond en anglais par défaut, titre vos conversations en anglais et prépare en anglais les tâches programmées, les workflows et les assistants qu'elle vous propose — sauf si vous lui écrivez ou lui demandez une autre langue. Les pages Assistants et Bases de connaissances, leurs fiches et leurs modèles de prompt passent elles aussi en anglais.",
+            "genre": "amelioration",
+            "pour": "tous",
+            "date": "2026-10-21",
+            "version": "1.5.1.23"
+        },
+        {
+            "id": "microsoft-sans-consentement-force",
+            "titre": "Outlook, calendrier Outlook, To Do et OneDrive se relient sans être administrateur",
+            "corps": "Dans une organisation où seuls les administrateurs peuvent consentir aux applications, relier Outlook, le calendrier Outlook, Microsoft To Do ou OneDrive affichait « Approbation de l'administrateur requise », même après le consentement donné pour toute l'organisation. Une fois ce consentement accordé, chacun relie désormais ces services depuis Réglages → Comptes connectés, sans écran d'autorisation.",
+            "genre": "correctif",
+            "pour": "tous",
+            "date": "2026-10-20",
+            "version": "1.5.1.21"
+        },
+        {
+            "id": "telephone-boutons-assistants-bases",
+            "titre": "Assistants et bases de connaissances de retour sur téléphone",
+            "corps": "Sur téléphone, dès qu'un connecteur ou un outil était allumé, les boutons des assistants et des bases de connaissances sortaient de la barre sous le champ de saisie, sans aucun moyen de les atteindre. Ils restent désormais toujours visibles : les connecteurs allumés se comptent sur le bouton « + », et la pastille de l'outil actif se place juste après ces boutons.",
+            "genre": "correctif",
+            "pour": "tous",
+            "date": "2026-10-19",
+            "version": "1.5.1.20"
+        },
+        {
+            "id": "workflows-boucles-intelligentes",
+            "titre": "Workflows : des boucles pour chaque ligne, chaque pièce jointe, chaque fichier",
+            "corps": "Une boucle de workflow parcourt ce que vous lui donnez : chaque ligne d'un Excel, chaque pièce jointe d'un email, chaque slide, page ou section, chaque fichier d'un dossier Drive, chaque email d'une recherche, ou chaque sujet repéré par MIA. Une règle garde les éléments utiles, la fenêtre de lancement compte les tours, un élément en échec n'arrête plus les autres et se refait seul ; les actions de chaque tour se relisent ensemble à la fin. Un guide pas à pas explique la mise en place d'un workflow.",
+            "genre": "nouveaute",
+            "pour": "createurs",
+            "date": "2026-10-18",
+            "version": "1.5.1.19"
+        },
+        {
+            "id": "journaux-surveillance",
+            "titre": "Des journaux qui disent ce qui ne va pas",
+            "corps": "**Maintenance → Diagnostic → Journaux** devient un tableau de bord : un verdict en tête, les pannes regroupées (une erreur répétée mille fois tient en une ligne, avec sa courbe, sa fréquence et la mention « Nouveau »), une frise par gravité où toucher une barre zoome sur le créneau, et un suivi en direct. Les erreurs internes et les avertissements, jusqu'ici rangés dans « Autres », sont classés par gravité et par domaine ; un identifiant d'incident collé dans la recherche ouvre la panne avec sa pile d'appels et sa cause, et les heures suivent votre fuseau horaire.",
+            "genre": "amelioration",
+            "pour": "administrateurs",
+            "date": "2026-10-18",
+            "version": "1.5.1.18"
+        },
+        {
+            "id": "budget-depenses-periode",
+            "titre": "Les dépenses de l'IA sur la période de votre choix",
+            "corps": "Dans **Coûts → Budget**, la section **Dépenses** montre ce que l'IA a coûté sur une période toute prête — mois en cours, mois dernier, 7 ou 30 jours, 12 mois, cette année, depuis le début — ou entre deux dates de votre choix : le total, la moyenne par jour, l'évolution face à la période précédente, un histogramme par jour, semaine ou mois avec la part du budget, les catégories et les fournisseurs qui coûtent. Les mêmes tranches et la plage personnalisée servent aussi dans **Coûts → Consommation**.",
+            "genre": "amelioration",
+            "pour": "administrateurs",
+            "date": "2026-10-18",
+            "version": "1.5.1.17"
+        },
+        {
+            "id": "photo-profil-url-ou-fichier",
+            "titre": "Changer de photo de profil, sans détour",
+            "corps": "Dans **Mon profil**, choisir une nouvelle image ne faisait rien tant qu'une photo était déjà enregistrée : il fallait d'abord vider le champ d'adresse. Désormais un fichier choisi ou une adresse d'image collée changent la photo aussitôt, et **Retirer la photo** revient à vos initiales. Une image collée par son adresse est copiée dans MIA : elle ne disparaît plus si le site d'origine la retire, et la photo de votre compte Google ne la remplace plus à la connexion.",
+            "genre": "correctif",
+            "pour": "tous",
+            "date": "2026-10-18",
+            "version": "1.5.1.16"
+        },
+        {
+            "id": "menu-plus-volet",
+            "titre": "Un menu « + » plus court et plus clair",
+            "corps": "Le menu « + » tient sur une ligne par entrée, sans défilement : Joindre des fichiers, Créer (avec le coût de chaque outil en crédits) et Sources. Vos connecteurs vivent dans un volet « Connecteurs », replié par défaut, qui montre d'un coup d'œil lesquels sont allumés ; menu fermé, leurs logos s'affichent à côté du « + » (sur téléphone, leur nombre s'affiche sur le « + »). Les services pas encore reliés tiennent en une seule ligne « Relier ».",
+            "genre": "amelioration",
+            "pour": "tous",
+            "date": "2026-10-17",
+            "version": "1.5.1.13"
+        },
+        {
+            "id": "connecteur-microsoft-teams",
+            "titre": "Microsoft Teams dans la conversation",
+            "corps": "Reliez votre Teams dans **Réglages → Comptes connectés**, puis allumez **Messages Teams** dans le menu **+** : l'assistant cherche et lit vos conversations et les canaux de vos équipes (« qu'a dit Marie sur le budget ? »), et publie un message en votre nom après votre accord — dans une conversation, un canal ou le fil d'un message. Un administrateur de votre organisation doit d'abord autoriser MIA dans Microsoft.",
+            "genre": "nouveaute",
+            "pour": "tous",
+            "date": "2026-10-17",
+            "version": "1.5.1.12"
+        },
+        {
+            "id": "couts-reels-fournisseurs",
+            "titre": "Le coût de chaque fournisseur, mieux relevé",
+            "corps": "Certaines consommations échappaient au décompte : les réponses de Kimi, celles arrêtées avec le bouton Stop, les pages lues par Claude et Mistral pendant une recherche Internet, et les recherches de Mistral, qui apparaissent désormais dans Consommation (sans tarif publié, leur prix se saisit dans Tarifs & crédits). Les très longues requêtes suivent le tarif majoré d'OpenAI et de Gemini Pro, la session de code de la « Version soignée » par GPT est comptée et la lecture de cache de Claude Sonnet 5.5 suit son vrai prix. Une réponse appuyée sur Internet n'est plus arrondie deux fois.",
+            "genre": "correctif",
+            "pour": "administrateurs",
+            "date": "2026-10-17",
+            "version": "1.5.1.11"
+        },
+        {
+            "id": "couts-credits-realistes",
+            "titre": "Des coûts en crédits réalistes, partout",
+            "corps": "Le sélecteur de modèle et le menu **+** annoncent le coût d'une réponse ou d'une génération (« ≈ 35 crédits par réponse »), calculé comme il sera décompté, sur la taille réelle des réponses récentes. L'étiquette sous une réponse compte tout le tour — titre, mémoire, recherche dans les bases — et reste la même au rechargement ; la ligne au-dessus du champ suit les crédits utilisés dans la conversation. Onze modèles OpenAI (o3, GPT-4o, GPT-5.4…) comptaient 1 crédit par réponse faute de tarif : ils suivent désormais celui d'OpenAI.",
+            "genre": "amelioration",
+            "pour": "tous",
+            "date": "2026-10-17",
+            "version": "1.5.1.10"
+        },
+        {
+            "id": "tarifs-appliques",
+            "titre": "Tarifs & crédits montre le tarif vraiment appliqué",
+            "corps": "Une ligne sans prix saisi affichait « 0 € → 1 crédit » alors que la facturation lui appliquait le tarif public du modèle : elle montre désormais ce tarif (« Tarif public appliqué »), et les crédits par unité, le simulateur et le rapport PDF calculent avec lui. Le coût estimé d'un workflow tient compte du modèle de chaque étape et de ses recherches Internet, au lieu d'une moyenne de tous les modèles.",
+            "genre": "correctif",
+            "pour": "administrateurs",
+            "date": "2026-10-17",
+            "version": "1.5.1.10"
+        },
+        {
+            "id": "suggestion-de-suite",
+            "titre": "Une suite proposée après chaque réponse",
+            "corps": "Après une réponse de MIA, la zone de saisie vous propose en grisé la suite logique de l'échange — « Oui, prépare le brouillon pour Marie », « Compare avec le devis de l'an dernier »… Appuyez sur **Tab** pour la reprendre (au doigt : **Utiliser**), modifiez-la si besoin, puis envoyez : rien ne part sans vous. Les idées d'utilisation, elles, ne défilent plus que dans une conversation vide.",
+            "genre": "nouveaute",
+            "pour": "tous",
+            "date": "2026-10-17",
+            "version": "1.5.1.9"
+        },
+        {
+            "id": "menus-centre-de-reglages",
+            "titre": "Des menus repensés : vos espaces, vos réglages, l'administration",
+            "corps": "La barre latérale range ce que vous faites avec MIA en tuiles **Espaces** — Assistants, Bases, Tâches, Workflows, Créations, selon vos droits —, chaque page n'a plus qu'une entrée, et **Rechercher ou aller à…** (⌘K, ou Ctrl+K) mène en quelques lettres à une page, une action ou une conversation. En bas, deux vrais boutons mènent droit à leurs pages, menus à gauche : **Réglages** pour votre compte (dont **Comptes connectés** et **Usage & crédits**) et, pour qui administre, **Admin**, avec ses six rubriques et le nombre de points à régler. La barre latérale garde la même largeur partout ; sur téléphone, l'avatar en haut à droite ouvre vos réglages.",
+            "genre": "amelioration",
+            "pour": "tous",
+            "date": "2026-10-17",
+            "version": "1.5.1.7"
+        },
+        {
+            "id": "bandeau-replie",
+            "titre": "Le bandeau du haut se fait discret",
+            "corps": "Au-dessus de la conversation, le bandeau qui détaille le modèle (Internet, images, fichiers, connecteurs, historique) est désormais replié par défaut : il ne montre que le modèle choisi, et laisse la place aux messages. La flèche à sa droite le déplie ; si vous le préférez ouvert, MIA s'en souvient sur cet appareil.",
+            "genre": "amelioration",
+            "pour": "tous",
+            "date": "2026-10-16",
+            "version": "1.5.1.4"
+        },
+        {
+            "id": "workflows-historique",
+            "titre": "Workflows : l'historique des exécutions",
+            "corps": "L'onglet **Historique des exécutions** de la page Workflows rassemble tous vos lancements, rangés par jour, filtrables par workflow et par état, chacun avec ce qu'il traitait (le client saisi, l'objet de l'email reçu…) ; le bouton **Historique** d'un workflow y mène directement. Choisir un lancement ouvre son journal à côté : ce qu'il a remis, sa durée et son coût, puis, brique par brique, ce qu'elle a fait, lu et remis, les actions proposées et leur sort, les erreurs et les reprises. De là, on décide, on reprend ou on suit l'exécution, et **Relancer** la rejoue avec les mêmes données.",
+            "genre": "nouveaute",
+            "pour": "createurs",
+            "date": "2026-10-16",
+            "version": "1.5.1.3"
+        }
+    ],
+    "commits": [
+        {
+            "date": "2026-10-26",
+            "type": "fix",
+            "scope": "workflows",
+            "subject": "récursion des pièces sûre sur toutes les briques",
+            "version": "1.5.1.32"
+        },
+        {
+            "date": "2026-10-26",
+            "type": "fix",
+            "scope": "workflows",
+            "subject": "les pièces citées dans une pièce sont remplies à leur tour",
+            "version": "1.5.1.31"
+        },
+        {
+            "date": "2026-10-26",
+            "type": "fix",
+            "scope": "workflows",
+            "subject": "l'email d'une étape contient vraiment les pièces citées",
+            "version": "1.5.1.30"
+        },
+        {
+            "date": "2026-10-26",
+            "type": "feat",
+            "scope": "workflows",
+            "subject": "relire le contenu de ce qui a circulé",
+            "version": "1.5.1.29"
+        },
+        {
+            "date": "2026-10-22",
+            "type": "fix",
+            "scope": "test",
+            "subject": "meilleur lisibilité des erreurs su smoke test",
+            "version": "1.5.1.28"
+        },
+        {
+            "date": "2026-10-22",
+            "type": "fix",
+            "scope": "test",
+            "subject": "regex moi strict sur la version de php",
+            "version": "1.5.1.27"
+        },
+        {
+            "date": "2026-10-22",
+            "type": "fix",
+            "scope": "sécurité",
+            "subject": "PHP 8.5.12 + upload_progress off (CERT-EU 2026-018)",
+            "version": "1.5.1.26"
+        },
+        {
+            "date": "2026-10-22",
+            "type": "feat",
+            "scope": "onedrive",
+            "subject": "repli sur l'application Microsoft de la connexion",
+            "version": "1.5.1.25"
+        },
+        {
+            "date": "2026-10-21",
+            "type": "feat",
+            "scope": "i18n",
+            "subject": "l'administration entière dans la langue choisie (lot 5)",
+            "version": "1.5.1.24"
+        },
+        {
+            "date": "2026-10-21",
+            "type": "feat",
+            "scope": "i18n",
+            "subject": "MIA répond, titre et rédige dans la langue choisie ; Assistants et Bases traduits",
+            "version": "1.5.1.23"
+        },
+        {
+            "date": "2026-10-20",
+            "type": "fix",
+            "scope": "microsoft",
+            "subject": "ne plus forcer l'écran de consentement des connecteurs",
+            "version": "1.5.1.22"
+        },
+        {
+            "date": "2026-10-20",
+            "type": "fix",
+            "scope": "microsoft",
+            "subject": "ne plus forcer l'écran de consentement des connecteurs",
+            "version": "1.5.1.21"
+        },
+        {
+            "date": "2026-10-19",
+            "type": "fix",
+            "scope": "chat",
+            "subject": "assistants et bases toujours accessibles sur téléphone",
+            "version": "1.5.1.20"
+        },
+        {
+            "date": "2026-10-18",
+            "type": "feat",
+            "scope": "workflows",
+            "subject": "boucles intelligentes — lignes d'un Excel, pièces jointes, slides, fichiers, sujets repérés par MIA",
+            "version": "1.5.1.19"
+        },
+        {
+            "date": "2026-10-18",
+            "type": "feat",
+            "scope": "journaux",
+            "subject": "surveiller et investiguer depuis la page Journaux",
+            "version": "1.5.1.18"
+        },
+        {
+            "date": "2026-10-18",
+            "type": "feat",
+            "scope": "budget",
+            "subject": "dépenses sur la période de votre choix",
+            "version": "1.5.1.17"
+        },
+        {
+            "date": "2026-10-18",
+            "type": "fix",
+            "scope": "profil",
+            "subject": "changer de photo par fichier ou par adresse, sans vider le champ",
+            "version": "1.5.1.16"
+        },
+        {
+            "date": "2026-10-18",
+            "type": "feat",
+            "scope": "menus",
+            "subject": "Réglages et Admin mènent droit à leurs pages, volet à 260 px partout",
+            "version": "1.5.1.15"
+        },
+        {
+            "date": "2026-10-18",
+            "type": "fix",
+            "scope": "chat",
+            "subject": "volet Connecteurs replié à chaque ouverture du menu « + »",
+            "version": "1.5.1.14"
+        },
+        {
+            "date": "2026-10-17",
+            "type": "feat",
+            "scope": "chat",
+            "subject": "menu « + » en une ligne par entrée, volet Connecteurs replié",
+            "version": "1.5.1.13"
+        },
+        {
+            "date": "2026-10-17",
+            "type": "feat",
+            "scope": "connecteurs",
+            "subject": "Microsoft Teams — conversations et canaux, publication approuvée",
+            "version": "1.5.1.12"
+        },
+        {
+            "date": "2026-10-17",
+            "type": "fix",
+            "scope": "credits",
+            "subject": "relevé du coût réel de chaque API",
+            "version": "1.5.1.11"
+        },
+        {
+            "date": "2026-10-17",
+            "type": "fix",
+            "scope": "credits",
+            "subject": "estimations réalistes et cohérentes partout",
+            "version": "1.5.1.10"
+        },
+        {
+            "date": "2026-10-17",
+            "type": "feat",
+            "scope": "chat",
+            "subject": "suite proposée après chaque réponse, reprise au Tab",
+            "version": "1.5.1.9"
+        },
+        {
+            "date": "2026-10-17",
+            "type": "feat",
+            "scope": "menus",
+            "subject": "une seule barre « Rechercher ou aller à… » (⌘K)",
+            "version": "1.5.1.8"
+        },
+        {
+            "date": "2026-10-17",
+            "type": "feat",
+            "scope": "menus",
+            "subject": "trois espaces et un Centre de réglages",
+            "version": "1.5.1.7"
+        },
+        {
+            "date": "2026-10-17",
+            "type": "feat",
+            "scope": "workflows",
+            "subject": "un seul historique des exécutions",
+            "version": "1.5.1.6"
+        },
+        {
+            "date": "2026-10-17",
+            "type": "feat",
+            "scope": "roles",
+            "subject": "colonne « Gérer », vue détaillée seule et compacte, aide en infobulles",
+            "version": "1.5.1.5"
+        },
+        {
+            "date": "2026-10-16",
+            "type": "feat",
+            "scope": "chat",
+            "subject": "le bandeau du haut est replié par défaut",
+            "version": "1.5.1.4"
+        },
+        {
+            "date": "2026-10-16",
+            "type": "feat",
+            "scope": "workflows",
+            "subject": "l'historique de chaque lancement, et son journal brique par brique",
+            "version": "1.5.1.3"
+        }
+    ]
+}

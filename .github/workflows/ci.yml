@@ -1,0 +1,59 @@
+name: CI
+
+# Contrôles sans secret de chaque push et pull request.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    uses: ./.github/workflows/tests.yml
+
+  image:
+    name: Build image
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - run: docker build --tag mia:ci .
+
+  shell:
+    name: ShellCheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - run: shellcheck --severity=warning kit/*.sh kit/lib/*.sh scripts/*.sh
+
+  garde-fou:
+    name: Garde-fou (IP publiques, fichiers de secrets)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - run: .github/scripts/garde-fou.sh
+
+  gitleaks:
+    name: Secrets (gitleaks)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+      # Image plutôt que gitleaks-action, qui exige une licence pour les
+      # organisations. Version fixée par empreinte.
+      - run: >-
+          docker run --rm -v "$PWD:/repo" -w /repo
+          zricethezav/gitleaks@sha256:0e99e8821643ea5b235718642b93bb32486af9c8162c8b8731f7cbdc951a7f46
+          detect --source /repo --config /repo/.gitleaks.toml --redact --verbose

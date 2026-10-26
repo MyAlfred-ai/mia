@@ -1,0 +1,129 @@
+name: ${COMPOSE_PROJECT_NAME:?COMPOSE_PROJECT_NAME est obligatoire}
+
+x-app-env: &app-env
+  APP_URL: ${APP_URL:?APP_URL est obligatoire}
+  APP_ENV: ${APP_ENV:-production}
+  APP_SECRET: ${APP_SECRET:?APP_SECRET est obligatoire}
+  ENCRYPTION_KEY: ${ENCRYPTION_KEY:?ENCRYPTION_KEY est obligatoire}
+  DB_HOST: ${DB_HOST:-db}
+  DB_PORT: ${DB_PORT:-3306}
+  DB_NAME: ${DB_NAME:?DB_NAME est obligatoire}
+  DB_USER: ${DB_USER:?DB_USER est obligatoire}
+  DB_PASS: ${DB_PASS:?DB_PASS est obligatoire}
+  QDRANT_URL: ${QDRANT_URL:-http://qdrant:6333}
+  TRUSTED_PROXY: ${TRUSTED_PROXY:-0}
+  GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+  GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+  GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI:-}
+  GOOGLE_CLIENT_ID_IOS: ${GOOGLE_CLIENT_ID_IOS:-}
+  LOCAL_PASSWORD_HASH: ${LOCAL_PASSWORD_HASH:-}
+
+services:
+  app:
+    image: ghcr.io/myalfred-ai/mia:${MIA_VERSION:?MIA_VERSION est obligatoire}
+    restart: unless-stopped
+    environment: *app-env
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "${APP_BIND:-0.0.0.0}:${APP_PORT:-8080}:80"
+    volumes:
+      - ./php-env.ini:/usr/local/etc/php/conf.d/zz-env.ini:ro
+      - ${MIA_DOWNLOADS_DIR:-./downloads}:/var/www/html/public/downloads:ro
+      - storage_uploads:/var/www/html/storage/uploads
+      - storage_logs:/var/www/html/storage/logs
+      - storage_cache:/var/www/html/storage/cache
+      - storage_ratelimit:/var/www/html/storage/ratelimit
+      - storage_profile_docs:/var/www/html/storage/profile_documents
+      - storage_kb_docs:/var/www/html/storage/knowledge_bases
+      - generated_media:/var/www/html/public/assets/img/generated
+      - generated_media_video:/var/www/html/public/assets/video/generated
+      - branding_logos:/var/www/html/public/assets/img/branding
+      - storage_branding:/var/www/html/storage/branding
+      - user_avatars:/var/www/html/public/assets/img/avatars
+      - profile_avatars:/var/www/html/public/assets/img/profils
+      - qdrant_data:/qdrant-data:ro
+    networks: [mia]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1/healthz"]
+      interval: 30s
+      timeout: 5s
+      start_period: 120s
+      retries: 3
+
+  worker:
+    image: ghcr.io/myalfred-ai/mia:${MIA_VERSION:?MIA_VERSION est obligatoire}
+    restart: unless-stopped
+    command: php /var/www/html/scripts/worker.php
+    stop_signal: SIGTERM
+    stop_grace_period: 90s
+    deploy:
+      replicas: ${MIA_WORKERS:-4}
+    environment: *app-env
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./php-env.ini:/usr/local/etc/php/conf.d/zz-env.ini:ro
+      - storage_uploads:/var/www/html/storage/uploads
+      - storage_logs:/var/www/html/storage/logs
+      - storage_cache:/var/www/html/storage/cache
+      - storage_ratelimit:/var/www/html/storage/ratelimit
+      - storage_profile_docs:/var/www/html/storage/profile_documents
+      - storage_kb_docs:/var/www/html/storage/knowledge_bases
+      - generated_media:/var/www/html/public/assets/img/generated
+      - generated_media_video:/var/www/html/public/assets/video/generated
+      - branding_logos:/var/www/html/public/assets/img/branding
+      - storage_branding:/var/www/html/storage/branding
+    networks: [mia]
+    healthcheck:
+      test: ["CMD", "php", "/var/www/html/scripts/worker-health.php"]
+      interval: 30s
+      timeout: 10s
+      start_period: 120s
+      retries: 3
+
+  db:
+    image: mysql:8.4
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: ${DB_NAME:?DB_NAME est obligatoire}
+      MYSQL_USER: ${DB_USER:?DB_USER est obligatoire}
+      MYSQL_PASSWORD: ${DB_PASS:?DB_PASS est obligatoire}
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASS:?DB_ROOT_PASS est obligatoire}
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h localhost -u root -p\"$$MYSQL_ROOT_PASSWORD\" --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks: [mia]
+
+  qdrant:
+    image: qdrant/qdrant:v1.15.1
+    restart: unless-stopped
+    volumes:
+      - qdrant_data:/qdrant/storage
+    networks: [mia]
+
+volumes:
+  mysql_data:
+  qdrant_data:
+  storage_kb_docs:
+  storage_uploads:
+  storage_logs:
+  storage_cache:
+  storage_ratelimit:
+  storage_profile_docs:
+  generated_media:
+  generated_media_video:
+  branding_logos:
+  storage_branding:
+  user_avatars:
+  profile_avatars:
+
+networks:
+  mia:
+    driver: bridge

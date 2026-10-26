@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" role="img" aria-label="Microsoft To Do">
+  <!-- Coche en deux bleus Microsoft, même parti pris que outlook.svg et
+       outlook-calendar.svg : une forme reconnaissable redessinée, pas l'asset
+       officiel. Branche courte foncée, branche longue claire. -->
+  <path d="M3.2 12.6l2.4-2.4 5.1 5.1-2.4 2.4z" fill="#0F6CBD"/>
+  <path d="M8.3 17.7l11.6-11.6 2.4 2.4-11.6 11.6a1.7 1.7 0 0 1-2.4 0z" fill="#2B88D8"/>
+  <path d="M8.3 17.7l2.4-2.4 2.4 2.4-2.4 2.4a1.7 1.7 0 0 1-2.4 0z" fill="#0364B8"/>
+</svg>

@@ -1,0 +1,58 @@
+# Publication derrière un Traefik DÉJÀ EN PLACE sur la machine.
+#
+# À NE PAS combiner avec ports.yml : Traefik joint le conteneur par le réseau
+# Docker, publier en plus le port 80 de l'hôte entrerait en conflit avec Traefik
+# lui-même et exposerait l'application hors TLS.
+#
+# Prérequis côté hôte : le réseau externe existe déjà et Traefik y est attaché.
+#   docker network ls | grep ubuntu_default
+# Toutes les variables TRAEFIK_* ont un défaut ; ne les renseignez que si votre
+# installation s'écarte de la convention (entrypoints web / web-secure,
+# resolver ACME « le »).
+#
+# Le réseau `myllm` passe en `internal: true` : les conteneurs ne peuvent plus
+# sortir par lui. `app` ET `worker` sont donc AUSSI sur le réseau externe —
+# sans quoi le worker ne résout plus api.openai.com et TOUS les jobs échouent
+# en « impossible de contacter … », alors que les tests d'administration
+# (lancés depuis app) restent au vert. Symptôme parfaitement trompeur.
+
+services:
+  app:
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=${TRAEFIK_NETWORK:-ubuntu_default}"
+      # HTTPS
+      - "traefik.http.routers.${TRAEFIK_ROUTER:-myllm}.rule=Host(`${DOMAIN:?DOMAIN est obligatoire en mode Traefik — nom d'hôte sans schéma, ex. mia.exemple.fr}`)"
+      - "traefik.http.routers.${TRAEFIK_ROUTER:-myllm}.entrypoints=${TRAEFIK_ENTRYPOINT_HTTPS:-web-secure}"
+      - "traefik.http.routers.${TRAEFIK_ROUTER:-myllm}.tls.certresolver=${TRAEFIK_CERTRESOLVER:-le}"
+      - "traefik.http.services.${TRAEFIK_ROUTER:-myllm}.loadbalancer.server.port=80"
+      # HTTP → HTTPS
+      - "traefik.http.routers.${TRAEFIK_ROUTER:-myllm}-http.rule=Host(`${DOMAIN}`)"
+      - "traefik.http.routers.${TRAEFIK_ROUTER:-myllm}-http.entrypoints=${TRAEFIK_ENTRYPOINT_HTTP:-web}"
+      - "traefik.http.routers.${TRAEFIK_ROUTER:-myllm}-http.middlewares=${TRAEFIK_ROUTER:-myllm}-redirect-https"
+      - "traefik.http.middlewares.${TRAEFIK_ROUTER:-myllm}-redirect-https.redirectscheme.scheme=https"
+    networks:
+      - myllm
+      - traefik
+
+  worker:
+    labels:
+      - "traefik.enable=false"
+    networks:
+      - myllm
+      - traefik
+
+  qdrant:
+    labels:
+      - "traefik.enable=false"
+
+# Note : l'étiquette équivalente pour `db` vit dans db.yml, pas ici — déclarer
+# un service absent du montage (base externe) créerait un service incomplet,
+# que compose refuse.
+
+networks:
+  myllm:
+    internal: true
+  traefik:
+    external: true
+    name: ${TRAEFIK_NETWORK:-ubuntu_default}

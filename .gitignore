@@ -1,0 +1,65 @@
+# Secrets et configuration locale : jamais dans le dépôt public.
+.env
+.env.*
+!.env.example
+*.keystore
+*.jks
+acme.json
+
+# Dépendances installées par le build (Composer). À la racine seulement :
+# public/assets/js/vendor/ contient des bibliothèques front versionnées.
+/vendor/
+node_modules/
+
+# Données d'exécution : seuls les .gitkeep sont suivis.
+storage/**
+!storage/**/
+!storage/**/.gitkeep
+!storage/.htaccess
+# Modèles PowerPoint et Word de l'entreprise (volume storage_branding),
+# nommé à part : un test vérifie qu'il n'est jamais versionné.
+storage/branding/
+
+# Fichiers déposés par les utilisateurs ou produits à l'exécution (volumes
+# Docker) : on garde le dossier, jamais le contenu.
+public/assets/img/generated/*
+!public/assets/img/generated/.gitkeep
+public/assets/img/branding/*
+!public/assets/img/branding/.gitkeep
+public/assets/img/avatars/*
+!public/assets/img/avatars/.gitkeep
+public/assets/img/profils/*
+!public/assets/img/profils/.gitkeep
+public/downloads/*
+!public/downloads/.gitkeep
+
+# Congenial (police du nom du produit) est sous licence commerciale : les
+# webfonts achetées se déposent à la main dans public/assets/fonts/ et ne
+# doivent jamais partir dans un dépôt. Lexend, elle, est en SIL OFL.
+public/assets/fonts/congenial-*
+
+# Kit d'installation : état et sauvegardes locales.
+kit/.etat/
+kit/sauvegardes/
+
+# Tests
+/phpunit.phar
+/.phpunit.cache/
+.phpunit.result.cache
+
+# Données MySQL si quelqu'un fait un bind-mount au lieu du volume nommé
+/mysql_data/
+*.sql.gz
+
+# Artefacts
+*.log
+*.pid
+
+# Outillage local.
+.claude/
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+*.swp
+*~

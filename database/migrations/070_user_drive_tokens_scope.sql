@@ -1,0 +1,27 @@
+-- Autorisations Google : la colonne était trop courte, et c'est ce qui rendait
+-- les connecteurs intermittents.
+--
+-- Chaque connecteur Google demande son consentement avec
+-- `include_granted_scopes=true` (autorisation incrémentale) : le jeton rendu
+-- porte donc l'UNION des autorisations déjà accordées au même client OAuth,
+-- tous connecteurs confondus. Avec Drive + Gmail + Agenda + Tâches reliés, la
+-- liste dépasse 550 caractères — auxquels Google ajoute encore `openid`,
+-- `userinfo.email` et `userinfo.profile`.
+--
+-- VARCHAR(500) la coupait donc AU MILIEU d'un scope. La comparaison des
+-- autorisations est exacte (elle doit l'être : `.../auth/drive.metadata` est un
+-- préfixe de `drive.metadata.readonly`), si bien que le scope tronqué ET tous
+-- ceux placés après la coupure étaient tenus pour non accordés. L'ordre des
+-- scopes n'étant pas garanti par Google, le même compte perdait le renommage,
+-- le déplacement ou l'écriture d'une connexion à l'autre, sans la moindre
+-- erreur : les outils n'étaient simplement pas exposés au modèle, qui
+-- répondait qu'il n'avait pas accès.
+--
+-- 2000 laisse la place à une bonne quarantaine de scopes. La troncature reste
+-- appliquée en PHP par sécurité, mais à la FRONTIÈRE d'un scope désormais
+-- (UserDriveToken::fitScope) : perdre le dernier vaut mieux qu'en inventer un.
+--
+-- Aucune reconnexion n'est nécessaire : les scopes réellement accordés sont
+-- redits par Google à chaque rafraîchissement de jeton et réenregistrés à ce
+-- moment-là (ConnectorApiService::syncGrantedScope).
+ALTER TABLE user_drive_tokens MODIFY COLUMN scope VARCHAR(2000) NOT NULL DEFAULT '';

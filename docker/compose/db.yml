@@ -1,0 +1,43 @@
+# Base MySQL embarquée.
+#
+# Dans un fichier séparé pour qu'on puisse s'en passer : une installation qui
+# branche une base managée (RDS, Cloud SQL, base mutualisée) retire simplement
+# ce fichier de COMPOSE_FILE et renseigne DB_HOST / DB_PORT dans le .env.
+# `depends_on` vit ici aussi — il désignerait sinon un service inexistant, ce
+# que compose refuse.
+
+services:
+  app:
+    depends_on:
+      db:
+        condition: service_healthy
+
+  worker:
+    depends_on:
+      db:
+        condition: service_healthy
+
+  db:
+    image: mysql:8.4
+    restart: unless-stopped
+    # Sans effet hors mode Traefik. Nécessaire avec : le fournisseur Docker de
+    # Traefik expose par défaut TOUT conteneur qu'il voit.
+    labels:
+      - "traefik.enable=false"
+    environment:
+      MYSQL_DATABASE: ${DB_NAME:-myllm}
+      MYSQL_USER: ${DB_USER:-myllm}
+      MYSQL_PASSWORD: ${DB_PASS:?DB_PASS est obligatoire}
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASS:?DB_ROOT_PASS est obligatoire — mot de passe root de MySQL}
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${DB_ROOT_PASS}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - myllm
+
+volumes:
+  mysql_data:

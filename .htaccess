@@ -1,0 +1,17 @@
+# Protection racine : si le document root pointe ici, rediriger vers public/
+Options -Indexes
+
+# Bloquer l'accès direct aux fichiers sensibles
+<FilesMatch "\.(env|sql|sqlite|log|json|md|sh|lock)$">
+    Order deny,allow
+    Deny from all
+</FilesMatch>
+
+# Si mod_rewrite disponible, tout passer via public/
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    # Accès direct à /public/* : rediriger en supprimant le préfixe /public
+    RewriteRule ^public/?(.*)$ /$1 [R=301,NE,L]
+    # Réécriture interne : servir depuis public/ sans changer l'URL
+    RewriteRule ^(.*)$ public/$1 [L]
+</IfModule>

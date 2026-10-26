@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<phpunit xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:noNamespaceSchemaLocation="https://schema.phpunit.de/11.0/phpunit.xsd"
+         bootstrap="tests/bootstrap.php"
+         colors="true"
+         cacheDirectory=".phpunit.cache"
+         failOnRisky="true"
+         beStrictAboutOutputDuringTests="false">
+    <php>
+        <!-- La suite complète (unitaires + fonctionnels dans un même processus,
+             comme en CI) dépasse les 128 Mo du `memory_limit` par défaut de PHP :
+             le hook pre-push mourait en « Allowed memory size exhausted » au
+             milieu des tests, sans un échec à lire. La CI tourne déjà sans
+             limite (setup-php : memory_limit=-1). -->
+        <ini name="memory_limit" value="512M"/>
+    </php>
+    <testsuites>
+        <testsuite name="unit">
+            <directory>tests/Unit</directory>
+        </testsuite>
+        <testsuite name="functional">
+            <directory>tests/Functional</directory>
+        </testsuite>
+    </testsuites>
+    <!-- Tests qui vérifient le guide interne des développeurs (CLAUDE.md),
+         absent du dépôt public. -->
+    <groups>
+        <exclude>
+            <group>doc-interne</group>
+        </exclude>
+    </groups>
+    <source>
+        <include>
+            <directory suffix=".php">src</directory>
+        </include>
+    </source>
+</phpunit>

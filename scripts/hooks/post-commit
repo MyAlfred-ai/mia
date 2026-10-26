@@ -1,0 +1,93 @@
+#!/usr/bin/env bash
+# Maintient VERSION + public/changelog.json exacts à chaque commit.
+#
+# VERSION = <VERSION_BASE>.<count> où <count> est le nombre de commits
+# "améliorations" (feat / fix / refactor / perf / docs) dans l'ancêtre
+# de HEAD (--no-merges) DEPUIS le commit qui a posé la valeur courante
+# de VERSION_BASE.
+# - Le compteur repart à 0 à chaque bump de VERSION_BASE : bumper à
+#   1.2.1 donne 1.2.1.0, puis 1.2.1.1, etc.
+# - Comparable d'un coup d'œil À BASE ÉGALE : 1.2.1.42 < 1.2.1.47 = 5
+#   améliorations d'écart (utile pour comparer staging vs prod).
+# - Cross-branch : deux branches partageant les mêmes commits ont le
+#   même VERSION.
+#
+# public/changelog.json porte DEUX listes :
+# - `nouveautes` : les 20 entrées RÉDIGÉES de docs/NOUVEAUTES.md, datées
+#   depuis l'historique git. C'est ce que lit tout le monde.
+# - `commits` : les 30 derniers sujets de commit, détail technique
+#   réservé aux comptes de l'éditeur.
+#
+# Tout le calcul vit dans scripts/build_changelog.php (une seule
+# implémentation, testable par PHPUnit). Ce hook ne fait que l'appeler et
+# amender le commit si la sortie a changé.
+#
+# Le hook tourne APRÈS le commit (donc HEAD inclut le commit qui vient
+# d'être fait) et amende le commit pour y intégrer VERSION + changelog
+# mis à jour. Garde anti-récursion via $MIA_VERSION_HOOK_RUNNING.
+
+set -euo pipefail
+
+# Anti-récursion : l'amend déclenche un autre post-commit ; on l'ignore.
+if [ -n "${MIA_VERSION_HOOK_RUNNING:-}" ]; then
+    exit 0
+fi
+
+ROOT=$(git rev-parse --show-toplevel)
+cd "$ROOT"
+
+VERSION_FILE="VERSION"
+BASE_FILE="VERSION_BASE"
+CHANGELOG_FILE="public/changelog.json"
+
+CHANGED=0
+
+if command -v php >/dev/null 2>&1; then
+    # Chemin nominal : VERSION + nouveautés + sujets de commit.
+    OUT=$(php scripts/build_changelog.php || true)
+    case "$OUT" in
+        *CHANGED=1*) CHANGED=1 ;;
+    esac
+else
+    # Repli sans PHP (poste sans CLI) : VERSION seule, best-effort. Le
+    # changelog n'est pas régénéré — mieux vaut un fichier légèrement en
+    # retard qu'un fichier faux.
+    BASE="1.0"
+    [ -f "$BASE_FILE" ] && BASE=$(tr -d '[:space:]' < "$BASE_FILE")
+
+    # Dernier commit ayant posé la base courante : borne basse du comptage.
+    BASE_SINCE=""
+    while read -r sha; do
+        [ -n "$sha" ] || continue
+        val=$(git show "$sha:$BASE_FILE" 2>/dev/null | tr -d '[:space:]' || true)
+        [ -n "$val" ] || continue
+        if [ "$val" = "$BASE" ]; then BASE_SINCE="$sha"; else break; fi
+    done <<< "$(git log --pretty='%H' HEAD -- "$BASE_FILE" 2>/dev/null || true)"
+
+    RANGE="HEAD"
+    [ -n "$BASE_SINCE" ] && RANGE="$BASE_SINCE..HEAD"
+    TOTAL=$(git log --no-merges --pretty='%s' "$RANGE" 2>/dev/null \
+              | grep -cE '^(feat|fix|refactor|perf|docs)' || echo 0)
+
+    NEW_VERSION="$BASE.$TOTAL"
+    CUR_VERSION=""
+    [ -f "$VERSION_FILE" ] && CUR_VERSION=$(tr -d '[:space:]' < "$VERSION_FILE")
+    if [ "$CUR_VERSION" != "$NEW_VERSION" ]; then
+        printf '%s\n' "$NEW_VERSION" > "$VERSION_FILE"
+        CHANGED=1
+    fi
+fi
+
+if [ "$CHANGED" -eq 0 ]; then
+    exit 0
+fi
+
+git add "$VERSION_FILE"
+[ -f "$CHANGELOG_FILE" ] && git add "$CHANGELOG_FILE"
+
+# Amend sans déclencher de hook (pre-commit + commit-msg sautés via
+# --no-verify) ; le post-commit récursif est bloqué par la garde au
+# début de ce script via $MIA_VERSION_HOOK_RUNNING.
+MIA_VERSION_HOOK_RUNNING=1 git commit --amend --no-edit --no-verify >/dev/null
+
+exit 0

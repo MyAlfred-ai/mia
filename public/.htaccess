@@ -1,0 +1,64 @@
+Options -Indexes
+
+# ---- Headers de sécurité ----
+<IfModule mod_headers.c>
+    Header always set X-Frame-Options "DENY"
+    Header always set X-Content-Type-Options "nosniff"
+    Header always set X-XSS-Protection "1; mode=block"
+    Header always set Referrer-Policy "strict-origin-when-cross-origin"
+    Header always set Permissions-Policy "geolocation=(), microphone=(self), camera=()"
+    # HSTS : activer uniquement si HTTPS est configuré
+    # Header always set Strict-Transport-Security "max-age=31536000; includeSubDomains"
+</IfModule>
+
+# Bloquer l'accès aux fichiers sensibles dans public/
+<FilesMatch "\.(env|sql|log|sqlite)$">
+    Order deny,allow
+    Deny from all
+</FilesMatch>
+
+# Réautorise explicitement le changelog public (le .htaccess racine
+# refuse tous les .json au niveau /var/www/html — il faut surcharger ici).
+<Files "changelog.json">
+    Order allow,deny
+    Allow from all
+    Require all granted
+</Files>
+
+# Polices auto-hébergées : type MIME explicite (une base Apache trop
+# ancienne servirait du `application/octet-stream`) et cache d'un an.
+# Les CSS/JS portent un `?v=filemtime` pour être invalidés ; une police
+# n'en a pas besoin — son NOM change quand son contenu change. Sans ce
+# cache, chaque navigation revalide le fichier, et le round-trip suffit
+# à faire clignoter le texte (`font-display: swap`).
+AddType font/woff2 .woff2
+<IfModule mod_headers.c>
+    <FilesMatch "\.woff2$">
+        Header set Cache-Control "public, max-age=31536000, immutable"
+    </FilesMatch>
+</IfModule>
+
+# APK de l'app mobile (page /app → /downloads/mia.apk) : type MIME explicite
+# + téléchargement forcé (certains navigateurs Android l'exigent pour
+# proposer l'installation).
+AddType application/vnd.android.package-archive .apk
+<IfModule mod_headers.c>
+    <FilesMatch "\.apk$">
+        Header set Content-Disposition attachment
+    </FilesMatch>
+</IfModule>
+
+RewriteEngine On
+
+# Médias générés (images/vidéos) : servis sous contrôle d'accès par
+# MediaController, JAMAIS en statique. Cette règle passe AVANT la condition
+# `!-f` — sans elle, Apache livrerait le fichier existant directement, sans
+# aucune vérification de session ni de signature (la fuite corrigée ici).
+RewriteRule ^assets/(img|video)/generated/ index.php [QSA,L]
+
+# Ne pas réécrire les autres fichiers/dossiers existants
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+
+# Tout rediriger vers index.php
+RewriteRule ^(.*)$ index.php [QSA,L]

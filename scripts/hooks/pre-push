@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# Lance la suite de tests PHPUnit AVANT chaque push. Bloque le push si rouge.
+#
+# - Récupère phpunit.phar automatiquement (gitignoré) s'il est absent.
+# - Si PHP ou le réseau manquent, on saute proprement : la CI GitHub Actions
+#   reste le garde-fou autoritaire (elle relance tout, avec MySQL).
+# - Les tests fonctionnels qui ont besoin de MySQL se SKIPPENT seuls quand la
+#   base de test n'est pas joignable en local (cf. DatabaseTestCase) : un dev
+#   sans base n'est donc jamais bloqué par eux.
+#
+# Forcer un push sans tests : git push --no-verify
+
+set -euo pipefail
+
+ROOT=$(git rev-parse --show-toplevel)
+cd "$ROOT"
+
+if ! command -v php >/dev/null 2>&1; then
+    echo "[pre-push] PHP absent → tests sautés (la CI les lancera)."
+    exit 0
+fi
+
+PHPUNIT="phpunit.phar"
+if [ ! -f "$PHPUNIT" ]; then
+    echo "[pre-push] Récupération de phpunit.phar…"
+    if ! curl -fsSL https://phar.phpunit.de/phpunit-11.phar -o "$PHPUNIT" 2>/dev/null; then
+        echo "[pre-push] phpunit.phar introuvable (hors-ligne ?) → tests sautés. La CI reste le garde-fou."
+        exit 0
+    fi
+fi
+
+echo "[pre-push] PHPUnit…"
+if ! php "$PHPUNIT" --colors=auto; then
+    echo ""
+    echo "[pre-push] ❌ Tests en échec — push bloqué."
+    echo "           Corrige, ou force avec : git push --no-verify"
+    exit 1
+fi
+
+echo "[pre-push] ✅ Tests OK — push autorisé."
