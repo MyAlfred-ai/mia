@@ -27,6 +27,12 @@ RUN apt-get update && apt-get install -y \
         intl \
         pcntl \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
+# ImageMagick (ligne de commande) : conversion en JPEG des images que les
+# modèles ne lisent pas — HEIC/HEIF des iPhone et des Mac, AVIF, TIFF des
+# scanners (ImageConvert). Couche À PART, après les extensions : l'ajouter
+# à la liste ci-dessus ferait recompiler toutes les extensions.
+RUN apt-get update && apt-get install -y --no-install-recommends imagemagick \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
 # OPcache n'est plus à installer : depuis PHP 8.5 il est compilé dans PHP et
 # actif d'office (`docker-php-ext-install opcache` échoue, faute de module).
 # pcntl : arrêt PROPRE du worker de jobs. Sans lui, un `docker compose up`
@@ -62,6 +68,7 @@ RUN mkdir -p \
         storage/logs \
         storage/cache \
         storage/ratelimit \
+        storage/sessions \
         storage/profile_documents \
         storage/knowledge_bases \
         storage/branding \
@@ -74,9 +81,12 @@ RUN mkdir -p \
     && chmod -R 775 storage public/assets/img public/assets/video
 
 # PHP config production
+# upload_max_filesize = la plus grande limite de FileExtractor::UPLOAD_LIMITS
+# (50 Mo, PowerPoint) ; post_max_size au-dessus, pour l'enveloppe de l'envoi
+# et les quelques fichiers d'un départ de workflow.
 RUN cp /usr/local/etc/php/php.ini-production /usr/local/etc/php/php.ini \
     && echo "upload_max_filesize=50M" >> /usr/local/etc/php/php.ini \
-    && echo "post_max_size=50M" >> /usr/local/etc/php/php.ini \
+    && echo "post_max_size=60M" >> /usr/local/etc/php/php.ini \
     && echo "memory_limit=256M" >> /usr/local/etc/php/php.ini \
     && echo "max_execution_time=120" >> /usr/local/etc/php/php.ini \
     && echo "max_file_uploads=20" >> /usr/local/etc/php/php.ini \

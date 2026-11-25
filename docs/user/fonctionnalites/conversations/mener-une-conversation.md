@@ -64,6 +64,13 @@ voir [Régler l'affichage](../personnalisation/regler-l-affichage.md).
 
 ## Suivre ce que fait MIA
 
+Votre message s'affiche à l'instant de l'envoi. Tant que MIA réfléchit ou cherche, trois points animés, aux
+couleurs de votre organisation, se rejoignent à côté de ce qu'elle fait : « En réflexion… », « Recherche dans vos emails
+Gmail… ». La réponse s'écrit ensuite lettre à lettre ; si elle marque une pause, le curseur reste au bout du
+texte et pulse doucement. **Copier**, **Regénérer** et les exports apparaissent une fois la réponse terminée.
+
+Si votre appareil demande de réduire les animations, le texte apparaît par paquets et les trois points restent immobiles.
+
 Au-dessus de chaque réponse, une pile grise liste ce que MIA a consulté avant de répondre :
 « Recherche sur Internet », « Lecture d'un document Google Drive »… Les lignes s'empilent en direct et
 restent visibles dans l'historique. Une action en échec s'affiche en ambre.
@@ -75,6 +82,8 @@ Cette trace est informative : elle n'est jamais reprise dans **Copier** ni dans 
 Quand la suite dépend d'une décision de votre part — une piste parmi plusieurs, un ton, un format, la
 prochaine étape —, MIA peut terminer sa réponse par des **boutons** : la question, puis une option par
 bouton. Elle ne le fait que lorsque c'est utile, jamais pour une question ouverte.
+
+![Une réponse de MIA qui se termine par la question « Quel ton pour l'invitation ? » et trois boutons numérotés : Formel, Cordial et Deux versions, chacun avec une courte précision. Dessous, le lien Autre réponse.](../../images/choix-en-boutons.png)
 
 - **Un clic envoie l'option** comme votre réponse, comme si vous l'aviez tapée. Le texte en cours de
   rédaction et les pièces jointes en attente restent dans la zone de saisie.
@@ -99,26 +108,34 @@ Un clic l'affiche pour le reste de la page. Les images créées par MIA s'affich
 
 ## Reprendre la main
 
-- **Arrêter la génération** remplace le bouton d'envoi pendant la réponse. Un clic l'interrompt
-  réellement, même après un rechargement de page.
+- **Arrêter la génération** remplace le bouton d'envoi pendant la réponse. Un clic l'arrête
+  sur-le-champ : le texte cesse de s'écrire, la réponse est marquée « Réponse interrompue » et le
+  bouton d'envoi revient. C'est cette réponse, telle que vous l'avez vue, qui reste dans la
+  conversation. Pour une image ou une page web, le bouton affiche « Arrêt en cours… » le temps que
+  la génération se termine — un appel déjà parti chez le fournisseur va parfois à son terme.
 - **Vous pouvez partir.** Une génération lancée continue sur le serveur : changez de conversation,
   rechargez la page, fermez l'onglet — rien n'est perdu. Le résultat vous attend dans sa conversation.
 - Un bandeau « *N* génération(s) en cours » apparaît sous le bouton **Rechercher ou aller à…**, avec **Voir** et
   **Arrêter** pour chaque génération. Il reflète aussi ce que vous avez lancé depuis un autre appareil.
 - **🔔 M'avertir quand c'est terminé** demande l'autorisation d'afficher une notification système.
 
-## Demander à MIA de se souvenir
+## Demander à MIA de se souvenir — ou d'oublier
 
 Dites-le en conversation : *« Souviens-toi que je préfère les réponses courtes »* — ou *« retiens »*,
-*« mémorise »*, *« n'oublie pas que »*. MIA enregistre
-l'information dans votre mémoire personnelle et la retrouve dans toutes vos conversations, quel que
-soit l'assistant. Une pastille sous la réponse confirme ce qui vient d'être retenu.
+*« mémorise »*, *« remember that »*. MIA range l'information dans votre **Mémoire** et la retrouve
+dans toutes vos conversations, quel que soit l'assistant. Pour corriger : *« corrige ta mémoire :
+… »* ; pour faire oublier : *« oublie que… »*. Une pastille sous la réponse dit ce qui a changé ;
+après un retrait, **Annuler** le remet.
 
-MIA n'enregistre **que** ce que vous lui demandez explicitement de retenir, et ne peut pas supprimer
-un souvenir elle-même. Quand elle utilise déjà ses outils (connecteurs, outils d'un assistant), elle
-peut aussi retenir ce que vous formulez autrement, ou votre « oui » quand elle propose de retenir
-quelque chose ; elle refuse un mot de passe ou un numéro de carte. Voir
-[Personnaliser les réponses](../personnalisation/personnaliser-les-reponses.md).
+MIA apprend aussi d'elle-même, quelques minutes après la conversation, ce que vous y dites de vous
+(votre métier, la forme de réponse que vous préférez, vos outils) ; une carte **MIA apprend à vous
+connaître** vous prévient avant, avec le choix de refuser. Ce qu'elle déduit — ou note pendant la
+réponse avec ses outils — attend votre confirmation avant de servir. Elle refuse un mot de passe ou un
+numéro de carte. Voir [Gérer sa mémoire](../personnalisation/gerer-sa-memoire.md).
+
+De temps en temps, sous une réponse terminée, une carte **Question de MIA** vous demande ce que vous
+préférez (la forme des réponses, votre façon de travailler, vos outils). Un clic répond ; **Passer**
+la retire. Jamais deux dans une même conversation.
 
 ## Retrouver une ancienne conversation
 

@@ -377,6 +377,7 @@ final class WorkflowCover
                 'email' => t('par email'),
                 'drive' => t('dans Drive'),
                 'slack' => t('dans Slack'),
+                'table' => t('dans une table'),
                 default => t('dans une base de connaissances'),
             };
         }
@@ -386,7 +387,7 @@ final class WorkflowCover
     }
 
     /** Briques mises en avant sur la vignette d'un modèle, dans cet ordre. */
-    public const FEATURE_ORDER = ['route', 'condition', 'loop', 'create', 'action', 'gate', 'wait', 'notify', 'stop'];
+    public const FEATURE_ORDER = ['route', 'condition', 'loop', 'call', 'create', 'action', 'gate', 'wait', 'notify', 'stop'];
 
     /**
      * Ce que le workflow fait voir de plus qu'une suite d'étapes : les types

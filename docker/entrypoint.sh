@@ -15,6 +15,11 @@ for d in uploads logs cache ratelimit profile_documents knowledge_bases branding
     chown www-data:www-data "/var/www/html/storage/$d"
     chmod 775 "/var/www/html/storage/$d"
 done
+# Sessions de connexion (volume storage_sessions) : réservées à www-data —
+# un fichier de session vaut une connexion, personne d'autre n'a à le lire.
+mkdir -p /var/www/html/storage/sessions
+chown www-data:www-data /var/www/html/storage/sessions
+chmod 770 /var/www/html/storage/sessions
 
 # Attente BORNÉE. Une boucle infinie laissait le conteneur « Up » sans jamais
 # servir une page : `docker compose ps` au vert, l'application injoignable, et
@@ -73,7 +78,8 @@ mkdir -p /var/www/html/storage/logs 2>/dev/null || true
         storage/uploads \
         storage/profile_documents \
         storage/knowledge_bases \
-        storage/branding; do
+        storage/branding \
+        storage/sessions; do
         p="/var/www/html/$d"
         if grep -q " $p " /proc/mounts 2>/dev/null; then
             mnt="volume OK"

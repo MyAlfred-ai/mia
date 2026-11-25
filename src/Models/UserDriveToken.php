@@ -96,7 +96,14 @@ class UserDriveToken
         return $row !== null && (string)$row['status'] === 'ok';
     }
 
-    /** Enregistre (ou remplace) la connexion après le callback OAuth. */
+    /**
+     * Enregistre (ou remplace) la connexion après le callback OAuth.
+     *
+     * Pose aussi `chat_enable_pending` (migration 096) : une connexion — ou
+     * une reconnexion — demande que le connecteur s'allume dans le menu « + »
+     * du chat au prochain affichage (cf. takeChatEnablePending). Le
+     * rafraîchissement d'un jeton ne passe pas par ici et ne le pose donc pas.
+     */
     public static function saveConnection(
         int $userId,
         string $refreshToken,
@@ -109,15 +116,16 @@ class UserDriveToken
         Database::getInstance()->prepare(
             'INSERT INTO user_drive_tokens
                 (user_id, provider, google_email, refresh_token_enc, access_token_enc,
-                 access_token_expires_at, scope, status)
-             VALUES (?,?,?,?,?,?,?,\'ok\')
+                 access_token_expires_at, scope, status, chat_enable_pending)
+             VALUES (?,?,?,?,?,?,?,\'ok\',1)
              ON DUPLICATE KEY UPDATE
                 google_email = VALUES(google_email),
                 refresh_token_enc = VALUES(refresh_token_enc),
                 access_token_enc = VALUES(access_token_enc),
                 access_token_expires_at = VALUES(access_token_expires_at),
                 scope = VALUES(scope),
-                status = \'ok\''
+                status = \'ok\',
+                chat_enable_pending = 1'
         )->execute([
             $userId,
             $provider,
@@ -223,6 +231,34 @@ class UserDriveToken
         Database::getInstance()->prepare(
             'DELETE FROM user_drive_tokens WHERE user_id = ? AND provider = ?'
         )->execute([$userId, $provider]);
+    }
+
+    /**
+     * Providers RELIÉS (ou reliés à nouveau) depuis le dernier affichage du
+     * chat : la connexion a posé `chat_enable_pending`, cette lecture le rend
+     * puis l'efface — UNE seule fois, quel que soit l'appareil qui affiche le
+     * chat ensuite (la connexion de l'application mobile se fait dans le
+     * navigateur système, sans session : un drapeau de session ne la verrait
+     * pas). Une connexion révoquée entre-temps n'est pas rendue, mais son
+     * drapeau tombe avec les autres : ce moment est passé.
+     *
+     * @return list<string>
+     */
+    public static function takeChatEnablePending(int $userId): array
+    {
+        $db   = Database::getInstance();
+        $stmt = $db->prepare(
+            'SELECT provider FROM user_drive_tokens
+             WHERE user_id = ? AND chat_enable_pending = 1 AND status = \'ok\'
+             ORDER BY provider'
+        );
+        $stmt->execute([$userId]);
+        $providers = array_map('strval', $stmt->fetchAll(\PDO::FETCH_COLUMN));
+        $db->prepare(
+            'UPDATE user_drive_tokens SET chat_enable_pending = 0
+             WHERE user_id = ? AND chat_enable_pending = 1'
+        )->execute([$userId]);
+        return $providers;
     }
 
     /**

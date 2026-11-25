@@ -171,13 +171,29 @@ final class ConnectorReconnectBadgeTest extends TestCase
             $this->assertStringContainsString('if (!isset($connectorsToReconnect))', $src, "$partial recalculerait la liste.");
             $this->assertStringContainsString('ConnectorRegistry::reconnectNeeded(', $src);
             $this->assertStringContainsString('ConnectorRegistry::reconnectSummary($connectorsToReconnect)', $src);
-            $this->assertStringContainsString('<span class="user-avatar-wrap">', $src);
-            $this->assertStringContainsString('<span class="reconnect-dot" aria-hidden="true"></span>', $src);
+            // Carte du compte : l'avatar porte aussi son infobulle (nom, crédits).
+            $this->assertMatchesRegularExpression('/<span class="user-avatar-wrap"( title="[^"]*")?>/', $src);
+            // La pastille porte son texte en info-bulle (nav-signals.js).
+            $this->assertStringContainsString('ConnectorRegistry::reconnectDot($connectorsToReconnect)', $src);
         }
 
         $nav = self::lire('templates/partials/admin-nav.php');
         $this->assertStringContainsString('ConnectorRegistry::reconnectNeeded(', $nav);
-        $this->assertStringContainsString('<span class="reconnect-dot" aria-hidden="true"></span>', $nav);
+        $this->assertStringContainsString('ConnectorRegistry::reconnectDot($connectorsToReconnect)', $nav);
+
+        // Une forme, son texte en bulle, vide sans connexion à rétablir.
+        $this->assertSame('', ConnectorRegistry::reconnectDot([]));
+        $dot = ConnectorRegistry::reconnectDot(['gmail']);
+        $this->assertStringContainsString('class="reconnect-dot"', $dot);
+        $this->assertStringContainsString('data-tip="Connexion à reconnecter : Gmail"', $dot);
+        $this->assertStringContainsString('aria-hidden="true"', $dot);
+        // Jusqu'à la carte du connecteur, sur Réglages → Comptes connectés.
+        $this->assertSame('', ConnectorRegistry::reconnectDotFor('drive', ['gmail']));
+        $this->assertStringContainsString('data-tip=', ConnectorRegistry::reconnectDotFor('gmail', ['gmail']));
+        $page = self::lire('templates/settings/connections.php');
+        foreach (['drive', 'gmail', 'calendar', 'tasks', 'outlook', 'mscalendar', 'mstodo', 'teams', 'slack', 'onedrive'] as $cle) {
+            $this->assertStringContainsString("ConnectorRegistry::reconnectDotFor('$cle', \$connectorsToReconnect ?? [])", $page, "Carte sans pastille : $cle");
+        }
         $this->assertLessThan(
             (int)strpos($nav, "partials/header-avatar-btn.php'"),
             (int)strpos($nav, 'ConnectorRegistry::reconnectNeeded('),
@@ -243,8 +259,9 @@ final class ConnectorReconnectBadgeTest extends TestCase
             "if (reason === 'reconnect') window.location.href = '/settings/connections#connector-' + c.name;",
             $js
         );
-        // Le point ambre du « + » s'allume aussi : c'est dans ce menu que la ligne mène à la reconnexion.
-        $this->assertStringContainsString('&& reconnectRows.length === 0', $js);
+        // Le point ambre du « + » s'allume aussi : c'est dans ce menu que la ligne mène à la
+        // reconnexion — et il ne dit plus que cela (Internet coupé se lit dans la puce des sources).
+        $this->assertStringContainsString('optionsDot.hidden = reconnectRows.length === 0;', $js);
         $this->assertStringContainsString("t('{service} à reconnecter', { service: row.dataset.service", $js);
 
         $client = (array)(require ROOT . '/lang/en.client.php');

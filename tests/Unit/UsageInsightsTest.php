@@ -178,4 +178,29 @@ final class UsageInsightsTest extends TestCase
             $this->assertStringContainsString($attendu, $ov);
         }
     }
+
+    /**
+     * Une case trop petite pour porter son libellé est nommée sous la carte :
+     * Claude dans Office à 0,2 % du total de l'organisation n'était qu'un carré
+     * de couleur, lisible au seul survol.
+     */
+    public function testLesPetitesCasesSontNommeesSousLaCarte(): void
+    {
+        $items = [['label' => 'Conversations', 'value' => 260000.0], ['label' => 'Bases', 'value' => 51000.0],
+                  ['label' => 'Créations', 'value' => 46000.0], ['label' => 'Recherche', 'value' => 6000.0],
+                  ['label' => 'Assistance', 'value' => 4500.0], ['label' => 'Voix', 'value' => 2600.0],
+                  ['label' => 'Claude dans Office', 'value' => 625.0]];
+        $tiny = array_column(array_filter(UsageInsights::treemap($items), static fn(array $t): bool => $t['tiny']), 'label');
+        $this->assertContains('Claude dans Office', $tiny, 'Cas réel de la recette : la case est trop petite pour son libellé');
+
+        $ov = self::lire('templates/admin/usage-overview.php');
+        $this->assertStringContainsString("static fn(array \$t): bool => !empty(\$t['tiny'])", $ov);
+        $this->assertStringContainsString('class="usage-tiny-legend"', $ov);
+        $this->assertStringContainsString("te('Plus petites parts :')", $ov);
+        $css = self::lire('public/assets/css/main.css');
+        $this->assertStringContainsString('.usage-tiny-legend {', $css);
+        // Au téléphone, la liste remplace la carte et nomme déjà tout : pas de doublon.
+        $mobile = substr($css, (int)strpos($css, '.usage-treemap { display: none; }'), 200);
+        $this->assertStringContainsString('.usage-tiny-legend { display: none; }', $mobile);
+    }
 }

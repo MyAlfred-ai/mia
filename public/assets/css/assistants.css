@@ -1,0 +1,358 @@
+/*
+ * Espaces → Assistants — piste C : la LISTE (recherche d'abord), même
+ * grammaire que la liste des bases de connaissances ; la PAGE d'un assistant
+ * et sa FICHE (création, modification) reprennent celle de la page et de la
+ * fiche d'une base (kb-pages.css, chargée avant), en violet (.kbx.is-asst).
+ * Chargée par templates/admin/profiles/list.php, show.php et edit.php, après main.css : jetons du
+ * thème seulement (--text, --text-muted, --border, --bg, --bg-surface,
+ * --accent), redéfinis pour le thème clair par main.css. Violet = la couleur
+ * de l'espace Assistants (tuile du volet, .space-asst).
+ */
+
+.asx, .asx-modal, .kbx.is-asst {
+    --asx-violet:      #a78bfa;
+    --asx-violet-soft: color-mix(in srgb, #8b5cf6 13%, transparent);
+    --asx-violet-edge: color-mix(in srgb, #8b5cf6 42%, transparent);
+    --asx-acc-soft:    color-mix(in srgb, var(--accent) 12%, transparent);
+    --asx-acc-edge:    color-mix(in srgb, var(--accent) 40%, transparent);
+    --asx-line2:       color-mix(in srgb, var(--border) 72%, transparent);
+    --asx-hover:       color-mix(in srgb, var(--text) 6%, transparent);
+    --asx-ok:          #22c55e;
+}
+.asx {
+    max-width: 940px;
+    margin: 0 auto;
+    padding: 24px 0 48px;
+    color: var(--text);
+}
+html[data-theme="light"] .asx, html[data-theme="light"] .asx-modal, html[data-theme="light"] .kbx.is-asst {
+    --asx-violet:      #7c3aed;
+    --asx-violet-soft: #f1edfd;
+    --asx-violet-edge: #d3c6f6;
+    --asx-ok:          #16a34a;
+}
+.asx [hidden], .asx-modal[hidden] { display: none !important; }
+
+/* ---- En-tête : la recherche ---- */
+.asx-hero { text-align: center; }
+.asx-kicker { font-size: 13px; color: var(--text-muted); }
+.asx-hero h1 { margin: 8px 0 0; font-size: 30px; font-weight: 500; letter-spacing: -.5px; }
+.asx-search { margin: 26px auto 0; display: flex; align-items: center; gap: 14px; height: 60px; padding: 0 18px 0 22px; border: 1px solid var(--border); border-radius: 18px; background: var(--bg-surface); color: var(--text-muted); box-shadow: 0 10px 30px rgba(0, 0, 0, .06); }
+.asx-search:focus-within { border-color: var(--asx-violet); box-shadow: 0 0 0 4px var(--asx-violet-soft); }
+.asx-search svg { width: 22px; height: 22px; flex: none; }
+.asx-search input { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; font: inherit; font-size: 17px; color: var(--text); }
+.asx-search input::placeholder { color: var(--text-muted); }
+.asx-search kbd { font: inherit; font-size: 12px; color: var(--text-muted); border: 1px solid var(--border); border-radius: 6px; padding: 2px 8px; }
+.asx-scope { margin-top: 14px; display: flex; justify-content: center; align-items: center; gap: 6px; flex-wrap: wrap; }
+.asx-sc { display: inline-flex; align-items: center; gap: 6px; height: 34px; padding: 0 14px; border: 1px solid transparent; border-radius: 999px; background: transparent; font: inherit; font-size: 13px; color: var(--text-muted); cursor: pointer; }
+.asx-sc:hover { color: var(--text); }
+.asx-sc.is-on { border-color: var(--border); color: var(--text); background: var(--bg-surface); }
+.asx-sc em { font-style: normal; font-size: 11px; color: var(--text-muted); }
+.asx-sep { width: 1px; height: 20px; background: var(--border); margin: 0 6px; }
+
+/* ---- Deux portes de création ---- */
+.asx-create { margin-top: 36px; display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.asx-mk { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 16px; align-items: center; padding: 20px 22px; border-radius: 16px; text-decoration: none; color: var(--text); border: 1px solid var(--asx-violet-edge); background: var(--asx-violet-soft); transition: transform .15s; }
+.asx-mk:hover { transform: translateY(-2px); }
+.asx-mk.is-mia { border-color: var(--asx-acc-edge); background: var(--asx-acc-soft); }
+.asx-mk.is-off { opacity: .6; cursor: not-allowed; transform: none; }
+.asx-mk-ico { width: 50px; height: 50px; border-radius: 14px; display: grid; place-items: center; background: var(--bg-surface); color: var(--asx-violet); }
+.asx-mk-ico svg { width: 24px; height: 24px; }
+.asx-mk-ico img { width: 34px; height: 34px; object-fit: contain; }
+.asx-mk b { display: block; font-size: 16px; font-weight: 500; }
+.asx-mk small { display: block; font-size: 13px; color: var(--text-muted); margin-top: 4px; line-height: 1.45; }
+.asx-mk-go { width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; background: var(--bg-surface); color: var(--text); }
+.asx-mk-go svg { width: 16px; height: 16px; }
+.asx-note { margin: 10px 0 0; font-size: 12px; color: var(--text-muted); text-align: center; }
+
+/* ---- Deux colonnes : Organisation | Personnels ---- */
+.asx-groups { margin-top: 36px; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 28px; }
+.asx-groups.is-one { grid-template-columns: minmax(0, 1fr); }
+.asx-gtitle { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-muted); text-transform: uppercase; letter-spacing: .5px; padding: 0 4px 8px; border-bottom: 1px solid var(--asx-line2); }
+.asx-gtitle i { width: 8px; height: 8px; border-radius: 2px; background: var(--asx-violet); }
+.asx-gtitle.is-personal i { background: var(--text-muted); }
+
+/* Colonnes de largeur fixe : icône, état et commandes s'alignent d'une ligne à l'autre
+   (un assistant inactif n'a pas « Discuter », son menu reste à la même place). */
+.asx-ln { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) 26px 76px 70px; gap: 10px; align-items: center; min-height: 62px; padding: 8px 4px; border-bottom: 1px solid var(--asx-line2); }
+.asx-ln:hover, .asx-ln.is-menu { background: var(--asx-hover); }
+.asx-ln:has(.asx-ln-link:focus-visible) { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 8px; }
+.asx-ln-link { display: flex; align-items: center; gap: 12px; min-width: 0; text-decoration: none; color: inherit; }
+.asx-ln-link:focus-visible { outline: none; }
+/* La ligne entière ouvre la fiche ; icône, état et commandes passent au-dessus. */
+.asx-ln-link::after { content: ''; position: absolute; inset: 0; }
+.asx-ln-text { min-width: 0; }
+.asx-ln b { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 14px; font-weight: 500; }
+.asx-name { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* « ? » : discret, il s'affirme au survol de la ligne. Positionné au-dessus du lien
+   étiré (sinon il ne recevrait ni survol ni toucher) ; cible élargie au doigt. */
+.asx-help { position: relative; z-index: 1; flex: none; display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 50%; color: var(--text-muted); opacity: .5; cursor: help; transition: opacity .15s, color .15s; }
+.asx-help::before { content: ''; position: absolute; inset: -9px; }
+.asx-help svg { width: 15px; height: 15px; }
+.asx-ln:hover .asx-help, .asx-ln:focus-within .asx-help { opacity: .85; }
+.asx-help:hover, .asx-help.is-on { opacity: 1; color: var(--asx-violet); }
+/* Lu par un lecteur d'écran avec le lien (aria-describedby), jamais affiché. */
+.asx-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; }
+.asx-ln small { display: block; font-size: 12px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; }
+.asx-ln.is-off b { color: var(--text-muted); }
+.asx-ln.is-off .asx-ava img { filter: grayscale(1); opacity: .6; }
+.asx-ln.is-off .asx-ava > span { opacity: .55; }
+.asx-ln.is-spotlit { animation: asx-spot 1.8s ease; }
+@keyframes asx-spot { 0%, 40% { background: var(--asx-violet-soft); } 100% { background: transparent; } }
+
+/* Portrait : cerclé d'un halo de la couleur de l'assistant (--asx-c, validée par le serveur). */
+.asx-ava { width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center; flex: none; background: color-mix(in srgb, var(--asx-c) 16%, transparent); box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--asx-c) 38%, transparent); }
+.asx-ava img { width: 34px; height: 34px; border-radius: 50%; object-fit: cover; display: block; }
+.asx-ava > span { width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; background: var(--asx-c); color: #fff; font-size: 14px; font-weight: 600; }
+
+.asx-vis { position: relative; z-index: 1; display: inline-grid; place-items: center; width: 26px; height: 26px; border-radius: 50%; flex: none; color: var(--text-muted); border: 1px solid var(--asx-line2); }
+.asx-vis svg { width: 13px; height: 13px; }
+.asx-st { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-muted); white-space: nowrap; min-width: 58px; }
+.asx-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--asx-ok); }
+.asx-dot.is-off { background: transparent; border: 1.5px solid var(--text-muted); }
+
+.asx-acts { position: relative; z-index: 2; display: flex; align-items: center; justify-content: flex-end; gap: 2px; opacity: 0; transition: opacity .12s; }
+.asx-ln:hover .asx-acts, .asx-ln:focus-within .asx-acts, .asx-ln.is-menu .asx-acts { opacity: 1; }
+/* Menu ouvert : ses commandes passent au-dessus des lignes suivantes (le menu y vit). */
+.asx-ln.is-menu .asx-acts { z-index: 70; }
+.asx-acts form { margin: 0; display: contents; }
+.asx-menu { position: relative; display: flex; }
+.asx-ib { width: 34px; height: 34px; display: grid; place-items: center; border: 0; border-radius: 9px; background: transparent; color: var(--text-muted); cursor: pointer; padding: 0; }
+.asx-ib:hover, .asx-ib[aria-expanded="true"] { background: var(--asx-hover); color: var(--text); }
+.asx-ib:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.asx-ib svg { width: 17px; height: 17px; }
+.asx-ib.is-chat { color: var(--accent); }
+.asx-menu .kebab-menu button.kebab-row { width: 100%; border: 0; background: none; font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
+
+.asx-empty { padding: 22px 4px; font-size: 13px; color: var(--text-muted); }
+.asx-nothing { padding: 28px 0; text-align: center; font-size: 14px; color: var(--text-muted); }
+.asx-results { margin-top: 26px; font-size: 13px; color: var(--text-muted); text-align: center; }
+.asx-legend { margin-top: 18px; display: flex; justify-content: center; gap: 18px; flex-wrap: wrap; font-size: 12px; color: var(--text-muted); }
+.asx-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.asx-legend svg { width: 13px; height: 13px; }
+.asx-after { margin-top: 14px; display: flex; justify-content: center; gap: 18px; flex-wrap: wrap; font-size: 13px; }
+.asx-after a, .asx-after button { border: 0; padding: 4px 0; background: none; font: inherit; font-size: 13px; font-weight: 500; color: var(--text); text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
+
+/* ---- Bulle de description (posée sur <body> par assistant-list.js) ---- */
+/* Hors de .asx : jetons du thème seulement. */
+.asx-tip {
+    position: fixed;
+    z-index: 1000;
+    width: max-content;
+    max-width: min(340px, calc(calc(100vw / var(--ui-zoom, 1)) - 16px));
+    padding: 10px 13px;
+    background: var(--bg-surface);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    box-shadow: 0 12px 30px rgba(0, 0, 0, .3);
+    font-size: 13px;
+    font-weight: 400;
+    line-height: 1.5;
+    text-align: left;
+    white-space: pre-line;
+    overflow-wrap: anywhere;
+    pointer-events: none;
+    opacity: 0;
+    transform: translateY(3px);
+    transition: opacity .14s, transform .14s;
+}
+.asx-tip.is-below { transform: translateY(-3px); }
+.asx-tip.is-visible { opacity: 1; transform: none; }
+.asx-tip[hidden] { display: none !important; }
+html[data-theme="light"] .asx-tip { box-shadow: 0 12px 30px rgba(15, 23, 42, .12); }
+/* Flèche vers le « ? » : contour (::before), puis fond (::after) 1 px plus près. */
+.asx-tip::before, .asx-tip::after {
+    content: '';
+    position: absolute;
+    top: 100%;
+    left: clamp(12px, var(--asx-tip-arrow, 50%), calc(100% - 12px));
+    transform: translateX(-50%);
+    border: 7px solid transparent;
+    border-top-color: var(--border);
+}
+.asx-tip::after { margin-top: -1px; border-width: 6px; border-top-color: var(--bg-surface); }
+.asx-tip.is-below::before, .asx-tip.is-below::after { top: auto; bottom: 100%; border-top-color: transparent; border-bottom-color: var(--border); }
+.asx-tip.is-below::after { margin: 0 0 -1px; border-bottom-color: var(--bg-surface); }
+
+/* ---- Fenêtre : bibliothèque d'avatars ---- */
+.asx-avatars-box { width: min(760px, calc(94vw / var(--ui-zoom, 1))); max-height: calc(88vh / var(--ui-zoom, 1)); overflow-y: auto; }
+.asx-modal-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.asx-modal-head h3 { margin: 0; }
+.asx-modal .asx-ib { color: var(--text-muted); }
+.asx-modal .avatar-upload-form { margin: 16px 0 18px; }
+
+/* ---- Doigt : commandes toujours visibles, cibles de 44 px ---- */
+@media (hover: none) {
+    .asx-acts { opacity: 1; }
+    .asx-help { opacity: .8; }
+    .asx-ib { width: 44px; height: 44px; }
+    .asx-ln { grid-template-columns: minmax(0, 1fr) 26px 76px 90px; }
+}
+@media (max-width: 720px) {
+    .asx { padding-top: 12px; }
+    .asx-hero h1 { font-size: 25px; }
+    .asx-search { height: 54px; margin-top: 20px; }
+    .asx-search input { font-size: 16px; }
+    .asx-search kbd { display: none; }
+    .asx-scope { justify-content: flex-start; flex-wrap: nowrap; overflow-x: auto; }
+    .asx-sep { display: none; }
+    .asx-create { grid-template-columns: minmax(0, 1fr); gap: 10px; margin-top: 24px; }
+    .asx-mk { padding: 14px 16px; }
+    .asx-groups { grid-template-columns: minmax(0, 1fr); }
+    .asx-ln { grid-template-columns: minmax(0, 1fr) 26px 90px; min-height: 64px; }
+    .asx-ln .asx-st { display: none; }
+    .asx-acts { opacity: 1; }
+    .asx-legend { justify-content: flex-start; }
+}
+@media (prefers-reduced-motion: reduce) {
+    .asx-mk, .asx-acts { transition: none; }
+    .asx-mk:hover { transform: none; }
+    .asx-ln.is-spotlit { animation: none; }
+    .asx-tip, .asx-help { transition: none; }
+    .asx-tip, .asx-tip.is-below { transform: none; }
+}
+
+/* =====================================================================
+   Page d'un assistant et sa fiche — la grammaire des pages d'une base
+   (kb-pages.css), en violet : .kbx.is-asst.
+   ===================================================================== */
+.kbx.is-asst {
+    --kbx-hl:      var(--asx-violet);
+    --kbx-hl-soft: var(--asx-violet-soft);
+    --kbx-hl-edge: var(--asx-violet-edge);
+}
+.asx-ava [hidden] { display: none !important; }
+.asx-ava.is-big { width: 68px; height: 68px; }
+.asx-ava.is-big img, .asx-ava.is-big > span { width: 58px; height: 58px; }
+.asx-ava.is-big > span { font-size: 24px; }
+.asx-ava.is-head { width: 38px; height: 38px; }
+.asx-ava.is-head img, .asx-ava.is-head > span { width: 32px; height: 32px; font-size: 13px; }
+.asx-ava.is-off img { filter: grayscale(1); opacity: .6; }
+.asx-ava.is-off > span { opacity: .55; }
+.asx-head h1 { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.asx-inline-form { display: contents; }
+.kbx-actions .asx-menu .asx-more { width: 42px; padding: 0; }
+.kbx-actions .asx-menu .asx-more svg { width: 18px; height: 18px; }
+
+/* À régler, inactif : une note sous l'en-tête. */
+.asx-alert { margin-top: 18px; display: flex; gap: 12px; align-items: flex-start; padding: 14px 16px; border-radius: 12px; font-size: 13px; border: 1px solid color-mix(in srgb, var(--kb-warn) 40%, var(--border)); background: color-mix(in srgb, var(--kb-warn) 9%, transparent); }
+.asx-alert > svg { width: 18px; height: 18px; flex: none; margin-top: 1px; color: var(--kb-warn); }
+.asx-alert.is-alert { border-color: color-mix(in srgb, var(--kb-error) 40%, var(--border)); background: color-mix(in srgb, var(--kb-error) 8%, transparent); }
+.asx-alert.is-alert > svg { color: var(--kb-error); }
+.asx-alert.is-off { border-color: var(--border); background: var(--kbx-soft); }
+.asx-alert.is-off > svg { color: var(--text-muted); }
+.asx-alert b { font-weight: 500; }
+.asx-alert p { margin: 3px 0 0; color: var(--text-muted); line-height: 1.5; }
+.asx-alert a { color: var(--text); }
+
+/* Posez-lui une question : la boîte « Que sait-elle ? » d'une base, en violet. */
+.kbx.is-asst .kbx-probe { background: var(--asx-violet-soft); border-color: var(--asx-violet-edge); }
+.kbx.is-asst .kbx-probe-form:focus-within { border-color: var(--asx-violet); box-shadow: 0 0 0 3px var(--asx-violet-soft); }
+.asx-ask .kbx-probe-form { padding-right: 6px; }
+.asx-ask-go { width: 40px; height: 40px; flex: none; display: grid; place-items: center; border: 0; border-radius: 10px; background: var(--accent); color: #fff; cursor: pointer; }
+.asx-ask-go:hover { background: var(--accent-dark, var(--accent)); }
+.asx-ask-go svg { width: 18px; height: 18px; }
+.asx-ask-go:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* Colonnes : la consigne et ce qu'il connaît | modèle, outils, qui le voit. */
+.kbx.is-asst .kbx-main { display: flex; flex-direction: column; gap: 20px; min-width: 0; }
+.asx-prompt { margin: 0 18px; padding: 14px 16px; border-radius: 12px; background: var(--kbx-soft); border: 1px solid var(--kbx-line2); font-size: 13px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
+.asx-prompt em { color: var(--text-muted); }
+.asx-prompt.is-clamped { max-height: calc(1.6em * 12 + 28px); overflow: hidden; -webkit-mask-image: linear-gradient(#000 65%, transparent); mask-image: linear-gradient(#000 65%, transparent); }
+.asx-prompt.is-clamped.is-open { max-height: none; -webkit-mask-image: none; mask-image: none; }
+.asx-prompt + .kbx-more { margin-top: 12px; }
+.asx-card-pad { height: 18px; }
+.asx-pad { padding: 0 18px 18px; }
+.asx-know .kbx-dst { font-size: 11px; }
+.asx-model { display: flex; align-items: center; gap: 12px; }
+.asx-model-logo { width: 40px; height: 40px; flex: none; display: grid; place-items: center; border-radius: 11px; background: #fff; border: 1px solid var(--kbx-line2); }
+.asx-model-logo img { width: 24px; height: 24px; object-fit: contain; }
+.asx-model-logo svg { width: 20px; height: 20px; color: #64748b; }
+.asx-model b { display: block; font-size: 14px; font-weight: 500; }
+.asx-model small { display: block; margin-top: 2px; font-size: 12px; color: var(--text-muted); line-height: 1.4; }
+.asx-fact { margin: 12px 0 0; font-size: 12.5px; color: var(--text-muted); line-height: 1.5; }
+.asx-fact.is-warn, .kbx-person small.is-warn { color: var(--kb-warn); }
+.asx-stats-cap { margin: 26px 0 0; font-size: 12px; color: var(--text-muted); text-transform: uppercase; letter-spacing: .5px; }
+.kbx-stats.asx-stats { margin-top: 8px; }
+.asx-tool-ic svg { width: 16px; height: 16px; }
+
+/* ---- Fiche ---- */
+.kbx-fiche.is-asst .kbx-crumb > .asx-ava { flex: none; }
+.kbx-fiche.is-asst .kbx-sec h2 { margin: 0; font-size: 17px; font-weight: 500; }
+.kbx-fiche.is-asst .kbx-sec .form-group { margin: 16px 0 0; }
+.kbx-fiche.is-asst .kbx-sec .form-group > label { font-size: 13px; }
+.kbx-fiche.is-asst .kbx-fields .form-group { margin: 0; }
+.kbx-fiche.is-asst .profile-hint { font-size: 12px; }
+.asx-name-row { margin-top: 16px; display: grid; grid-template-columns: minmax(0, 1fr) 92px; gap: 14px; }
+.kbx-fiche.is-asst .asx-name-row .form-group { margin: 0; }
+.asx-color { height: 40px; padding: 3px 5px; cursor: pointer; }
+.kbx-fiche .mp-active-toggle { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 0; white-space: normal; font-size: 14px; color: var(--text); }
+.kbx-fiche .mp-active-text { font-size: 14px; font-weight: 500; color: var(--text); }
+.kbx-fiche .mp-active-text.is-off { color: var(--kb-error); }
+.kbx-fiche .mp-active-toggle small { display: block; margin-top: 3px; font-size: 12px; color: var(--text-muted); line-height: 1.45; }
+.kbx-fiche .mp-active-toggle .ios-switch { flex: none; }
+.asx-group { margin-top: 20px; padding-top: 18px; border-top: 1px solid var(--kbx-line2); }
+.kbx-fiche.is-asst .kbx-sec .asx-group.form-group { margin-top: 20px; }
+.kbx-lead + .asx-group, .kbx-fiche.is-asst .kbx-sec .kbx-lead + .asx-group.form-group { margin-top: 16px; padding-top: 0; border-top: 0; }
+.asx-group-title { margin: 0 0 4px; font-size: 14px; font-weight: 500; }
+.asx-group-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.asx-group-meta { font-size: 12px; color: var(--text-muted); }
+.asx-empty-tools { margin: 14px 0 0; }
+.asx-label-note { color: var(--text-muted); font-size: 12px; font-weight: 400; }
+.asx-temp-row { display: flex; align-items: center; gap: 10px; }
+.asx-temp-row input[type="range"] { flex: 1; min-width: 0; accent-color: var(--accent); }
+.asx-temp-row input[type="number"] { width: 64px; text-align: center; }
+.asx-temp-row .btn-secondary { white-space: nowrap; padding: 6px 10px; font-size: 12px; }
+.asx-temp-scale { display: flex; justify-content: space-between; margin-top: 4px; font-size: 11px; color: var(--text-muted); }
+.asx-temp-note { border-left: 3px solid var(--accent); padding: 8px 12px; background: color-mix(in srgb, var(--text) 5%, transparent); border-radius: 6px; margin-top: 8px; }
+.kbx-fiche.is-asst .mp-opt-list { max-height: 320px; }
+.kbx-fiche.is-asst .pf-form { display: contents; }
+.kbx-top .pf-review-bar { gap: 8px; }
+.kbx-top .pf-review-bar .btn-primary, .kbx-top .pf-review-bar .btn-secondary { padding: 7px 12px; font-size: 13px; }
+.kbx-fiche.is-asst .kbx-diagram { margin-top: 18px; }
+
+@media (max-width: 860px) {
+    .asx-name-row { grid-template-columns: minmax(0, 1fr) 72px; }
+    .kbx-top .pf-review-note { display: none; }
+    .asx-head { gap: 14px; }
+    .asx-ava.is-big { width: 56px; height: 56px; }
+    .asx-ava.is-big img, .asx-ava.is-big > span { width: 48px; height: 48px; font-size: 20px; }
+}
+@media (max-width: 720px) {
+    .kbx.is-asst .kbx-actions { flex-wrap: nowrap; }
+    .kbx.is-asst .kbx-actions .kbx-btn { flex: 1; }
+    .kbx.is-asst .kbx-actions .asx-menu .asx-more { flex: none; }
+    .asx-temp-row { flex-wrap: wrap; }
+}
+@media (pointer: coarse) {
+    .asx-ask-go { width: 44px; height: 44px; }
+}
+
+.asx-group-hint { margin: 0 0 8px; }
+
+/* ---- Fiche : bases (tuile des pages Bases), dépôt des documents ---- */
+.kbx-fiche.is-asst .asx-kb-tile { display: inline-flex; flex-shrink: 0; }
+.kbx-fiche.is-asst .asx-kb-tile .kbx-tile { width: 30px; height: 30px; border-radius: 8px; }
+.kbx-fiche.is-asst .asx-drop { margin: 4px 0 8px; }
+.kbx-fiche.is-asst .asx-drop.is-busy { opacity: .6; pointer-events: none; }
+.kbx-fiche.is-asst .asx-drop-busy { margin: 0 0 8px; font-size: 12.5px; color: var(--text-muted); }
+.kbx-fiche.is-asst .asx-pending { margin: 0 0 6px; }
+.kbx-fiche.is-asst #mpDocError { white-space: pre-line; }
+.kbx-fiche.is-asst .profile-hint a,
+.kbx-fiche.is-asst .mp-temp-note a { color: var(--asx-violet); text-underline-offset: 2px; }
+.kbx-fiche.is-asst .mp-doc-row { align-items: center; gap: 12px; }
+.kbx-fiche.is-asst .mp-doc-row .kbx-ft { flex-shrink: 0; }
+.kbx-fiche.is-asst .mp-doc-info { flex: 1; min-width: 0; }
+.kbx-fiche.is-asst .mp-doc-del {
+    border-color: transparent;
+    background: transparent;
+    color: var(--text-muted);
+    font-size: 12.5px;
+}
+@media (hover: hover) {
+    .kbx-fiche.is-asst .mp-doc-del:hover { color: #dc2626; background: rgba(239, 68, 68, .08); }
+}
+.kbx-box h3 .asx-box-edit { font-size: 12px; font-weight: 500; text-transform: none; letter-spacing: 0; color: var(--asx-violet); text-decoration: none; }
+@media (hover: hover) { .kbx-box h3 .asx-box-edit:hover { text-decoration: underline; text-underline-offset: 2px; } }
+@media (pointer: coarse) { .kbx-box h3 .asx-box-edit { padding: 10px 0; margin: -10px 0; } }

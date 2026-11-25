@@ -64,7 +64,207 @@ function refreshSendStopUi() {
     const streaming = !!(bgState && !bgState.done) || !!(inlineState && !inlineState.done) || jobRunning;
     stopBtn.style.display = streaming ? '' : 'none';
     sendBtn.style.display = streaming ? 'none' : '';
+    // Création (image, page web…) dont l'arrêt est demandé : le serveur la
+    // clôt dès qu'il le peut. Le bouton le montre au lieu de rester tel quel
+    // — un clic sans effet visible est ce qui rendait le Stop déroutant.
+    const stopping = streaming && jobStopping(cidStr);
+    stopBtn.classList.toggle('is-stopping', stopping);
+    stopBtn.disabled = stopping;
+    stopBtn.setAttribute('aria-busy', stopping ? 'true' : 'false');
+    stopBtn.title = stopping ? t('Arrêt en cours…') : t('Arrêter la génération');
 }
+
+/** Une création de la conversation attend-elle d'être arrêtée par le serveur ? */
+function jobStopping(cidStr) {
+    if (!cidStr) return false;
+    let stopping = false;
+    activeJobs.forEach((jobState) => {
+        if (!jobState.done && jobState.stopping && String(jobState.convId) === cidStr) stopping = true;
+    });
+    return stopping;
+}
+
+/**
+ * Demande d'arrêt au serveur. `seq` = dernier évènement du flux que l'écran
+ * a montré : la réponse enregistrée s'arrête là (JobQueue::requestCancel).
+ */
+function postJobCancel(jobId, seq) {
+    const body = new FormData();
+    if (Number.isInteger(seq) && seq >= 0) body.append('seq', String(seq));
+    return fetch(`/jobs/${jobId}/cancel`, {
+        method: 'POST',
+        headers: { 'X-CSRF-Token': csrfToken },
+        body,
+    }).catch(() => {})
+        // Le tiroir des générations se relit : l'arrêt demandé l'en retire.
+        .then(() => signalJobsChanged());
+}
+
+/**
+ * Bouton Stop d'une réponse qui s'écrit CÔTÉ SERVEUR (job de chat).
+ *
+ * Le worker ne voit la demande d'arrêt qu'à sa prochaine lecture du flux du
+ * modèle : une demi-seconde quand le texte coule, bien davantage pendant que
+ * le modèle réfléchit ou qu'un outil travaille. L'écran attendait ce moment
+ * et continuait d'écrire — le bouton semblait sans effet. Il s'arrête donc
+ * TOUT DE SUITE : ce qui est arrivé s'affiche d'un coup, la réponse est
+ * marquée interrompue, les lignes « en cours » disparaissent, Envoyer revient.
+ * Le serveur reçoit le repère de ce qui a été montré (`seq`) et n'enregistre
+ * que ce texte-là : la conversation rechargée est celle qu'on a vue s'arrêter.
+ *
+ * Le flux reste écouté en silence jusqu'à sa clôture (applyStoppedChatEvent) :
+ * l'identifiant du message et les crédits arrivent avec la réponse
+ * interrompue, et une réponse qui s'était terminée juste avant le clic (rien
+ * à arrêter) est rendue en entier — c'est elle qui est enregistrée.
+ */
+function stopChatJobNow(state, cidStr) {
+    if (!state || state.done || state.stopping) return false;
+    // Déjà complète, elle finit de s'écrire : on la montre en entier.
+    if (Array.isArray(state.held) && state.held.some((e) => e && e.done)) {
+        window.MiaStream.stop(state.el);
+        return true;
+    }
+    state.stopping = true;
+    state.aborted = true;
+    state.frozenText = state.rawText;
+    state.lateText = '';
+    state.held = null;
+    postJobCancel(state.jobId, Number(state.lastSeq || 0));
+
+    updateStreamingIndicator(cidStr, false);
+    if (activeStreams.get(cidStr) === state) activeStreams.delete(cidStr);
+    signalJobsChanged();
+    state.done = true;
+    // Conversation affichée seulement : ailleurs (tiroir des générations), la
+    // bulle n'est pas à l'écran — le retour sur la conversation relit la
+    // réponse enregistrée.
+    if (state.el && cidStr === String(visibleConvId)) renderStoppedReply(state);
+    // Hors de la pile du clic : la conversation vocale (« stop » pendant
+    // qu'elle lit) reçoit la fin du tour comme avant, à la clôture du flux.
+    state.turnEndSent = true;
+    setTimeout(() => notifyChatTurnEnded(cidStr, { status: 'cancelled', jobId: state.jobId || null, msgId: null, hadError: false, errorTitle: '' }), 0);
+    if (cidStr === String(visibleConvId)) {
+        sendBtn.disabled = msgInput.value.trim() === '' && pendingFiles.length === 0;
+        refreshSendStopUi();
+        syncChoicePrompts();
+    }
+    return true;
+}
+
+/** Bulle d'une réponse arrêtée : texte reçu, marque d'interruption, plus rien « en cours ». */
+function renderStoppedReply(state) {
+    const el = state.el;
+    el.querySelector('.stream-phase')?.remove();
+    const marker = "\n\n" + t("*[Réponse interrompue par l'utilisateur]*");
+    if (!state.rawText.endsWith(marker)) {
+        state.rawText = (state.rawText || '').trimEnd() + marker;
+    }
+    el.dataset.raw = state.rawText;
+    const body = el.closest('.msg-body') || el.parentElement;
+    if (body) {
+        state.running = [];
+        renderActionTrace(body, state.actions || [], []);
+        renderProgressNote(body, '');
+    }
+    finalizeAssistantMessage(el);
+}
+
+/**
+ * Flux d'une réponse déjà arrêtée à l'écran (stopChatJobNow) : on n'affiche
+ * plus le texte qui arrive, on attend la clôture.
+ */
+function applyStoppedChatEvent(state, cidStr, json) {
+    if (json.job_end) {
+        try { state.es?.close(); } catch (_e) {}
+        signalJobsChanged();
+        return;
+    }
+    const visible = cidStr === String(visibleConvId) && !!state.el;
+    if (typeof json.chunk === 'string') {
+        state.lateText += json.chunk;
+        return;
+    }
+    // Image de l'outil image arrivée après le clic : elle existe et est
+    // payée, la réponse enregistrée la garde avec tout son texte — l'écran
+    // aussi (même règle que JobQueue::seenTextFromEvents).
+    if (json.tool_image && json.tool_image.url) {
+        state.lateText += '\n\n![' + t('Image générée') + '](' + json.tool_image.url + ')\n\n';
+        state.hasToolImage = true;
+        return;
+    }
+    // Réponse terminée avant que le serveur ne voie l'arrêt : elle est
+    // enregistrée en entier, on la rend en entier.
+    if (json.done) {
+        state.rawText = (state.frozenText || '') + (state.lateText || '');
+        state.stopping = false;
+        state.aborted = false;
+        if (visible) state.el.dataset.raw = state.rawText;
+        applyChatStreamEvent(state, cidStr, json);
+        return;
+    }
+    // Réponse interrompue, enregistrée : son identifiant et ses crédits.
+    if (json.aborted) {
+        if (json.msg_id && state.el) {
+            state.el.dataset.messageId = String(json.msg_id);
+            state.el.closest('.message')?.setAttribute('data-message-id', String(json.msg_id));
+        }
+        // Tables établies avant l'arrêt : elles existent, la puce et la ligne « Voir » suivent.
+        if (json.tables && visible) window.MiaTables?.afterTurn(state.el.closest('.message'), json.tables);
+        // Réponse avec une image : le serveur n'a rien coupé, l'écran rend
+        // aussi ce qui est arrivé après le clic.
+        if (state.hasToolImage && state.lateText && visible) {
+            state.rawText = (state.frozenText || '') + state.lateText;
+            renderStoppedReply(state);
+        }
+        if (visible) {
+            applyQuotaStatus(json.quota_status || null);
+            applyConversationCreditsTotal(json.conversation_credits_total ?? 0);
+        }
+        return;
+    }
+    // Carte d'approbation déposée entre le clic et l'arrêt : elle attend
+    // vraiment (elle reviendrait au rechargement), on la montre.
+    if (json.drive_confirm || json.drive_superseded || json.drive_card_update || json.auto_record) {
+        applyChatStreamEvent(state, cidStr, {
+            drive_confirm: json.drive_confirm, drive_superseded: json.drive_superseded,
+            drive_card_update: json.drive_card_update, auto_record: json.auto_record,
+        });
+    }
+}
+
+/**
+ * Bouton Stop d'une création (image, page web, carte, présentation…). Elle
+ * ne s'arrête pas en un instant — un appel en cours chez le fournisseur va à
+ * son terme : la bulle et le bouton disent que l'arrêt est demandé.
+ */
+function stopJobNow(state) {
+    if (!state || state.done || state.stopping) return false;
+    state.stopping = true;
+    postJobCancel(state.id);
+    if (jobIsVisible(state)) {
+        const label = state.el?.querySelector('.stream-phase-label');
+        if (label) label.textContent = t('Arrêt en cours…');
+    }
+    refreshSendStopUi();
+    signalJobsChanged();
+    return true;
+}
+
+/**
+ * Arrête une génération désignée par son job, où qu'elle s'affiche : bouton
+ * Stop, tiroir des générations, « stop » dit en conversation vocale.
+ */
+function stopJobById(jobId) {
+    const key = String(jobId);
+    for (const [cidStr, state] of activeStreams) {
+        if (String(state.jobId || '') === key) return stopChatJobNow(state, cidStr);
+    }
+    const job = activeJobs.get(key);
+    if (job) return stopJobNow(job);
+    postJobCancel(key);
+    return false;
+}
+window.miaStopJob = stopJobById;
 
 /** Stoppe le stream actif (background ou inline) sur la conv visible, s'il existe. */
 function abortVisibleStream() {
@@ -72,16 +272,14 @@ function abortVisibleStream() {
     const cidStr = String(visibleConvId);
     const bgState = activeStreams.get(cidStr);
     if (bgState && !bgState.done) {
-        bgState.aborted = true;
         // Génération asynchrone : fermer l'EventSource n'arrêterait rien, la
-        // demande d'arrêt passe par le serveur.
+        // demande d'arrêt passe par le serveur — l'écran, lui, s'arrête tout
+        // de suite (stopChatJobNow).
         if (bgState.jobId) {
-            fetch(`/jobs/${bgState.jobId}/cancel`, {
-                method: 'POST',
-                headers: { 'X-CSRF-Token': csrfToken },
-            }).catch(() => {});
+            stopChatJobNow(bgState, cidStr);
             return;
         }
+        bgState.aborted = true;
         if (bgState.controller) {
             try { bgState.controller.abort(); } catch (_) {}
             return;
@@ -96,11 +294,9 @@ function abortVisibleStream() {
     // Génération asynchrone : le flux n'est qu'un spectateur. Fermer
     // l'EventSource n'arrêterait rien — l'arrêt se demande au serveur.
     for (const jobState of activeJobs.values()) {
-        if (!jobState.done && String(jobState.convId) === cidStr) {
-            fetch(`/jobs/${jobState.id}/cancel`, {
-                method: 'POST',
-                headers: { 'X-CSRF-Token': csrfToken },
-            }).catch(() => {});
+        if (!jobState.done && !jobState.stopping && String(jobState.convId) === cidStr
+            && (JOB_TYPES[jobState.type] || {}).passive !== true) {
+            stopJobNow(jobState);
             return;
         }
     }
@@ -327,10 +523,16 @@ async function fetchWithSessionGuard(input, init) {
 function showQuotaModal(reason) {
     const modal = document.getElementById('quotaModal');
     if (!modal) return;
-    const wanted = reason === 'budget' ? 'budget' : 'quota';
+    // `demo` : l'enveloppe d'un compte de démonstration est épuisée (le
+    // serveur dit `quota`, CreditQuota::compose — handleQuotaExceededPayload
+    // traduit avec le drapeau `demo` du statut).
+    const wanted = reason === 'budget' ? 'budget' : (reason === 'demo' ? 'demo' : 'quota');
     modal.querySelectorAll('[data-quota-reason]').forEach(block => {
         block.hidden = block.dataset.quotaReason !== wanted;
     });
+    // Démo : le geste principal est d'écrire (lien du bloc), pas de fermer.
+    const closeBtn = document.getElementById('quotaModalClose');
+    if (closeBtn) closeBtn.className = wanted === 'demo' ? 'btn-secondary' : 'btn-primary';
     modal.style.display = 'flex';
 }
 
@@ -398,6 +600,24 @@ function updateTopToolbarMeta({ modelLabel = null, modelCost = null, historyCoun
     }
 }
 
+// Carte du compte REPLIÉE (user-account-trigger.php) : l'anneau de l'avatar
+// dit la part de crédits restante, son infobulle le nom et les crédits. Mêmes
+// valeurs que la barre et la mention, posées par applyQuotaStatus.
+function syncAccountDockQuota(leftPct, color, creditText) {
+    const dock = document.getElementById('userDock');
+    if (!dock) return;
+    if (leftPct !== null) {
+        dock.style.setProperty('--quota-left', `${Math.max(0, Math.min(100, leftPct))}%`);
+        dock.style.setProperty('--quota-color', color);
+    }
+    const wrap = dock.querySelector('.user-avatar-wrap');
+    const name = dock.querySelector('.user-name');
+    if (wrap && name && creditText) {
+        const rest = (wrap.getAttribute('title') || '').split('\n').slice(1);
+        wrap.setAttribute('title', [`${name.textContent.trim()} — ${creditText}`].concat(rest).join('\n'));
+    }
+}
+
 function applyQuotaStatus(status) {
     if (!status || typeof status !== 'object') return;
 
@@ -414,9 +634,14 @@ function applyQuotaStatus(status) {
         }
         if (breakdownEl) breakdownEl.textContent = '';
         if (quotaBar) quotaBar.style.background = '#ef4444';
+        syncAccountDockQuota(null, '', t('Service IA suspendu'));
+        const dock = document.getElementById('userDock');
+        if (dock && dock.classList.contains('has-quota')) dock.style.setProperty('--quota-color', '#ef4444');
         return;
     }
 
+    const isDemo = status.demo === true;
+    syncDemoEndedBanner(isDemo && status.reason === 'quota');
     const hasQuota = status.quota_max !== null;
     const used = Number(status.used || 0);
     const quotaMax = hasQuota ? Number(status.quota_max || 0) : 0;
@@ -432,30 +657,47 @@ function applyQuotaStatus(status) {
             remainingEl.textContent = t('Illimité');
             remainingEl.style.color = 'var(--text-muted)';
         } else if (remaining <= 0) {
-            remainingEl.textContent = t('Quota épuisé');
+            remainingEl.textContent = isDemo ? t('Démo terminée') : t('Quota épuisé');
             remainingEl.style.color = '#ef4444';
         } else {
-            remainingEl.textContent = t('{n} crédits restants', { n: formatInt(remaining) });
+            remainingEl.textContent = isDemo
+                ? t('{n} crédits de démo restants', { n: formatInt(remaining) })
+                : t('{n} crédits restants', { n: formatInt(remaining) });
             remainingEl.style.color = pct >= 70 ? '#f59e0b' : 'var(--text-muted)';
         }
     }
 
     if (breakdownEl) {
-        breakdownEl.textContent = (hasQuota && remaining > 0) ? ` / ${formatInt(quotaMax)}` : '';
+        breakdownEl.textContent = (hasQuota && remaining > 0)
+            ? (isDemo ? ' ' + t('sur {max}', { max: formatInt(quotaMax) }) : ` / ${formatInt(quotaMax)}`)
+            : '';
     }
 
+    const barColor = pct >= 90 ? '#ef4444' : (pct >= 70 ? '#f59e0b' : 'var(--accent)');
     if (quotaBar) {
         quotaBar.style.width = `${Math.max(0, 100 - pct)}%`;
-        quotaBar.style.background = pct >= 90 ? '#ef4444' : (pct >= 70 ? '#f59e0b' : 'var(--accent)');
+        quotaBar.style.background = barColor;
     }
+    syncAccountDockQuota(hasQuota ? 100 - pct : null, barColor, remainingEl ? remainingEl.textContent.trim() : '');
 
 }
 
 function handleQuotaExceededPayload(payload) {
     if (!payload || payload.quota_exceeded !== true) return false;
-    applyQuotaStatus(payload.quota_status || null);
-    showQuotaModal(payload.quota_status ? payload.quota_status.reason : null);
+    const status = payload.quota_status || null;
+    applyQuotaStatus(status);
+    const reason = status ? status.reason : null;
+    showQuotaModal(status && status.demo === true && reason === 'quota' ? 'demo' : reason);
     return true;
+}
+
+// Bandeau « démo terminée » au-dessus de la zone de saisie : rendu par le
+// serveur quand l'enveloppe est déjà épuisée au chargement, montré ici dès
+// qu'elle s'épuise en cours de conversation. Les conversations restent
+// lisibles ; seul l'envoi est refusé (fenêtre de quota).
+function syncDemoEndedBanner(ended) {
+    const banner = document.getElementById('demoEndedBanner');
+    if (banner) banner.hidden = !ended;
 }
 
 // Placeholder compact sur mobile (évite un placeholder tronqué — et le
@@ -618,16 +860,22 @@ async function createConversation() {
     window.kbDraftAppend?.(fd);
     let res;
     try {
-        res = await fetchWithSessionGuard('/chat/new', { method: 'POST', headers: { 'X-CSRF-Token': csrfToken }, body: fd, redirect: 'follow' });
+        // JSON : seul l'identifiant sert ici. Suivre la redirection ferait
+        // fabriquer toute la page de la conversation avant de pouvoir répondre.
+        res = await fetchWithSessionGuard('/chat/new', { method: 'POST', headers: { 'X-CSRF-Token': csrfToken, 'Accept': 'application/json' }, body: fd });
     } catch (err) {
         if (err instanceof Error && err.message === 'SESSION_EXPIRED') return false;
         throw err;
     }
-    const match = res.url.match(/\/chat\/(\d+)/);
-    if (match) {
-        document.getElementById('convId').value = match[1];
-        visibleConvId = match[1];
-        history.replaceState({ convId: match[1] }, '', `/chat/${match[1]}`);
+    // Session perdue : la barrière CSRF répond avant l'authentification (403),
+    // seule une vérification dédiée peut le dire.
+    if (!res.ok && !await ensureSessionActive()) return false;
+    const created = await res.json().catch(() => null);
+    const newId = created && created.id ? String(created.id) : '';
+    if (newId) {
+        document.getElementById('convId').value = newId;
+        visibleConvId = newId;
+        history.replaceState({ convId: newId }, '', `/chat/${newId}`);
         document.getElementById('chatToolbar')?.style.removeProperty('display');
         // L'outil engagé avant l'existence de la conversation la suit : sans
         // ce report, le choix resterait attaché au brouillon et serait perdu
@@ -635,12 +883,12 @@ async function createConversation() {
         window.carryToolChoiceToConversation?.();
         // Le serveur les a enregistrées : le brouillon a fait son office.
         window.kbDraftClear?.();
-        addConvToSidebar(match[1], t('Nouvelle conversation'), llmSelect?.value || '');
+        addConvToSidebar(newId, t('Nouvelle conversation'), llmSelect?.value || '');
         updateTopToolbarMeta({ historyCount: 0 });
         applyConversationCreditsTotal(0);
         return true;
     }
-    window.location.href = res.url || '/';
+    showToast(t('Impossible de contacter le serveur. Vérifiez votre connexion puis réessayez.'), 'error');
     return false;
 }
 
@@ -663,7 +911,6 @@ async function submitForm(override = null) {
     // débounce de 400 ms pourrait alors écraser le brouillon avec du vide
     // pendant que l'envoi échoue. Purgé seulement à l'acceptation serveur.
     if (!fromChoice) commitComposerDraft(text);
-    if (!await ensureSessionActive()) return false;
 
     // Mode outil de génération (image, HTML, carte, présentation ou vidéo).
     // Un seul état : l'outil engagé au menu « + » — que l'utilisateur l'ait
@@ -672,6 +919,7 @@ async function submitForm(override = null) {
     // production message après message) jusqu'à ce qu'il soit éteint.
     const activeTool = selectedTool;
     if (activeTool && text) {
+        if (!await ensureSessionActive()) return false;
         if (activeTool.type === 'image') await submitImagine(text, activeTool.id);
         else if (activeTool.type === 'map') await generateMap(text, activeTool.id);
         // La présentation ne génère rien tout de suite : elle ouvre son volet
@@ -713,15 +961,11 @@ async function submitForm(override = null) {
     // Snapshot des fichiers avant clearFiles() — aucun pour un choix touché.
     const snapshotFiles = fromChoice ? [] : [...pendingFiles];
 
-    // Pas encore de conversation ? on en crée une
-    if (!convId()) {
-        if (!await createConversation()) return false;
-    }
-
-    const currentConvId = convId();
-
-    // Affiche le message utilisateur
-    appendMessage('user', text, snapshotFiles);
+    // L'écran réagit AVANT le réseau : le message et l'attente de MIA sont là
+    // dès l'envoi, sur l'accueil comme dans une conversation. La session n'est
+    // plus vérifiée d'abord — un aller-retour pour rien : /chat/new et /send la
+    // contrôlent, et cancelTurn défait l'affichage s'ils refusent.
+    const userEl = appendMessage('user', text, snapshotFiles);
     if (!fromChoice) {
         msgInput.value = '';
         msgInput.style.height = 'auto';
@@ -731,6 +975,33 @@ async function submitForm(override = null) {
 
     // Placeholder assistant
     const assistantEl = appendMessage('assistant', '', [], true);
+
+    const cancelTurn = () => {
+        assistantEl.closest('.message')?.remove();
+        userEl.closest('.message')?.remove();
+        if (!fromChoice) {
+            msgInput.value = text;
+            msgInput.dispatchEvent(new Event('input', { bubbles: true }));
+            restoreFiles(snapshotFiles);
+        }
+        sendBtn.disabled = msgInput.value.trim() === '' && pendingFiles.length === 0;
+    };
+
+    // Pas encore de conversation ? on en crée une
+    if (!convId()) {
+        let created = false;
+        try {
+            created = await createConversation();
+        } catch (_err) {
+            showToast(t('Impossible de contacter le serveur. Vérifiez votre connexion puis réessayez.'), 'error');
+        }
+        if (!created) {
+            cancelTurn();
+            return false;
+        }
+    }
+
+    const currentConvId = convId();
 
     const fd = new FormData();
     fd.append('message', text);
@@ -748,8 +1019,20 @@ async function submitForm(override = null) {
     // le serveur demande au modèle une réponse orale (courte, sans mise en forme).
     fd.append('voice_mode', voiceModeActive ? '1' : '0');
     fd.append('slack_access', document.getElementById('slackAccessToggle')?.checked ? '1' : '0');
-    fd.append('connectors_auto', document.getElementById('connectorsAutoToggle')?.checked ? '1' : '0');
+    // « Laisser MIA choisir » : l'interrupteur du menu « + » — et, en
+    // conversation vocale, d'office dès qu'il est proposé (présent dans la
+    // page = permis par l'administrateur, un compte au moins relié) : à la
+    // voix, personne n'ouvre le menu pour cocher un connecteur. Le serveur
+    // reste juge (réglage, modèle à outils, comptes reliés), et rien ne
+    // s'écrit sans la carte d'approbation.
+    const autoConnectors = document.getElementById('connectorsAutoToggle');
+    fd.append('connectors_auto', (autoConnectors?.checked || (voiceModeActive && !!autoConnectors)) ? '1' : '0');
     fd.append('tz', clientTimeZone());
+    // Modèle et logo de l'entreprise (cases « Embarquer ») : une version
+    // soignée choisie avant l'écriture part avec ce choix.
+    const companyRefs = window.MiaFiles?.companyRefs?.() || { template: true, logo: true };
+    fd.append('company_template', companyRefs.template ? '1' : '0');
+    fd.append('company_logo', companyRefs.logo ? '1' : '0');
     snapshotFiles.forEach(f => fd.append('file_tokens[]', f.token));
 
     // La requête n'attend PLUS la réponse du modèle : elle enfile un job et
@@ -762,7 +1045,7 @@ async function submitForm(override = null) {
         });
     } catch (err) {
         if (err instanceof Error && err.message === 'SESSION_EXPIRED') {
-            sendBtn.disabled = msgInput.value.trim() === '' && pendingFiles.length === 0;
+            cancelTurn();
             return false;
         }
         renderInlineError(assistantEl, {
@@ -776,6 +1059,11 @@ async function submitForm(override = null) {
 
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) {
+        // Session perdue : la barrière CSRF répond avant l'authentification.
+        if (response.status === 403 && !await ensureSessionActive()) {
+            cancelTurn();
+            return false;
+        }
         if (response.status === 429 && handleQuotaExceededPayload(payload)) {
             assistantEl.closest('.message')?.remove();
         } else {
@@ -975,6 +1263,7 @@ function applyWatchdogOutcome(state, cidStr) {
 async function autoRetryGeneration(cidStr, assistantEl, attempt) {
     const el = assistantEl;
     if (el && cidStr === String(visibleConvId)) {
+        window.MiaStream.stop(el);
         el.classList.add('streaming');
         el.__streamRenderFinalized = false;
         delete el.dataset.errorPayload;
@@ -1087,6 +1376,7 @@ function applyChatStreamEvent(state, cidStr, json) {
     // serveur, qui ajoute le même markdown au message assistant).
     if (json.tool_image && json.tool_image.url) {
         state.rawText += '\n\n![' + t('Image générée') + '](' + json.tool_image.url + ')\n\n';
+        state.hasToolImage = true; // une réponse avec image n'est jamais coupée au Stop
         if (state.el && cidStr === String(visibleConvId)) {
             state.el.querySelector('.stream-phase')?.remove();
             state.el.dataset.raw = state.rawText;
@@ -1110,6 +1400,13 @@ function applyChatStreamEvent(state, cidStr, json) {
     if (json.drive_superseded && Array.isArray(json.drive_superseded.ids)) {
         json.drive_superseded.ids.forEach(markDriveCardSuperseded);
         syncDriveBatchBar();
+    }
+
+    // Pièce d'un workflow mise à jour depuis la discussion (WorkflowChat) :
+    // la carte de validation se redessine avec la nouvelle version — la
+    // personne approuve ce qu'elle voit.
+    if (json.drive_card_update && json.drive_card_update.id) {
+        refreshDriveCard(json.drive_card_update.id, json.drive_card_update.preview);
     }
 
     // Tâche programmée « sans validation » : relevé des actions effectuées,
@@ -1198,6 +1495,7 @@ function applyChatStreamEvent(state, cidStr, json) {
             renderProgressNote(body, '');
             if (json.plan && Array.isArray(json.plan.etapes)) renderPlanCard(body, json.plan);
             if (json.suite) body.closest('.message')?.setAttribute('data-suite', String(json.suite));
+            if (json.polish_offer) body.closest('.message')?.setAttribute('data-polish-offer', String(json.polish_offer));
             // Attache tardive : le relevé re-servi par le payload final.
             if (json.auto_record && json.auto_record.id) upsertAutoRecord(state.el, json.auto_record);
         }
@@ -1227,8 +1525,29 @@ function applyChatStreamEvent(state, cidStr, json) {
             }
             sendBtn.disabled = msgInput.value.trim() === '' && pendingFiles.length === 0;
         }
-        notifyChatTurnEnded(cidStr, { status: 'done', jobId: state.jobId || null, msgId: json.msg_id || null, hadError: !!state.hadError, errorTitle: turnErrorTitle(state) });
+        // Arrêt cliqué juste après la fin (stopChatJobNow) : la fin du tour
+        // a déjà été annoncée, une seconde ferait relancer la conversation vocale.
+        if (!state.turnEndSent) {
+            notifyChatTurnEnded(cidStr, { status: 'done', jobId: state.jobId || null, msgId: json.msg_id || null, hadError: !!state.hadError, errorTitle: turnErrorTitle(state) });
+        }
         if (cidStr === String(visibleConvId)) syncContinueButton();
+        // Version soignée choisie avant la rédaction : la réalisation est
+        // partie dès la réponse écrite (PolishOffer) — sa carte se pose sous
+        // la réponse, et son job est suivi comme un clic sur la carte.
+        if (Array.isArray(json.native_runs)) {
+            json.native_runs.forEach(run => {
+                if (!run) return;
+                if (run.message && cidStr === String(visibleConvId)) showDriveOutcome(run);
+                if (run.job_id) attachJob(String(run.job_id), { type: String(run.job_type || 'native_deck'), convId: cidStr });
+            });
+        }
+        if (json.native_error && cidStr === String(visibleConvId)) showToast(String(json.native_error), 'error');
+        // Question de MIA (mémoire) : une carte discrète sous la réponse,
+        // écrite par le serveur (memory-question.js).
+        if (json.memory_question && cidStr === String(visibleConvId)) window.MiaMemoryQuestion?.attach(json.memory_question);
+        // Tables de travail du tour : la puce de la zone de saisie suit, et la
+        // réponse reçoit sa ligne « Voir » (work-tables.js).
+        if (json.tables && cidStr === String(visibleConvId)) window.MiaTables?.afterTurn(state.el?.closest('.message') || null, json.tables);
     }
 }
 /**
@@ -1255,16 +1574,46 @@ function attachChatJob(jobId, cid, assistantEl) {
     if (cidStr === String(visibleConvId)) refreshSendStopUi();
     signalJobsChanged();
 
+    const apply = (json) => {
+        if (state.stopping) { applyStoppedChatEvent(state, cidStr, json); return; }
+        if (json.job_end) { finishChatJobStream(state, cidStr, String(json.status || 'done')); return; }
+        applyChatStreamEvent(state, cidStr, json);
+    };
     const es = new EventSource(`/jobs/${jobId}/stream`);
     state.es = es;
     es.onmessage = (ev) => {
         state.errors = 0;
         let json;
         try { json = JSON.parse(ev.data); } catch (_p) { return; }
-        if (json.job_end) { finishChatJobStream(state, cidStr, String(json.status || 'done')); return; }
-        applyChatStreamEvent(state, cidStr, json);
+        if (state.stopping) { apply(json); return; }
+        // La réponse finit de s'écrire AVANT de se conclure : les dernières
+        // lettres ne doivent pas apparaître d'un bloc au remplacement final.
+        // Les évènements arrivés entre-temps gardent leur ordre.
+        if (state.held) { state.held.push(json); return; }
+        if ((json.done || json.job_end) && window.MiaStream.isWriting(state.el)) {
+            state.held = [json];
+            window.MiaStream.drain(state.el, () => {
+                const held = state.held || [];
+                state.held = null;
+                held.forEach(apply);
+            });
+            return;
+        }
+        // Repère de ce que l'écran a reçu (= montré, au clic Stop) : le
+        // serveur coupe la réponse enregistrée à cet évènement.
+        const seq = Number(ev.lastEventId || 0);
+        if (seq > 0) state.lastSeq = seq;
+        apply(json);
     };
     es.onerror = () => {
+        // Réponse arrêtée à l'écran : le flux n'est plus écouté que pour sa
+        // clôture. Une coupure n'a rien à défaire — surtout pas l'indicateur
+        // d'une réponse suivante déjà lancée dans la même conversation.
+        if (state.stopping) {
+            state.errors += 1;
+            if (state.errors >= 6) { try { es.close(); } catch (_e) {} }
+            return;
+        }
         if (state.done) { finishChatJobStream(state, cidStr, 'done'); return; }
         // EventSource se reconnecte seul ; on n'abandonne qu'après plusieurs
         // échecs d'affilée (session expirée, route injoignable).
@@ -1291,13 +1640,7 @@ function finishChatJobStream(state, cidStr, status) {
     // suivi perdu. On ne laisse JAMAIS le placeholder tourner indéfiniment.
     if (!state.done && !state.hadError && visible && state.el) {
         if (status === 'cancelled' || state.aborted) {
-            state.el.querySelector('.stream-phase')?.remove();
-            const marker = "\n\n" + t("*[Réponse interrompue par l'utilisateur]*");
-            if (!state.rawText.endsWith(marker)) {
-                state.rawText = (state.rawText || '').trimEnd() + marker;
-            }
-            state.el.dataset.raw = state.rawText;
-            finalizeAssistantMessage(state.el);
+            renderStoppedReply(state);
         } else if (state.rawText.trim() !== '') {
             state.el.querySelector('.stream-phase')?.remove();
             state.el.dataset.raw = state.rawText;
@@ -1677,6 +2020,113 @@ function updateLlmBadgeCredits(messageEl, credits) {
  * Change de conversation sans recharger la page.
  * Le stream en cours continue en arrière-plan.
  */
+/**
+ * Dit aux voisins (volet d'avancement d'un workflow) quelle conversation est
+ * affichée, et l'exécution de workflow dont elle est le fil (0 sinon).
+ */
+function announceConversation(convId, workflowRunId) {
+    const main = document.querySelector('.chat-main');
+    if (main) main.dataset.workflowRun = String(Number(workflowRunId) || 0);
+    try {
+        window.dispatchEvent(new CustomEvent('mia:conversation-shown', { detail: { id: String(convId || ''), workflowRunId: Number(workflowRunId) || 0 } }));
+    } catch (_e) { /* best-effort */ }
+}
+
+/**
+ * Cartes affichées qui n'attendent plus rien côté serveur — la validation d'un
+ * workflow arrêté depuis son volet, tranchée depuis la page de l'exécution,
+ * expirée : elles gardaient leurs boutons jusqu'au rechargement, où elles
+ * disparaissaient (recette du 2026-11-09). Une carte en cours de décision ici
+ * (un bouton désactivé : la réponse est en route) est laissée à sa réponse.
+ */
+function closeStaleDriveCards(wrap, pendingIds) {
+    wrap.querySelectorAll('.drive-confirm-card[data-action-id]').forEach((card) => {
+        if (pendingIds.has(String(card.dataset.actionId))) return;
+        if (['is-done', 'is-cancelled', 'is-failed', 'is-superseded', 'is-closed'].some((c) => card.classList.contains(c))) return;
+        if (card.querySelector('button:disabled')) return;
+        card.classList.add('is-superseded', 'is-closed');
+        card.querySelector('.drive-confirm-actions')?.remove();
+        card.querySelector('.wf-card-extra')?.remove();
+        card.querySelector('.voice-cmd-hint')?.remove();
+        card.querySelector('.mail-draft-panel')?.remove();
+        card.querySelectorAll('input, textarea, select').forEach((el) => { el.disabled = true; });
+        card.querySelectorAll('[contenteditable="true"]').forEach((el) => { el.setAttribute('contenteditable', 'false'); });
+        const statusEl = card.querySelector('.drive-confirm-status');
+        if (statusEl) {
+            statusEl.hidden = false;
+            statusEl.textContent = t('Cette carte n’attend plus de décision.');
+        }
+    });
+}
+
+let tailSyncRetry = null;
+function deferTailSync() {
+    if (tailSyncRetry) return;
+    tailSyncRetry = setTimeout(() => { tailSyncRetry = null; syncConversationTail(); }, 1500);
+}
+
+/**
+ * Remet la conversation affichée à jour SANS la redessiner : les messages
+ * écrits depuis par le moteur d'un workflow (résultat d'une condition, carte
+ * de validation, livrable) s'ajoutent à la fin, les cartes encore en attente
+ * apparaissent, et la réponse d'une nouvelle étape en train de s'écrire se
+ * rattache comme un flux ordinaire. Appelé par le volet d'avancement quand
+ * l'exécution a bougé. Rien pendant qu'une réponse s'écrit dans ce fil : elle
+ * se termine d'abord, puis la synchro est REJOUÉE (deferTailSync). Le volet ne
+ * la redemande qu'au changement de son état : le moteur pose la condition et
+ * la carte suivantes pendant que la réponse de l'étape finit de s'écrire ici,
+ * et sans ce rejeu elles n'apparaissaient qu'au rechargement (recette du
+ * 2026-11-09, carte rouverte après un renvoi).
+ */
+async function syncConversationTail() {
+    const cid = String(visibleConvId || '');
+    if (!cid) return;
+    const live = activeStreams.get(cid);
+    if (live && !live.done) { deferTailSync(); return; }
+    try {
+        const res = await fetchWithSessionGuard(`/chat/${cid}/json`, { headers: { 'X-CSRF-Token': csrfToken } });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (!data.ok || String(visibleConvId) !== cid) return;
+        const wrap = document.getElementById('chatMessages');
+        if (!wrap) return;
+        const known = new Set(Array.from(wrap.querySelectorAll('.message[data-message-id]')).map((el) => String(el.dataset.messageId)));
+        let added = 0;
+        for (const msg of (data.messages || [])) {
+            if (known.has(String(msg.id))) continue;
+            const files = (msg.files || []).map((f) => ({ name: f.name, type: f.type, previewUrl: null }));
+            appendMessage(msg.role, msg.content, files, false, { messageId: msg.id, llmBadge: msg.llm_badge || null, creditsUsed: Number(msg.credits_used ?? 0), responseMs: Number(msg.response_ms ?? 0), actions: msg.actions || null, plan: msg.plan || null, suite: msg.suite || null, offer: msg.offer || null, suggestion: typeof msg.suggestion === 'string' ? msg.suggestion : null, runHtml: msg.run_html || '', tablesHtml: msg.tables_html || '' });
+            added++;
+        }
+        const shown = new Set(Array.from(wrap.querySelectorAll('.drive-confirm-card[data-action-id]')).map((el) => String(el.dataset.actionId)));
+        const pendingList = Array.isArray(data.pending_actions) ? data.pending_actions : [];
+        const fresh = pendingList.filter((p) => !shown.has(String(p.id)));
+        if (fresh.length) renderPendingDriveActions(fresh);
+        closeStaleDriveCards(wrap, new Set(pendingList.map((p) => String(p.id))));
+        // Une étape vient de démarrer : sa réponse s'écrit, on s'y rattache.
+        const jr = await fetchWithSessionGuard('/jobs/active', { headers: { 'X-CSRF-Token': csrfToken } });
+        if (jr.ok && String(visibleConvId) === cid) {
+            const jd = await jr.json();
+            (jd.jobs || []).forEach((job) => {
+                if (job.type !== 'chat' || String(job.conversation_id) !== cid) return;
+                const st = activeStreams.get(cid);
+                if (st && !st.done) return;
+                const el = appendMessage('assistant', '', [], true);
+                updateStreamPhase(el, 'analyzing');
+                attachChatJob(job.id, job.conversation_id, el);
+                added++;
+            });
+        }
+        if (added || fresh.length) {
+            syncContinueButton();
+            scrollBottom(false);
+        }
+    } catch (_e) {
+        // Best-effort : le prochain sondage réessaiera.
+    }
+}
+window.miaSyncConversation = syncConversationTail;
+
 async function switchConversation(targetId) {
     if (!await ensureSessionActive()) return;
 
@@ -1688,6 +2138,7 @@ async function switchConversation(targetId) {
     closeVideoViewer();
     closeSourcesViewer();
     closeDeckViewer();
+    closeTablesViewer();
     // Une conversation vocale est attachée au fil qu'elle écoute : en changer
     // la termine (la réponse en cours, elle, continue côté serveur).
     window.stopVoiceChat?.();
@@ -1804,7 +2255,7 @@ async function switchConversation(targetId) {
                 type: f.type,
                 previewUrl: null, // Pas de base64 dans la réponse JSON (performance)
             }));
-            appendMessage(msg.role, msg.content, files, false, { messageId: msg.id, llmBadge: msg.llm_badge || null, creditsUsed: Number(msg.credits_used ?? 0), responseMs: Number(msg.response_ms ?? 0), actions: msg.actions || null, plan: msg.plan || null, suite: msg.suite || null, suggestion: typeof msg.suggestion === 'string' ? msg.suggestion : null });
+            appendMessage(msg.role, msg.content, files, false, { messageId: msg.id, llmBadge: msg.llm_badge || null, creditsUsed: Number(msg.credits_used ?? 0), responseMs: Number(msg.response_ms ?? 0), actions: msg.actions || null, plan: msg.plan || null, suite: msg.suite || null, offer: msg.offer || null, suggestion: typeof msg.suggestion === 'string' ? msg.suggestion : null, runHtml: msg.run_html || '', tablesHtml: msg.tables_html || '' });
         }
         // Cartes d'approbation encore en attente dans cette conversation.
         renderPendingDriveActions(Array.isArray(data.pending_actions) ? data.pending_actions : []);
@@ -1828,6 +2279,7 @@ async function switchConversation(targetId) {
             } else if (stream.rawText) {
                 // Rétablir la phase courante (ou cacher le bandeau si des chunks sont déjà arrivés)
                 newEl.querySelector('.stream-phase')?.remove();
+                scheduleStreamingMarkdownRender(newEl, { instant: true });
             } else if (stream.currentPhase) {
                 updateStreamPhase(newEl, stream.currentPhase);
             }
@@ -1852,6 +2304,16 @@ async function switchConversation(targetId) {
         // Brouillon laissé sur CETTE conversation → restauré (champ vide seulement).
         restoreComposerDraft();
 
+        // Question de MIA (mémoire) restée sans réponse sous la dernière réponse.
+        window.MiaMemoryQuestion?.attach(data.memory_question || null);
+
+        // Tables de travail : la puce de la zone de saisie est celle de CETTE conversation.
+        window.MiaTables?.setChip(data.tables?.chip || null);
+
+        // Conversation d'une exécution de workflow : le volet « Avancement »
+        // la suit (workflow-progress.js — la discussion d'abord).
+        announceConversation(targetStr, data.workflow_run_id || 0);
+
         scrollBottom(true);
 
     } catch (err) {
@@ -1875,7 +2337,16 @@ function addConvToSidebar(id, title, llm) {
     a.dataset.id = String(id);
     a.dataset.pinned = '0';
     a.dataset.ts = String(Math.floor(Date.now() / 1000));
-    a.innerHTML = `<span class="conv-title">${escHtml(title)}</span>`
+    // Marqueur devant le titre : même règle que les gabarits (chat/index.php,
+    // chat-shell-sidebar.php) — couleur de l'assistant choisi, sinon l'anneau
+    // neutre d'une conversation ordinaire. Couleur validée : elle part dans un style.
+    const color = String(profileSel?.selectedOptions?.[0]?.dataset.color || '');
+    let marker = '<span class="conv-plain-dot" aria-hidden="true"></span>';
+    if (profileSel?.value && /^#[0-9a-fA-F]{6}$/.test(color)) {
+        a.style.setProperty('--conv-color', color);
+        marker = '<span class="conv-color-bar"></span>';
+    }
+    a.innerHTML = marker + `<span class="conv-title">${escHtml(title)}</span>`
                 + `<button type="button" class="conv-menu-btn" data-conv-menu data-id="${id}" aria-label="Actions" aria-haspopup="true" aria-expanded="false">`
                 +   '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg>'
                 + '</button>';
@@ -2134,11 +2605,13 @@ async function togglePinConv(item, id) {
             el.classList.toggle('is-pinned', pinned);
             const existingIcon = el.querySelector('.conv-pin-icon');
             if (pinned && !existingIcon) {
-                const colorBar = el.querySelector('.conv-color-bar');
+                // Après le marqueur de la ligne (un seul : horloge, workflow,
+                // couleur d'assistant ou anneau neutre), comme dans les gabarits.
+                const marker = el.querySelector('.conv-scheduled-icon, .conv-workflow-icon, .conv-color-bar, .conv-plain-dot');
                 const tmp = document.createElement('span');
                 tmp.innerHTML = PIN_ICON_SVG;
                 const iconNode = tmp.firstChild;
-                if (colorBar) colorBar.after(iconNode);
+                if (marker) marker.after(iconNode);
                 else el.prepend(iconNode);
             } else if (!pinned && existingIcon) {
                 existingIcon.remove();
@@ -2150,81 +2623,13 @@ async function togglePinConv(item, id) {
     }
 }
 
-// Bucket de date d'une conversation (selon updated_at) → clé + libellé traduit.
-function convDateBucket(ts, now) {
-    const startOfDay = d => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
-    const day = 86400000;
-    const today = startOfDay(now);
-    const jour = startOfDay(ts);
-    if (jour === today)         return { key: 'today',     label: t('Aujourd’hui') };
-    if (jour === today - day)   return { key: 'yesterday', label: t('Hier') };
-    if (jour >  today - 7 * day)  return { key: '7d',  label: t('7 derniers jours') };
-    if (jour >  today - 30 * day) return { key: '30d', label: t('30 derniers jours') };
-    // Mois dans la langue de la page (« Août 2026 », « August 2026 »).
-    const lbl = ts.toLocaleDateString(document.documentElement.lang || 'fr', { month: 'long', year: 'numeric' });
-    return { key: 'm' + ts.getFullYear() + '-' + ts.getMonth(), label: lbl.charAt(0).toUpperCase() + lbl.slice(1) };
-}
-
-// Range la liste en GROUPES : Épinglées en tête, puis les autres par date
-// décroissante, une période par groupe (Aujourd'hui, Hier, 7 derniers jours…).
-// Chaque groupe est un bloc `.conv-group` portant son libellé : c'est ce qui
-// permet d'encadrer « Épinglées » et de prolonger chaque libellé de période
-// d'un filet. Rejouable à volonté (ajout, suppression, épinglage) : les items
-// sont repris où qu'ils soient, les anciens groupes retirés.
+// Range l'historique : Épinglées en tête, puis l'en-tête « Historique » et une
+// période par groupe (Aujourd'hui, Hier, 7 derniers jours…), chacune repliable.
+// SOURCE UNIQUE : sidebar-sections.js (partagé avec le volet des pages
+// d'espace), chargé juste après #convList. Rejouable à volonté (ajout,
+// suppression, épinglage).
 function regroupConvList(list) {
-    if (!list) return;
-    const items = Array.from(list.querySelectorAll('.conv-item'));
-    if (!items.length) {
-        list.querySelectorAll('.conv-group, .conv-group-label').forEach(g => g.remove());
-        return;
-    }
-
-    const pinned = items.filter(i => i.classList.contains('is-pinned'));
-    const others = items
-        .filter(i => !i.classList.contains('is-pinned'))
-        .sort((a, b) => (Number(b.dataset.ts) || 0) - (Number(a.dataset.ts) || 0));
-
-    const now  = new Date();
-    const frag = document.createDocumentFragment();
-    const openGroup = (key, label) => {
-        const group = document.createElement('div');
-        group.className = 'conv-group' + (key === 'pinned' ? ' conv-group--pinned' : '');
-        group.dataset.group = key;
-        group.setAttribute('role', 'group');
-        const head = document.createElement('div');
-        head.className = 'conv-group-label';
-        head.id = 'convGroup-' + key;
-        group.setAttribute('aria-labelledby', head.id);
-        if (key === 'pinned') head.insertAdjacentHTML('beforeend', PIN_ICON_SVG.replace('class="conv-pin-icon"', 'class="conv-group-pin"'));
-        const text = document.createElement('span');
-        text.textContent = label;
-        head.appendChild(text);
-        group.appendChild(head);
-        frag.appendChild(group);
-        return group;
-    };
-
-    if (pinned.length) {
-        const group = openGroup('pinned', t('Épinglées'));
-        // Nombre sur le plafond (Conversation::MAX_PINNED, posé par le gabarit).
-        const max = Number(list.dataset.maxPinned) || 0;
-        const count = document.createElement('span');
-        count.className = 'conv-group-count';
-        count.textContent = max ? `${pinned.length}/${max}` : String(pinned.length);
-        group.firstChild.appendChild(count);
-        pinned.forEach(i => group.appendChild(i));
-    }
-    let curKey = null;
-    let group  = null;
-    others.forEach(item => {
-        const ts = new Date((Number(item.dataset.ts) || 0) * 1000);
-        const b  = convDateBucket(ts, now);
-        if (b.key !== curKey) { group = openGroup(b.key, b.label); curKey = b.key; }
-        group.appendChild(item);
-    });
-    // Les items ont quitté les anciens groupes en rejoignant le fragment.
-    list.querySelectorAll('.conv-group, .conv-group-label').forEach(g => g.remove());
-    list.appendChild(frag);
+    if (list && window.MiaSidebarSections) window.MiaSidebarSections.regroup(list);
 }
 // Alias rétro-compat (anciens appels).
 function reorderConvList(list) { regroupConvList(list); }
@@ -2556,6 +2961,7 @@ document.addEventListener('click', async (e) => {
 function renderInlineError(contentEl, payload) {
     if (!contentEl) return;
     const p = payload || { title: t('Une erreur est survenue'), message: t('Réessayez dans un instant.') };
+    window.MiaStream.stop(contentEl);
     contentEl.__streamRenderFinalized = true;
     contentEl.classList.remove('streaming');
     contentEl.querySelector('.stream-phase')?.remove();
@@ -2628,28 +3034,124 @@ function renderDriveConfirmCard(target, data) {
             <img src="${escAttr(cardIcon)}" alt="" width="18" height="18">
             <div>
                 <div class="drive-confirm-title">${escHtml(String(data.action || 'Action'))}</div>
-                <div class="drive-confirm-sub">Votre approbation est requise — rien ne sera fait sans elle.</div>
+                <div class="drive-confirm-sub">${escHtml(t('Votre approbation est requise — rien ne sera fait sans elle.'))}</div>
             </div>
         </div>
         <div class="drive-confirm-file${visual ? ' has-visual' : ''}">${fileIcon} ${fileHtml}</div>
         <ul class="drive-confirm-impacts">${impacts}</ul>
         ${workflowRailHtml(data.rail)}
+        ${changeGridHtml(data.grille)}
         ${apercu}
         ${provenanceHtml(data)}
         ${voiceHintHtml(t('À la voix : « approuver » ou « annuler ».'))}
         <div class="drive-confirm-actions">
-            <button type="button" class="drive-confirm-btn drive-confirm-approve">Approuver</button>
+            <button type="button" class="drive-confirm-btn drive-confirm-approve">${escHtml(t('Approuver'))}</button>
             ${adjustLink}
-            <button type="button" class="drive-confirm-btn drive-confirm-cancel">Annuler</button>
+            <button type="button" class="drive-confirm-btn drive-confirm-cancel">${escHtml(t('Annuler'))}</button>
         </div>
+        ${workflowCardExtrasHtml(data)}
         <div class="drive-confirm-status" hidden></div>`;
     card.querySelector('.drive-confirm-approve').addEventListener('click', async () => {
         const issue = await resolveDriveAction(card, 'approve');
         openCreatedWorkflow(card, issue);
     });
     card.querySelector('.drive-confirm-cancel').addEventListener('click', () => resolveDriveAction(card, 'cancel'));
+    wireWorkflowCardExtras(card, data);
     target.appendChild(card);
     return card;
+}
+
+/**
+ * Grille « avant / après » d'une carte d'approbation (modification d'une
+ * table permanente, KbTableWrite::preview côté serveur) : quelques valeurs
+ * qui changent, puis combien d'autres. Libellés et lignes viennent du
+ * serveur, déjà traduits ; tout est échappé ici. Les deux dernières colonnes
+ * sont lues comme « avant » puis « après ».
+ */
+function changeGridHtml(grid) {
+    if (!grid || typeof grid !== 'object' || !Array.isArray(grid.lignes) || !grid.lignes.length) return '';
+    const heads = Array.isArray(grid.colonnes) ? grid.colonnes : [];
+    const width = heads.length;
+    const head = heads.map((h) => `<th scope="col">${escHtml(String(h))}</th>`).join('');
+    const rows = grid.lignes.slice(0, 12).map((line) => {
+        const cells = (Array.isArray(line) ? line : []).slice(0, width || 6).map((cell, i, all) => {
+            const cls = i === all.length - 1 ? ' class="is-after"' : (i === all.length - 2 ? ' class="is-before"' : '');
+            return `<td${cls}>${escHtml(String(cell == null ? '' : cell))}</td>`;
+        }).join('');
+        return `<tr>${cells}</tr>`;
+    }).join('');
+    const more = grid.suite ? `<p class="drive-confirm-grid-more">${escHtml(String(grid.suite))}</p>` : '';
+    return `<div class="drive-confirm-grid"><div class="drive-confirm-grid-scroll"><table>${head ? `<thead><tr>${head}</tr></thead>` : ''}<tbody>${rows}</tbody></table></div>${more}</div>`;
+}
+
+/**
+ * Validation d'un workflow : la décision se prend DANS la discussion
+ * (retour du 2026-11-04). En plus d'Approuver / Annuler, la carte porte ce
+ * que seule la page de l'exécution permettait :
+ *  - « Renvoyer avec une remarque » (l'étape est refaite avec la remarque) ;
+ *  - « Prendre une autre voie » quand MIA hésite sur une décision.
+ * Le bloc `wf` vient du serveur (WorkflowEngine::openGate / openRouteDoubt) ;
+ * une carte d'avant n'en a pas et garde « Ajuster ».
+ */
+function workflowCardExtrasHtml(data) {
+    const wf = data && typeof data.wf === 'object' ? data.wf : null;
+    if (!wf || !Number(wf.run)) return '';
+    if (wf.kind === 'route' && Array.isArray(wf.routes)) {
+        const others = wf.routes.filter((r) => r && r.key && r.key !== wf.suggested);
+        if (!others.length) return '';
+        return `<div class="wf-card-extra"><span class="wf-card-extra-title">${escHtml(t('Prendre une autre voie :'))}</span><div class="wf-card-routes">`
+            + others.map((r) => `<button type="button" class="drive-confirm-btn" data-wf-route="${escAttr(String(r.key))}">${escHtml(String(r.label || r.key))}</button>`).join('')
+            + `</div></div>`;
+    }
+    if (wf.kind === 'gate' && wf.can_return) {
+        return `<details class="wf-card-extra wf-card-return"><summary>${escHtml(t('Renvoyer avec une remarque'))}</summary>
+            <textarea rows="3" maxlength="2000" placeholder="${escAttr(t('Ce qu’il faut changer : la remarque guide la nouvelle version.'))}"></textarea>
+            <button type="button" class="drive-confirm-btn" data-wf-return>${escHtml(t('Renvoyer l’étape'))}</button></details>`;
+    }
+    return '';
+}
+
+function wireWorkflowCardExtras(card, data) {
+    const wf = data && typeof data.wf === 'object' ? data.wf : null;
+    if (!wf || !Number(wf.run)) return;
+    const send = async (body, doneText) => {
+        const statusEl = card.querySelector('.drive-confirm-status');
+        card.querySelectorAll('button, textarea').forEach((b) => { b.disabled = true; });
+        const fd = new FormData();
+        Object.keys(body).forEach((k) => fd.append(k, body[k]));
+        try {
+            const res = await fetchWithSessionGuard(`/workflows/runs/${Number(wf.run)}/gate`, { method: 'POST', headers: { 'X-CSRF-Token': csrfToken, Accept: 'application/json' }, body: fd });
+            const j = await res.json().catch(() => ({ ok: false }));
+            if (!j.ok) {
+                card.querySelectorAll('button, textarea').forEach((b) => { b.disabled = false; });
+                if (statusEl) { statusEl.hidden = false; statusEl.textContent = j.error || t('Réseau indisponible — réessayez.'); }
+                return;
+            }
+            card.classList.add('is-done');
+            card.querySelector('.drive-confirm-actions')?.remove();
+            card.querySelector('.wf-card-extra')?.remove();
+            if (statusEl) { statusEl.hidden = false; statusEl.textContent = doneText; }
+            try { window.dispatchEvent(new CustomEvent('mia:card-decided', { detail: { id: card.dataset.actionId || '' } })); } catch (_e) { /* best-effort */ }
+            window.miaSyncConversation?.();
+        } catch (err) {
+            card.querySelectorAll('button, textarea').forEach((b) => { b.disabled = false; });
+            if (err instanceof Error && err.message === 'SESSION_EXPIRED') return;
+            if (statusEl) { statusEl.hidden = false; statusEl.textContent = t('Réseau indisponible — réessayez.'); }
+        }
+    };
+    card.querySelectorAll('[data-wf-route]').forEach((b) => {
+        b.addEventListener('click', () => send({ decision: 'route', route: b.getAttribute('data-wf-route') || '' },
+            t('Voie choisie : « {voie} » — le workflow continue.', { voie: b.textContent || '' })));
+    });
+    const ret = card.querySelector('[data-wf-return]');
+    if (ret) {
+        ret.addEventListener('click', () => {
+            const ta = card.querySelector('.wf-card-return textarea');
+            const remark = (ta?.value || '').trim();
+            if (!remark) { ta?.focus(); return; }
+            send({ decision: 'return', remark }, t('Renvoyée à l’étape avec votre remarque : le workflow la refait.'));
+        });
+    }
 }
 
 /**
@@ -2680,7 +3182,7 @@ function openCreatedWorkflow(card, issue) {
  */
 function workflowRailHtml(rail) {
     if (!Array.isArray(rail) || !rail.length) return '';
-    const kinds = ['start', 'step', 'action', 'create', 'condition', 'route', 'loop', 'gate', 'wait', 'notify', 'stop', 'end'];
+    const kinds = ['start', 'step', 'action', 'create', 'condition', 'route', 'loop', 'gate', 'wait', 'notify', 'stop', 'call', 'end'];
     const items = rail.slice(0, 24).map((l) => {
         const kind = kinds.includes(String(l && l.kind)) ? String(l.kind) : 'step';
         const sub = l && l.sub ? `<small>${escHtml(String(l.sub))}</small>` : '';
@@ -2736,6 +3238,25 @@ async function runScheduledTaskNow(taskId, btn) {
         if (err instanceof Error && err.message === 'SESSION_EXPIRED') return;
         showToast(t('Réseau indisponible — réessayez.'), 'error');
     }
+}
+
+/**
+ * Carte d'approbation redessinée sur place avec un aperçu à jour (pièce d'un
+ * workflow mise à jour depuis la discussion, cf. WorkflowChat côté serveur).
+ * Rien si la carte est déjà tranchée ou si une décision est en route.
+ */
+function refreshDriveCard(id, preview) {
+    const old = document.querySelector(`.drive-confirm-card[data-action-id="${Number(id)}"]`);
+    if (!old || !old.parentElement || old.classList.contains('is-done') || old.classList.contains('is-superseded')) return;
+    // Une décision est en route (bouton désactivé) : sa réponse fera foi.
+    if (old.querySelector('.drive-confirm-actions button:disabled')) return;
+    const fresh = renderDriveConfirmCard(document.createElement('div'), Object.assign({}, preview || {}, { id: Number(id) }));
+    if (!fresh) return;
+    if (old.querySelector('.drive-confirm-apercu')?.open) {
+        fresh.querySelector('.drive-confirm-apercu')?.setAttribute('open', '');
+    }
+    old.replaceWith(fresh);
+    syncDriveBatchBar();
 }
 
 /**
@@ -2828,6 +3349,8 @@ async function resolveDriveAction(card, decision) {
  * rechargement, où la carte, elle, a disparu.
  */
 function applyDriveDecision(card, decision, data) {
+    // Une carte tranchée peut relancer un workflow : son volet se relit.
+    try { window.dispatchEvent(new CustomEvent('mia:card-decided', { detail: { id: card.dataset.actionId || '' } })); } catch (_e) { /* best-effort */ }
     const statusEl = card.querySelector('.drive-confirm-status');
     if (statusEl) statusEl.hidden = false;
     const actionsEl = card.querySelector('.drive-confirm-actions');
@@ -2955,8 +3478,10 @@ function showDriveOutcome(data) {
     const m = data && data.message;
     if (!m || !m.content) return;
     if (m.id && document.querySelector(`#chatMessages .message[data-message-id="${Number(m.id)}"]`)) return;
-    appendMessage('assistant', String(m.content), [], false, { messageId: m.id || null });
-    scrollBottom();
+    const el = appendMessage('assistant', String(m.content), [], false, { messageId: m.id || null, runHtml: m.run_html || '' });
+    // Carte de réalisation : ramenée sous les yeux, avec un bref halo.
+    if (m.run_html) window.MiaNativeRun?.reveal(el);
+    else scrollBottom();
 }
 
 /**
@@ -3770,6 +4295,9 @@ async function runVoiceCardCommand(card, cmd, say) {
 
     if (!card.classList.contains('mail-draft-card')) {
         if (cmd.act === 'reask') return ['vc_say_approve'];
+        // Seuls ces deux ordres décident d'une carte : tout autre (« lis-le »,
+        // traité par la conversation) ne doit jamais passer pour un refus.
+        if (cmd.act !== 'approve' && cmd.act !== 'cancel') return [];
         const decision = cmd.act === 'approve' ? 'approve' : 'cancel';
         const cards = cmd.all
             ? pendingActionCards().filter(c => !c.classList.contains('mail-draft-card'))
@@ -3905,6 +4433,14 @@ function appendMessage(role, text, files = [], streaming = false, options = {}) 
     if (messageId) div.dataset.messageId = String(messageId);
     let hasRichAttachment = false;
 
+    // Carte de réalisation d'une « Version soignée » (NativeDeckRun) : HTML
+    // rendu par le serveur, le même gabarit que message.php. Comme une
+    // création, elle porte ses propres actions (Arrêter, Télécharger).
+    if (role === 'assistant' && options?.runHtml) {
+        hasRichAttachment = true;
+        body.insertAdjacentHTML('beforeend', String(options.runHtml));
+    }
+
     // Affichage des fichiers joints
     files.forEach(f => {
         if (f.previewUrl) {
@@ -3990,6 +4526,9 @@ function appendMessage(role, text, files = [], streaming = false, options = {}) 
             renderPlanCard(body, options.plan);
         }
         if (options?.suite) div.dataset.suite = String(options.suite);
+        // Offre « Version rapide / soignée » : genre du fichier (PolishOffer).
+        // NOTE SYNCHRONISATION : templates/partials/message.php pose le même attribut.
+        if (options?.offer) div.dataset.polishOffer = String(options.offer);
         // Suggestion de suite déjà calculée ('' = aucune suite) : relue par
         // syncComposerSuggestion() sans nouvel appel. Même attribut que message.php.
         if (typeof options?.suggestion === 'string') div.dataset.suggestion = options.suggestion;
@@ -4009,6 +4548,11 @@ function appendMessage(role, text, files = [], streaming = false, options = {}) 
     div.appendChild(avatar);
     div.appendChild(body);
     wrap.appendChild(div);
+    if (options?.runHtml) window.MiaNativeRun?.hydrate(div);
+    // Tables de travail établies par cette réponse : une ligne discrète avec
+    // un bouton « Voir » (jamais la grille), rendue par le serveur — le même
+    // gabarit que message.php (work-table-line.php).
+    if (role === 'assistant' && options?.tablesHtml) window.MiaTables?.place(div, options.tablesHtml);
 
     // Badge LLM (provider + modèle [+ crédits]) sous bulle assistant si fourni
     if (role === 'assistant' && options?.llmBadge) {
@@ -4068,20 +4612,38 @@ function scrollBottom(force = false) {
     updateResumeFollowBtn();
 }
 
-function scheduleStreamingMarkdownRender(contentEl) {
-    if (!contentEl || contentEl.__streamRenderScheduled || contentEl.__streamRenderFinalized) return;
-    contentEl.__streamRenderScheduled = true;
-
-    requestAnimationFrame(() => {
-        contentEl.__streamRenderScheduled = false;
-        if (contentEl.__streamRenderFinalized) return;
-        const raw = contentEl.dataset.raw || '';
-        const mdEl = contentEl.querySelector('.md-render');
-        if (!mdEl) return;
-        mdEl.innerHTML = renderMarkdown(raw, { withCodeActions: false });
-        scrollBottom();
-    });
+/**
+ * Suit le texte qui s'écrit : le fil GLISSE vers le bas au lieu de sauter d'une
+ * ligne à chaque retour à la ligne. Rend true tant qu'il reste du chemin. Pas
+ * de `scroll-behavior: smooth` ici (la règle de .chat-messages) : relancée à
+ * chaque image, son animation ne se terminerait jamais. L'écart reste sous
+ * FOLLOW_BOTTOM_THRESHOLD, sinon le fil se croirait abandonné par l'utilisateur.
+ */
+function glideToBottom(dt) {
+    if (!chatMsgs || !followBottom) return false;
+    const bottom = chatMsgs.scrollHeight - chatMsgs.clientHeight;
+    const gap = bottom - chatMsgs.scrollTop;
+    if (gap <= 0.5) return false;
+    const step = Math.max(gap * (1 - Math.exp(-dt / 80)), 0.6);
+    const top = Math.max(chatMsgs.scrollTop + step, bottom - FOLLOW_BOTTOM_THRESHOLD + 20);
+    chatMsgs.scrollTo({ top: top, behavior: 'instant' });
+    return true;
 }
+
+/**
+ * Le texte de la bulle a changé (data-raw). L'écriture elle-même — lettre à
+ * lettre, au rythme du modèle — vit dans stream-render.js ; `instant` montre
+ * d'un coup ce qui est déjà là (retour sur une conversation en cours).
+ */
+function scheduleStreamingMarkdownRender(contentEl, options = {}) {
+    if (!contentEl) return;
+    window.MiaStream.feed(contentEl, contentEl.dataset.raw || '', options);
+}
+
+window.MiaStream.configure({
+    render: (text) => renderMarkdown(text, { withCodeActions: false }),
+    follow: glideToBottom,
+});
 
 // ---- Markdown ----
 /**
@@ -4678,8 +5240,10 @@ function neutralizeClipboardStyles(wrapper) {
     window.MiaChoices?.flattenForExport(wrapper);
     externalImagesToLinks(wrapper);
 
-    wrapper.querySelectorAll('.btn-copy-code, .code-block-header, .msg-actions, .msg-trace, .msg-error-actions, .msg-error-contacts')
+    wrapper.querySelectorAll('.stream-cursor, .stream-phase, .btn-copy-code, .code-block-header, .msg-tables, .msg-actions, .msg-trace, .memq-card, .memq-done, .msg-error-actions, .msg-error-contacts')
         .forEach(el => el.remove());
+    // Cases « Embarquer » posées sous une question : de l'interface, pas du contenu.
+    wrapper.querySelectorAll('.file-refs.is-offer').forEach(el => el.remove());
 
     wrapper.style.color = '#000000';
     wrapper.style.background = 'transparent';
@@ -5064,6 +5628,7 @@ const STREAM_PHASE_LABELS = {
     mscalendar_search:         t('Consultation de votre agenda Outlook…'),
     mscalendar_read:           t('Lecture de l\'évènement Outlook…'),
     mscalendar_slots:          t('Recherche de créneaux libres dans Outlook…'),
+    mscalendar_rooms:          t('Recherche de salles de réunion…'),
     web_read:                  t('Lecture de la page web…'),
     conversation_search:       t('Recherche dans vos anciennes conversations…'),
     // Fenêtre de contexte : longue conversation résumée, fichier ancien relu,
@@ -5074,6 +5639,12 @@ const STREAM_PHASE_LABELS = {
     emails_search:             t('Recherche dans vos emails Gmail et Outlook…'),
     agendas_search:            t('Consultation de vos agendas Google et Outlook…'),
     everywhere_search:         t('Recherche dans toutes vos sources…'),
+    // Tables de travail (WorkTableTools) : collecte exhaustive d'une source,
+    // puis croisements, filtres et comptages faits par le serveur.
+    table_collect:             t('Collecte des éléments dans une liste…'),
+    table_work:                t('Travail sur les tables de travail…'),
+    table_enrich:              t('Enrichissement de la table…'),
+    table_act:                 t('Préparation des actions sur la table…'),
     tasks_read:                t('Consultation de vos tâches Google…'),
     mstodo_read:               t('Consultation de vos tâches Microsoft To Do…'),
     slack_search:              t('Recherche dans vos conversations Slack…'),
@@ -5370,6 +5941,9 @@ function syncChoicePrompts() {
 
         const answerText = answer ? (answer.querySelector('.msg-content')?.textContent || '') : '';
         window.MiaChoices.applyState(card, state, answerText);
+        // Question « Version rapide / soignée » posée avant l'écriture : les
+        // cases du modèle et du logo de l'entreprise se posent dessous.
+        if (msg && msg.dataset.polishOffer) window.MiaFiles?.offerRefs?.(card, msg.dataset.polishOffer, state);
     });
 }
 
@@ -5430,16 +6004,22 @@ chatMsgs?.addEventListener('keydown', (e) => {
 });
 
 /**
- * Pastille « MIA pour vous » : confirme visuellement ce qui vient d'être ajouté
- * à la mémoire long terme. Posée sous la bulle (hors .msg-content, re-rendu à
- * chaque delta markdown, qui l'écraserait). Éphémère : la confirmation durable
- * est dans le texte de la réponse, persisté en base.
- * payload = {faits: [...], doublons: n, plein: bool}
+ * Pastille « Mémoire » : confirme visuellement ce qui vient de changer dans la
+ * mémoire de l'utilisateur — ajouté, corrigé, retiré (avec « Annuler »), ou en
+ * attente de sa confirmation. Posée sous la bulle (hors .msg-content, re-rendu
+ * à chaque delta markdown, qui l'écraserait). Éphémère : la confirmation
+ * durable est dans le texte de la réponse, persisté en base.
+ * payload = {faits, modifies, oublies: [{content, theme}], proposes, doublons, plein}
+ * `titre`/`lien`/`lien_texte` : la même pastille sert les règles des tâches.
  */
 function renderMemoryChip(bodyEl, payload) {
     if (!bodyEl || !payload) return;
-    const faits = Array.isArray(payload.faits) ? payload.faits : [];
-    if (faits.length === 0 && !payload.plein) return;
+    const strings = (v) => (Array.isArray(v) ? v.map(x => String(x)) : []);
+    const faits = strings(payload.faits);
+    const modifies = strings(payload.modifies);
+    const proposes = strings(payload.proposes);
+    const oublies = Array.isArray(payload.oublies) ? payload.oublies.filter(o => o && o.content) : [];
+    if (!faits.length && !modifies.length && !proposes.length && !oublies.length && !payload.plein) return;
 
     const chip = document.createElement('div');
     chip.className = 'memory-chip';
@@ -5447,34 +6027,71 @@ function renderMemoryChip(bodyEl, payload) {
         + 'stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
         + '<path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>';
 
-    const title = document.createElement('div');
-    title.className = 'memory-chip-title';
-    // `titre`/`lien` : la même pastille sert la mémoire long terme et les
-    // règles d'organisation des tâches, qui ne se gèrent pas au même endroit.
-    // Absents = mémoire long terme, le cas d'origine.
-    const titreOk = String(payload.titre || t('Ajouté à « MIA pour vous »'));
-    title.innerHTML = icon + '<span></span>';
-    title.querySelector('span').textContent = payload.plein && faits.length === 0
-        ? (payload.titre ? titreOk + t(' — liste pleine, rien enregistré') : t('Mémoire pleine — rien enregistré'))
-        : titreOk;
-    chip.appendChild(title);
-
-    if (faits.length > 0) {
+    function group(titleText, items, withIcon) {
+        const title = document.createElement('div');
+        title.className = 'memory-chip-title';
+        title.innerHTML = (withIcon ? icon : '') + '<span></span>';
+        title.querySelector('span').textContent = titleText;
+        chip.appendChild(title);
+        if (!items.length) return null;
         const list = document.createElement('ul');
         list.className = 'memory-chip-list';
-        faits.forEach(fait => {
+        items.forEach(text => {
             const li = document.createElement('li');
-            li.textContent = fait;
+            li.textContent = text;
             list.appendChild(li);
         });
         chip.appendChild(list);
+        return list;
+    }
+
+    let first = true;
+    const next = () => { const f = first; first = false; return f; };
+    if (faits.length || (payload.plein && !modifies.length && !oublies.length && !proposes.length)) {
+        const titre = String(payload.titre || t('Ajouté à votre mémoire'));
+        group(payload.plein && !faits.length
+            ? (payload.titre ? titre + t(' — liste pleine, rien enregistré') : t('Mémoire pleine — rien enregistré'))
+            : titre, faits, next());
+    }
+    if (modifies.length) group(t('Corrigé dans votre mémoire'), modifies, next());
+    if (proposes.length) group(t('À confirmer dans votre mémoire'), proposes, next());
+    if (oublies.length) {
+        const list = group(t('Retiré de votre mémoire'), oublies.map(o => String(o.content)), next());
+        // « Annuler » : le souvenir revient tel quel, comme écrit par la personne.
+        if (list) {
+            Array.from(list.children).forEach((li, i) => {
+                const undo = document.createElement('button');
+                undo.type = 'button';
+                undo.className = 'memory-chip-undo';
+                undo.textContent = t('Annuler');
+                undo.addEventListener('click', async () => {
+                    undo.disabled = true;
+                    const fd = new FormData();
+                    fd.append('content', String(oublies[i].content));
+                    fd.append('theme', String(oublies[i].theme || 'autre'));
+                    try {
+                        const res = await fetch('/settings/memory', {
+                            method: 'POST',
+                            headers: { 'X-CSRF-Token': csrfToken, 'X-Requested-With': 'XMLHttpRequest', 'Accept': 'application/json' },
+                            body: fd,
+                        });
+                        const data = await res.json().catch(() => null);
+                        if (res.ok && data && data.ok) {
+                            undo.replaceWith(document.createTextNode(' — ' + t('rétabli')));
+                            return;
+                        }
+                    } catch (_) {}
+                    undo.disabled = false;
+                    showToast(t('Impossible de rétablir ce souvenir.'), 'error');
+                });
+                li.append(' ', undo);
+            });
+        }
     }
 
     const link = document.createElement('a');
     link.className = 'memory-chip-link';
-    // Ancre sur la carte « MIA pour vous » : la page porte trois sections,
-    // le lien doit poser l'utilisateur devant la liste, pas en tête de page.
-    link.href = payload.lien || '/settings/ai#memoryCard';
+    link.href = payload.lien || '/settings/memory';
     link.textContent = payload.lien_texte || t('Gérer ma mémoire');
     chip.appendChild(link);
 
@@ -5484,12 +6101,11 @@ function renderMemoryChip(bodyEl, payload) {
 function buildStreamPhaseEl(phase) {
     const wrap = document.createElement('div');
     wrap.className = 'stream-phase';
-    const dot = document.createElement('span');
-    dot.className = 'stream-phase-dot';
+    // Trois points qui se rejoignent au centre : main.css (.stream-converge).
+    wrap.innerHTML = '<span class="stream-converge" aria-hidden="true"><span><span></span></span><span><span></span></span><span><span></span></span></span>';
     const label = document.createElement('span');
     label.className = 'stream-phase-label';
     label.textContent = STREAM_PHASE_LABELS[phase] || STREAM_PHASE_LABELS.analyzing;
-    wrap.appendChild(dot);
     wrap.appendChild(label);
     return wrap;
 }
@@ -5500,10 +6116,17 @@ function updateStreamPhase(contentEl, phase) {
     const text = STREAM_PHASE_LABELS[phase];
     if (label && text) {
         label.textContent = text;
+    } else if (text && contentEl.classList.contains('streaming') && contentEl.dataset.raw) {
+        // MIA repart chercher après avoir commencé à écrire (un outil, une
+        // lecture) : la ligne de phase revient sous le texte, le fragment suivant la
+        // retire. Sans elle, la réponse semblerait s'être arrêtée.
+        contentEl.appendChild(buildStreamPhaseEl(phase));
+        scrollBottom();
     }
 }
 
 function finalizeAssistantMessage(contentEl) {
+    window.MiaStream.stop(contentEl);
     contentEl.__streamRenderFinalized = true;
     contentEl.classList.remove('streaming');
     contentEl.querySelector('.stream-phase')?.remove();
@@ -5527,7 +6150,9 @@ function finalizeAssistantMessage(contentEl) {
 
     const mdEl = contentEl.querySelector('.md-render');
     if (mdEl) {
-        mdEl.innerHTML = renderMarkdown(raw);
+        // Mise à jour par différence : ce qui est déjà écrit ne clignote pas,
+        // une image affichée ne se recharge pas.
+        window.MiaStream.swap(mdEl, renderMarkdown(raw));
         hydrateGeneratedFiles(mdEl);
         initCodeCopyBtns(contentEl);
         renderMermaidBlocks(contentEl);
@@ -5806,6 +6431,7 @@ document.getElementById('chatMessages')?.addEventListener('click', async e => {
                     }
                     if (json.done) {
                         sawDone = true;
+                        await new Promise((written) => window.MiaStream.drain(newContent, written));
                         // La trace affichée était celle de la réponse REMPLACÉE :
                         // elle cède la place à celle de la nouvelle (recherches
                         // dans les bases, modèle de secours) — ou disparaît.
@@ -5940,7 +6566,27 @@ function handleFilesAdded(newFiles) {
     fileInput.value = '';
 }
 
+// Fichier trop lourd pour sa nature : refusé AVANT l'envoi (inutile de faire
+// monter 80 Mo pour se l'entendre dire), avec l'explication du serveur
+// (window.FILE_UPLOAD_LIMITS ← FileExtractor::clientUploadLimits). La nature
+// se devine ici par l'extension ; le serveur, qui lit le contenu, reste juge.
+function fileTooLargeMessage(file, cfg) {
+    if (!cfg || !cfg.limits || !file) return null;
+    const ext = String(file.name || '').toLowerCase().split('.').pop();
+    const kind = ext === 'pdf' ? 'pdf' : (ext === 'pptx' ? 'pptx' : 'other');
+    const max = cfg.limits[kind];
+    if (!max || !(file.size > max)) return null;
+    const size = (file.size / (1024 * 1024)).toFixed(1).replace('.', cfg.decimal || ',') + ' ' + (cfg.unit || 'Mo');
+    const head = String(cfg.head || '').split('{nom}').join(file.name).split('{taille}').join(size);
+    return head + ' ' + String((cfg.rules || {})[kind] || '');
+}
+
 async function uploadFile(file) {
+    const tooLarge = fileTooLargeMessage(file, window.FILE_UPLOAD_LIMITS);
+    if (tooLarge) {
+        alert(tooLarge);
+        return;
+    }
     const chip = createChip(file.name, file.type);
 
     // Fige le contenu en mémoire AVANT tout await réseau. Une File issue d'un
@@ -6029,6 +6675,18 @@ function clearFiles() {
     fileChips.innerHTML = '';
     fileChips.style.display = 'none';
     showFilesHint('');
+}
+
+/** Remet en place des fichiers déjà envoyés : le message n'a pas pu partir. */
+function restoreFiles(files) {
+    files.forEach((file) => {
+        const chip = createChip(file.name, file.type || '');
+        chip.dataset.token = file.token;
+        chip.querySelector('.chip-spinner')?.remove();
+        const thumb = chip.querySelector('.chip-thumb');
+        if (thumb && file.previewUrl) { thumb.src = file.previewUrl; thumb.style.display = ''; }
+        pendingFiles.push(file);
+    });
 }
 
 function showFilesHint(msg) {
@@ -6304,7 +6962,7 @@ window.fitComposerPopover = function (panel) {
     panel.style.setProperty('--composer-popover-room', Math.max(160, Math.floor(place)) + 'px');
 };
 (function () {
-    const refit = () => ['plusMenuPanel', 'assistantPickerList', 'kbPickerPanel']
+    const refit = () => ['plusMenuPanel', 'assistantPickerList', 'kbPickerPanel', 'llmPickerList']
         .forEach(id => window.fitComposerPopover(document.getElementById(id)));
     window.visualViewport?.addEventListener('resize', refit);
     window.addEventListener('resize', refit);
@@ -6319,13 +6977,17 @@ window.fitComposerPopover = function (panel) {
     btn.addEventListener('click', e => {
         e.stopPropagation();
         window.closeComposerPopovers('llm');
-        list.style.display = list.style.display === 'none' ? '' : 'none';
+        const willOpen = list.style.display === 'none';
+        list.style.display = willOpen ? '' : 'none';
+        // Téléphone : la liste est posée au-dessus de la pilule (main.css),
+        // sa hauteur suit la place qui y reste.
+        if (willOpen) window.fitComposerPopover(list);
     });
 
     // Applique un modèle au chat (champ caché + chip + barres d'info).
     // Extrait du handler de clic : la modale « changer de modèle » des
     // connecteurs applique exactement la même bascule.
-    const applyItem = (item) => {
+    const applyItem = (item, keepOpen = false) => {
         const val   = item.dataset.value;
         const logo  = item.dataset.logo;
         const label = item.dataset.label;
@@ -6334,7 +6996,7 @@ window.fitComposerPopover = function (panel) {
         btn.querySelector('span').textContent = label;
         list.querySelectorAll('.llm-picker-item').forEach(i => i.classList.remove('active'));
         item.classList.add('active');
-        list.style.display = 'none';
+        if (!keepOpen) list.style.display = 'none';
         updateLlmInfoBar(val);
         updateTopToolbarMeta({ modelLabel: label, modelCost: item.dataset.cost || 0, modelCostTitle: item.dataset.costTitle || '', modelLogo: item.dataset.logo || '' });
         updateImageToggle(val);
@@ -6356,6 +7018,75 @@ window.fitComposerPopover = function (panel) {
     list.querySelectorAll('.llm-picker-item:not(.modal-llm-item)').forEach(item => {
         item.addEventListener('click', () => applyItem(item));
     });
+
+    // Étoile « modèle par défaut » (LlmPreference, POST /settings/llm-default) :
+    // un geste, enregistré aussitôt sur le compte. Toucher l'étoile d'un modèle
+    // en fait le sien ; toucher celle du sien revient au modèle de
+    // l'organisation. Elle ne change PAS le modèle de la conversation affichée
+    // — sauf sur une page d'accueil encore vide : sa conversation est
+    // justement la prochaine nouvelle. Textes traduits par le serveur
+    // (window.LLM_PREFERENCE.texts), {model} remplacé ici.
+    const pref = window.LLM_PREFERENCE || null;
+    const itemFor = (value) => Array.from(list.querySelectorAll('.llm-picker-item[data-value]'))
+        .find(i => i.dataset.value === value) || null;
+    const prefText = (key, label) => String(pref?.texts?.[key] || '').replace('{model}', label);
+    const paintStars = (state) => {
+        if (!pref || !state) return;
+        pref.mine      = state.mine || '';
+        pref.effective = state.effective || '';
+        list.querySelectorAll('.llm-picker-item[data-value]').forEach(item => {
+            const value     = item.dataset.value;
+            const isMine    = pref.mine !== '' && value === pref.mine;
+            const isDefault = value === pref.effective;
+            item.classList.toggle('is-mine', isMine);
+            item.classList.toggle('is-default', isDefault);
+            const star = item.querySelector('[data-llm-fav]');
+            if (!star) return;
+            const text = prefText(isMine ? 'mine' : (isDefault ? 'org' : 'set'), item.dataset.label || value);
+            star.title = text;
+            star.setAttribute('aria-label', text);
+            star.setAttribute('aria-pressed', isMine ? 'true' : 'false');
+        });
+    };
+    const onStar = async (e) => {
+        // Avant le clic de la ligne (qui choisirait le modèle) et la fermeture
+        // de la liste par le document.
+        e.preventDefault();
+        e.stopPropagation();
+        const star = e.currentTarget;
+        const item = star.closest('.llm-picker-item');
+        if (!pref || !item || star.disabled) return;
+        const value  = item.dataset.value;
+        const wanted = value === pref.mine ? '' : value;
+        const before = pref.effective;
+        star.disabled = true;
+        try {
+            const fd = new FormData();
+            fd.append('llm', wanted);
+            const res  = await fetchWithSessionGuard('/settings/llm-default', {
+                method: 'POST',
+                headers: { 'X-CSRF-Token': csrfToken, 'Accept': 'application/json' },
+                body: fd,
+            });
+            const data = await res.json().catch(() => null);
+            if (!res.ok || !data?.ok) throw new Error(data?.error || '');
+            paintStars(data.state);
+            const effective = itemFor(pref.effective);
+            const label     = effective?.dataset.label || data.label || pref.effective;
+            showToast(prefText(wanted === '' ? 'reset' : 'saved', label), 'success');
+            // Page d'accueil encore vide : le nouveau défaut s'applique à SA
+            // conversation, sauf si la personne y a déjà choisi un autre modèle.
+            const onEmptyHome = !document.getElementById('convId')?.value
+                && !document.querySelector('#chatMessages .message');
+            if (onEmptyHome && effective && inp.value === before) applyItem(effective, true);
+        } catch (err) {
+            if (err instanceof Error && err.message === 'SESSION_EXPIRED') return;
+            showToast((err instanceof Error && err.message) || prefText('error', ''), 'error');
+        } finally {
+            star.disabled = false;
+        }
+    };
+    list.querySelectorAll('[data-llm-fav]').forEach(star => star.addEventListener('click', onStar));
 
     document.addEventListener('click', () => { list.style.display = 'none'; });
 
@@ -6858,8 +7589,9 @@ function updateImageToggle(llmKey) {}
     bindActivate(document.getElementById('plusMenuTakePhoto'), () => { close(); document.getElementById('cameraInput')?.click(); });
 
     // Options : #webAccessToggle et #driveAccessToggle font foi (lus à
-    // l'envoi). Point ambre sur le « + » quand un réglage s'écarte du défaut
-    // (Internet OFF, ou l'un des connecteurs personnels ON).
+    // l'envoi). Les sources allumées (Internet compris) se lisent dans la
+    // puce à côté du « + » (syncConnectorSummary) ; le point ambre du « + »
+    // ne signale plus qu'une connexion à reconnecter.
     const webToggle      = document.getElementById('webAccessToggle');
     const driveToggle    = document.getElementById('driveAccessToggle');
     const gmailToggle    = document.getElementById('gmailAccessToggle');
@@ -6914,6 +7646,21 @@ function updateImageToggle(llmKey) {}
         try { localStorage.setItem(CONNECTOR_PREFS_KEY, JSON.stringify(connectorPrefs)); }
         catch { /* quota plein ou navigation privée : pas de persistance, tant pis */ }
     };
+    // Connecteur RELIÉ depuis le dernier affichage du chat (le serveur ne le
+    // dit qu'une fois, cf. ConnectorRegistry::takeJustConnected) : relier un
+    // service, c'est vouloir s'en servir — il devient une préférence
+    // « allumé », que la restauration ci-dessous applique avec ses garde-fous
+    // (ligne indisponible ignorée ; modèle sans outils : allumage différé au
+    // retour d'un modèle compatible). Écrite directement : saveConnectorPrefs
+    // relirait les interrupteurs, encore éteints à ce stade. L'éteindre
+    // ensuite est un choix comme un autre, mémorisé comme d'habitude.
+    const justConnected = (Array.isArray(window.CONNECTORS_JUST_CONNECTED) ? window.CONNECTORS_JUST_CONNECTED : [])
+        .filter(name => name !== 'web' && name !== 'auto' && connectorToggles[name]);
+    if (justConnected.length) {
+        justConnected.forEach(name => { connectorPrefs[name] = true; });
+        try { localStorage.setItem(CONNECTOR_PREFS_KEY, JSON.stringify(connectorPrefs)); }
+        catch { /* navigation privée : allumé pour cette page seulement */ }
+    }
     // Restauration : jamais sur une ligne indisponible.
     const restoreConnectorToggle = (name) => {
         const bascule = connectorToggles[name];
@@ -6940,10 +7687,12 @@ function updateImageToggle(llmKey) {}
         const teamsOn    = !!teamsToggle?.checked;
         const slackOn    = !!slackToggle?.checked;
         const autoOn     = !!autoToggle?.checked;
-        // Point ambre : Internet coupé, ou une connexion à reconnecter. Les
-        // connecteurs allumés (et « Laisser MIA choisir ») ont désormais leur
-        // propre témoin à côté du « + » : leurs logos (syncConnectorSummary).
-        if (optionsDot) optionsDot.hidden = webOn && reconnectRows.length === 0;
+        // Point ambre : une connexion à reconnecter, rien d'autre. Internet
+        // coupé ne l'allume plus : les sources allumées — Recherche Internet
+        // en tête, puis les connecteurs et « Laisser MIA choisir » — ont leur
+        // propre témoin à côté du « + », la puce (syncConnectorSummary) ; une
+        // source coupée en sort, simplement.
+        if (optionsDot) optionsDot.hidden = reconnectRows.length === 0;
         const notes = [];
         if (!webOn)      notes.push(t('Recherche Internet désactivée'));
         if (driveOn)     notes.push(t('Google Drive activé'));
@@ -6995,12 +7744,17 @@ function updateImageToggle(llmKey) {}
         revealFold();
     });
 
+    // Recherche Internet : la ligne du menu (absente du DOM quand l'admin l'a
+    // masquée) fournit son globe et son nom traduit — aucune copie à tenir.
+    const webRow = document.getElementById('plusMenuWebRow');
     function syncConnectorSummary() {
-        if (!foldBody) { if (connChip) connChip.hidden = true; return; }
-        const rows   = Array.from(foldBody.querySelectorAll('.plus-menu-row[data-connector]'))
-            .filter(r => r.dataset.disabled !== '1' && r.dataset.connector !== 'auto');
+        const rows   = foldBody ? Array.from(foldBody.querySelectorAll('.plus-menu-row[data-connector]'))
+            .filter(r => r.dataset.disabled !== '1' && r.dataset.connector !== 'auto') : [];
         const on     = rows.filter(r => r.querySelector('input[type="checkbox"]')?.checked);
         const autoOn = !!autoToggle?.checked;
+        // Allumée ET proposée : un connecteur web masqué par l'admin n'a ni
+        // ligne ni interrupteur, il n'apparaît jamais dans la puce.
+        const webOn  = !!(webRow && webToggle && webToggle.checked);
         if (foldCount) {
             foldCount.textContent = rows.length === 0 ? ''
                 : on.length > 0 ? t('{n} sur {total}', { n: on.length, total: rows.length })
@@ -7018,6 +7772,18 @@ function updateImageToggle(llmKey) {}
             if (img) { const copie = img.cloneNode(true); copie.alt = ''; pieces.push(copie); }
         });
         const extra = on.length - MAX_SUMMARY_LOGOS;
+        // La puce dit TOUTES les sources allumées : le globe de la Recherche
+        // Internet en tête (le volet, lui, ne résume que les connecteurs).
+        const chipPieces = pieces.slice();
+        if (webOn) {
+            const globe = webRow.querySelector('.plus-menu-icon svg');
+            if (globe) {
+                const copie = globe.cloneNode(true);
+                copie.classList.add('composer-sources-web');
+                copie.setAttribute('aria-hidden', 'true');
+                chipPieces.unshift(copie);
+            }
+        }
         if (foldLogos) {
             foldLogos.replaceChildren(...pieces.map(p => {
                 const tuile = document.createElement('span');
@@ -7032,8 +7798,8 @@ function updateImageToggle(llmKey) {}
             }
         }
         if (!connChip) return;
-        connChip.hidden = pieces.length === 0;
-        connChip.replaceChildren(...pieces);
+        connChip.hidden = chipPieces.length === 0;
+        connChip.replaceChildren(...chipPieces);
         if (extra > 0) {
             const plus = document.createElement('span');
             plus.className = 'composer-connectors-more';
@@ -7043,23 +7809,26 @@ function updateImageToggle(llmKey) {}
         // Téléphone (main.css) : jusqu'à 768 px la puce ne garde que son
         // premier logo et compte les autres ; sous 480 px elle cède la place à
         // un compte sur le « + ». Jamais elle ne pousse les boutons assistants
-        // et bases hors de la rangée.
-        const others = pieces.length - 1 + Math.max(extra, 0);
+        // et bases hors de la rangée. Le globe compte comme une source.
+        const others = chipPieces.length - 1 + Math.max(extra, 0);
         if (others > 0) connChip.dataset.more = '+' + others;
         else delete connChip.dataset.more;
-        if (pieces.length > 0) btn.dataset.count = String(pieces.length + Math.max(extra, 0));
+        if (chipPieces.length > 0) btn.dataset.count = String(chipPieces.length + Math.max(extra, 0));
         else delete btn.dataset.count;
         const noms = on.map(r => r.dataset.service || r.dataset.label || '');
         if (autoOn) noms.unshift(t('Laisser MIA choisir'));
-        const libelle = t('Connecteurs allumés : {liste}', { liste: noms.join(', ') });
+        if (webOn) noms.unshift((webRow.querySelector('.plus-menu-info strong')?.textContent || '').trim());
+        const libelle = t('Sources actives : {liste}', { liste: noms.filter(Boolean).join(', ') });
         connChip.title = libelle;
-        connChip.setAttribute('aria-label', libelle + ' — ' + t('ouvrir les connecteurs'));
+        connChip.setAttribute('aria-label', libelle + ' — ' + t('ouvrir le menu'));
     }
     connChip?.addEventListener('click', e => {
         // Hors de #plusMenu : sans stopPropagation, l'écouteur de fermeture
         // du document refermerait aussitôt le menu ouvert ici.
         e.stopPropagation();
         window.closeComposerPopovers('plus');
+        // Volet déplié sur les connecteurs (setFold ne fait rien sans volet :
+        // Internet seul ouvre le menu tel quel, la ligne est en tête).
         setFold(true);
         open();
         revealFold();
@@ -7626,7 +8395,8 @@ function updateImageToggle(llmKey) {}
                 onLaunched: (r) => {
                     clearFiles();
                     if (msgInput) { msgInput.value = ''; msgInput.dispatchEvent(new Event('input', { bubbles: true })); }
-                    window.location.href = r.url;
+                    // La discussion d'abord : on suit l'exécution dans sa conversation.
+                    window.location.href = r.conversation_url || r.url;
                 },
             });
         } catch (_) {
@@ -7862,6 +8632,9 @@ function updateImageToggle(llmKey) {}
             // La VÉRITÉ vient du serveur, jamais de l'optimisme du clic.
             selected = (data.kb_ids || []).map(Number);
             render();
+            // Une table permanente cochée ou décochée : la puce « Tables » et
+            // le volet suivent (work-tables.js).
+            try { document.dispatchEvent(new CustomEvent('mia:kb-selection-changed')); } catch (_e) { /* best-effort */ }
             if (data.capped) showToast(t('{n} bases maximum par conversation.', { n: data.max || MAX }), 'info');
             else if ((data.rejected || []).length) {
                 showToast(t("Une base n'a pas pu être ajoutée : déjà fournie par l'assistant, ou plus accessible."), 'info');
@@ -7910,7 +8683,18 @@ function updateImageToggle(llmKey) {}
         // Pas encore de brouillon : on part des bases cochées par défaut pour
         // les groupes du compte (décochables comme les autres).
         const draft = readDraftRaw();
-        const start = draft === null ? (CFG.defaults || []).map(Number) : draft;
+        let start = draft === null ? (CFG.defaults || []).map(Number) : draft;
+        // « Interroger dans le chat » (page d'une base) : elle passe en tête,
+        // puis l'adresse est nettoyée (un rechargement ne la recoche pas).
+        const pre = Number(CFG.preselect) || 0;
+        if (pre > 0 && cochables.has(pre)) {
+            start = [pre].concat(start.filter(id => id !== pre));
+            try {
+                const url = new URL(window.location.href);
+                url.searchParams.delete('kb');
+                history.replaceState(history.state, '', url.pathname + url.search + url.hash);
+            } catch (_) {}
+        }
         selected = start.filter(id => cochables.has(id)).slice(0, MAX);
         writeDraft(selected);
     } else {
@@ -8106,6 +8890,7 @@ function signalJobsChanged() {
 }
 
 function jobStatusLabel(state) {
+    if (state.stopping) return t('Arrêt en cours…');
     const type = JOB_TYPES[state.type];
     return (type && type.statusLabel) ? type.statusLabel(state) : t('Génération en cours…');
 }
@@ -8115,11 +8900,16 @@ function setJobStatus(el, label) {
     if (!el) return;
     // Le bandeau de phase générique ferait doublon avec ce libellé
     // (« Analyse de votre demande… » + « Construction de la présentation… »).
-    el.querySelector('.stream-phase')?.remove();
     const md = el.querySelector('.md-render');
     if (!md) return;
-    md.innerHTML = '<span style="color:var(--text-muted);font-style:italic;font-size:13px"></span>';
-    md.firstChild.textContent = label;
+    let phase = md.querySelector(':scope > .stream-phase');
+    if (!phase) {
+        el.querySelector('.stream-phase')?.remove();
+        phase = buildStreamPhaseEl('analyzing');
+        md.textContent = '';
+        md.appendChild(phase);
+    }
+    phase.querySelector('.stream-phase-label').textContent = label;
 }
 
 /** Titre lisible d'une conversation (toasts d'arrière-plan). */
@@ -8185,6 +8975,9 @@ function handleJobEvent(state, raw) {
 
     if (json.quota_exceeded) {
         state.done = true;
+        // Distingue un échec du JOB (quota, erreur) d'un suivi perdu côté
+        // navigateur (failJob), où la génération continue côté serveur.
+        state.serverError = true;
         if (jobIsVisible(state)) {
             if (type.onFail) type.onFail(state);
             state.el?.closest('.message')?.remove();
@@ -8195,6 +8988,7 @@ function handleJobEvent(state, raw) {
 
     if (json.llm_error) {
         state.errorPayload = json.llm_error;
+        state.serverError = true;
         if (jobIsVisible(state)) {
             if (type.onFail) type.onFail(state);
             if (state.el) renderInlineError(state.el, json.llm_error);
@@ -8205,6 +8999,13 @@ function handleJobEvent(state, raw) {
     }
 
     if (json.job_end) {
+        // Arrêtée avant d'avoir rien produit : la bulle d'attente ne doit pas
+        // tourner indéfiniment, elle dit que la génération est arrêtée.
+        if (state.stopping && !state.done && !state.errorPayload && jobIsVisible(state) && state.el) {
+            state.el.querySelector('.stream-phase')?.remove();
+            state.el.dataset.raw = t('*[Génération arrêtée]*');
+            finalizeAssistantMessage(state.el);
+        }
         closeJob(state);
         return;
     }
@@ -8494,8 +9295,9 @@ JOB_TYPES.gamma = {
 };
 
 // ---- Type « native_deck » (présentation ou classeur réalisés par le modèle) ----
-// Même contrat que « gamma » : le message « ⏳ … » et le lien final sont
-// persistés par le serveur, le job ne sert qu'à l'afficher en direct.
+// Le message d'attente porte une CARTE de réalisation (NativeDeckRun) : le job
+// la réécrit à la fin — prête, ou arrêtée — et le flux en apporte le nouvel
+// état tout rendu (`run_html`), qui remplace la carte sur place.
 JOB_TYPES.native_deck = {
     noBubble: true,
     passive: true,
@@ -8511,8 +9313,25 @@ JOB_TYPES.native_deck = {
             }
             return;
         }
+        if (json.run_html && window.MiaNativeRun?.replace(json.msg_id, json.run_html, { justDone: !json.cancelled })) {
+            return;
+        }
         if (json.content) {
-            appendMessage('assistant', json.content);
+            appendMessage('assistant', json.content, [], false, { messageId: json.msg_id || null, runHtml: json.run_html || '' });
+            scrollBottom();
+        }
+    },
+
+    // Échec du job (quota au démarrage, erreur du fournisseur) : la carte
+    // cesse de tourner, et la cause — que le serveur a laissée dans le fil —
+    // s'affiche dessous sans attendre un rechargement. Un suivi perdu côté
+    // navigateur n'est pas un échec : la réalisation continue.
+    onFail(state) {
+        if (!state.serverError || !jobIsVisible(state)) return;
+        window.MiaNativeRun?.fail(state.id);
+        const p = state.errorPayload;
+        if (p && (p.title || p.message)) {
+            appendMessage('assistant', '⚠️ ' + [p.title, p.message].filter(Boolean).join('\n\n'));
             scrollBottom();
         }
     },
@@ -8539,6 +9358,79 @@ JOB_TYPES.mybrain_feed = {
         }
         if (json.content) {
             appendMessage('assistant', json.content);
+            scrollBottom();
+        }
+    },
+};
+
+// ---- Type « table_mission » (opération de fond sur une table de travail) ----
+// Enrichissement de chaque ligne, ou une action par ligne : menée par le
+// worker après l'accord donné sur la carte. Même contrat que « gamma » — le
+// message « ⏳ … en cours » et le bilan sont persistés par le serveur — plus
+// une ligne d'avancement (« 120 lignes sur 800… ») posée SOUS le message de
+// lancement, hors de son contenu : ni copiée, ni exportée.
+function paintMissionProgress(mission) {
+    if (!mission || !mission.msg_id) return;
+    const msg = document.querySelector(`#chatMessages .message[data-message-id="${Number(mission.msg_id)}"]`);
+    const content = msg?.querySelector('.msg-content');
+    if (!content) return;
+    let line = msg.querySelector('.mission-progress');
+    if (!line) {
+        line = document.createElement('div');
+        line.className = 'mission-progress';
+        line.setAttribute('role', 'status');
+        line.innerHTML = '<span class="mission-progress-bar"><span></span></span><span class="mission-progress-text"></span>';
+        content.insertAdjacentElement('afterend', line);
+    }
+    const total = Number(mission.total) || 0;
+    const done = Math.min(total, Number(mission.done) || 0);
+    line.querySelector('.mission-progress-bar > span').style.width = (total > 0 ? Math.round(done * 100 / total) : 0) + '%';
+    line.querySelector('.mission-progress-text').textContent = String(mission.text || '');
+}
+
+JOB_TYPES.table_mission = {
+    noBubble: true,
+    // Le composer reste utilisable : l'opération peut durer plusieurs minutes
+    // (l'arrêt passe par le tiroir des générations).
+    passive: true,
+    statusLabel: () => t('Opération en cours sur une table…'),
+
+    onEvent(state, json) {
+        if (json.mission && jobIsVisible(state)) paintMissionProgress(json.mission);
+    },
+
+    onDone(state, json) {
+        document.querySelectorAll('#chatMessages .mission-progress').forEach((el) => el.remove());
+        if (!json.cancelled && jobNeedsNotification(state.convId)) {
+            notifyJobDone(t('L’opération sur votre table est terminée.'), state.convId);
+        }
+        if (!jobIsVisible(state)) {
+            if (!json.cancelled) {
+                showToast(t('Opération terminée dans « ') + convTitleFor(state.convId) + ' »', 'success');
+            }
+            return;
+        }
+        if (json.content && !(json.msg_id && document.querySelector(`#chatMessages .message[data-message-id="${Number(json.msg_id)}"]`))) {
+            appendMessage('assistant', json.content, [], false, { messageId: json.msg_id || null, tablesHtml: json.tables?.html || '' });
+            scrollBottom();
+        }
+        // La table vient d'être complétée : le volet ouvert la relit.
+        if (json.tables) window.MiaTables?.afterTurn(null, json.tables);
+        // Table permanente enrichie sans copie : la carte qui propose d'y
+        // écrire les valeurs est rattachée au bilan — on la fait venir.
+        if (json.card) window.miaSyncConversation?.();
+    },
+
+    // Échec de l'opération : la ligne d'avancement ne reste pas figée, et la
+    // cause — que le serveur a laissée dans le fil — s'affiche sans attendre
+    // un rechargement. Un suivi perdu côté navigateur n'est pas un échec :
+    // l'opération continue.
+    onFail(state) {
+        if (!state.serverError || !jobIsVisible(state)) return;
+        document.querySelectorAll('#chatMessages .mission-progress').forEach((el) => el.remove());
+        const p = state.errorPayload;
+        if (p && (p.title || p.message)) {
+            appendMessage('assistant', '⚠️ ' + [p.title, p.message].filter(Boolean).join('\n\n'));
             scrollBottom();
         }
     },
@@ -9377,6 +10269,7 @@ function openSourcesViewerForMessage(messageEl, preferredIndex = null) {
     closeVideoViewer();
     closeMapViewer();
     closeDeckViewer();
+    closeTablesViewer();
     viewer.classList.add('open');
     renderSourcesViewer(items, preferredIndex);
     setViewerLayoutState();
@@ -9400,12 +10293,18 @@ function setViewerLayoutState() {
     const sourcesOpen = document.getElementById('sourcesViewer')?.classList.contains('open');
     const mapOpen = document.getElementById('mapViewer')?.classList.contains('open');
     const deckOpen = document.getElementById('deckViewer')?.classList.contains('open');
-    document.querySelector('.app')?.classList.toggle('viewer-open', !!(htmlOpen || videoOpen || sourcesOpen || mapOpen || deckOpen));
+    const tablesOpen = document.getElementById('tablesViewer')?.classList.contains('open');
+    document.querySelector('.app')?.classList.toggle('viewer-open', !!(htmlOpen || videoOpen || sourcesOpen || mapOpen || deckOpen || tablesOpen));
 }
 
 /** Ferme le volet présentation (deck.js peut ne pas être chargé). */
 function closeDeckViewer() {
     if (window.Deck?.close) window.Deck.close();
+}
+
+/** Ferme le volet des tables de travail (work-tables.js peut ne pas être chargé). */
+function closeTablesViewer() {
+    if (window.MiaTables?.close) window.MiaTables.close();
 }
 
 function openHtmlViewer(html, msgId, loading) {
@@ -9415,6 +10314,7 @@ function openHtmlViewer(html, msgId, loading) {
     closeSourcesViewer();
     closeMapViewer();
     closeDeckViewer();
+    closeTablesViewer();
     viewer.classList.add('open');
     setPreviewDevice('desktop'); // repart toujours en desktop à l'ouverture
     setViewerLayoutState();
@@ -9629,6 +10529,7 @@ function initHtmlViewerResize() {
     bindViewerResizeHandle(document.getElementById('htmlViewerResizer'));
     bindViewerResizeHandle(document.getElementById('mapViewerResizer'));
     bindViewerResizeHandle(document.getElementById('deckViewerResizer'));
+    bindViewerResizeHandle(document.getElementById('tablesViewerResizer'));
 }
 
 function bindViewerResizeHandle(handle) {
@@ -9710,6 +10611,7 @@ function openVideoViewer(videoUrl, msgId, loading, metaText, filename) {
     closeSourcesViewer();
     closeMapViewer();
     closeDeckViewer();
+    closeTablesViewer();
     viewer.classList.add('open');
     setViewerLayoutState();
 
@@ -9829,6 +10731,7 @@ function openMapViewer(spec, msgId, loading) {
     closeVideoViewer();
     closeSourcesViewer();
     closeDeckViewer();
+    closeTablesViewer();
     viewer.classList.add('open');
     setViewerLayoutState();
 
@@ -10426,6 +11329,7 @@ function bindViewerControls() {
     closeSourcesViewer();
     closeMapViewer();
     closeDeckViewer();
+    closeTablesViewer();
 }
 
 // Délégation pour les cartes HTML, vidéo et itinéraire dans le fil de messages
@@ -10761,8 +11665,20 @@ document.getElementById('quotaModalClose')?.addEventListener('click', () => {
    vocale (tours envoyés, réponse lue) : une seule plomberie —
    jeton éphémère, micro, WebRTC, reconnexion, facturation.
    ========================================================= */
+// Micro capté avec annulation d'écho, réduction de bruit et gain
+// automatique DEMANDÉS — la plupart des navigateurs les activent d'office,
+// pas tous, et la conversation vocale en dépend : micro ouvert pendant que
+// MIA lit (interruption à la voix), sa propre voix ne doit pas y repasser.
+const MIC_CONSTRAINTS = { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
+
 function createRealtimeTranscriber(opts) {
-    const purpose = opts.purpose === 'conversation' ? 'conversation' : 'dictation';
+    // dictation | conversation | interruption — ce dernier : la seconde session
+    // de la conversation vocale, où le micro ne part que pendant que MIA lit.
+    const purpose = ['conversation', 'interruption'].includes(opts.purpose) ? opts.purpose : 'dictation';
+    // Capture GARDÉE entre deux écoutes (conversation, hors iPhone et iPad) :
+    // relâcher le micro n'envoie plus rien, mais ne referme pas la capture —
+    // la reprendre est alors immédiat, sans nouvel appel au système.
+    const keepsCapture = () => !!(opts.keepCapture && opts.keepCapture());
 
     let pc = null;            // RTCPeerConnection
     let dc = null;            // RTCDataChannel "oai-events"
@@ -10775,6 +11691,15 @@ function createRealtimeTranscriber(opts) {
     let micAttached = false;
     let micGen = 0;           // numéro de prise du micro : une acquisition périmée est relâchée
     let activeModel = '';
+    // Détections de fin de tour proposées par le serveur avec le jeton
+    // (conversation) : `base` = celle de la session, `fast` = courte, pour
+    // entendre un « stop » pendant que MIA lit. Cf. setTurnDetection.
+    let turnDetections = {};
+    let tdCurrent = 'base';
+    let tdSeq = 0;
+    let tdRejected = false;   // OpenAI a refusé un changement : on n'insiste plus
+    let tdPendingAt = 0;      // ms ; changement envoyé, pas encore confirmé (`session.updated`)
+    const TD_CONFIRM_MS = 5000;
 
     function emitState() { opts.onState?.({ connecting, recording }); }
     function setLoading(on) { connecting = on; emitState(); }
@@ -10859,14 +11784,31 @@ function createRealtimeTranscriber(opts) {
     // fermée, la lecture repasse par le haut-parleur, au volume du média. La
     // session OpenAI reste ouverte (aucune reconnexion), le micro est repris
     // à l'écoute suivante — la permission a déjà été accordée sur la page.
+    //
+    // Hors iPhone et iPad (opts.keepCapture), la capture est GARDÉE : la
+    // piste est seulement coupée et retirée de l'émetteur. Rien ne part chez
+    // OpenAI, rien n'est transcrit ni facturé, mais reprendre le micro ne
+    // redemande rien au système — c'était un à deux dixièmes de seconde à
+    // chaque bascule, deux fois par tour, et les premiers mots dits juste
+    // après la voix de MIA étaient perdus.
     async function attachMic() {
         wantMic = true;
         if (!recording) return;
         const gen = ++micGen;
+        // Piste gardée mais devenue MUETTE : la conversation vocale tient deux
+        // sessions, donc deux captures du même micro, et certains navigateurs
+        // n'en servent qu'une à la fois — celle qui a été prise en dernier.
+        // Une piste muette enverrait du silence (« aucun son reçu ») : on la
+        // referme, la capture est reprise ci-dessous.
+        if (micTrack && micTrack.readyState === 'live' && micTrack.muted) {
+            try { mediaStream?.getTracks().forEach(piste => piste.stop()); } catch (_) {}
+            try { micTrack.stop(); } catch (_) {}
+            mediaStream = micTrack = null;
+        }
         if (!micTrack || micTrack.readyState !== 'live') {
             let stream;
             try {
-                stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                stream = await navigator.mediaDevices.getUserMedia({ audio: MIC_CONSTRAINTS });
             } catch (_) {
                 if (gen !== micGen || !wantMic || !recording) return;
                 fail(t('Accès au micro refusé.'));
@@ -10881,6 +11823,7 @@ function createRealtimeTranscriber(opts) {
             micTrack = stream.getAudioTracks()[0];
         }
         if (sender && micTrack) {
+            micTrack.enabled = true; // coupée par releaseMic quand la capture est gardée
             try { await sender.replaceTrack(micTrack); } catch (_) {}
             if (gen !== micGen || !wantMic || !recording) return;
         }
@@ -10897,9 +11840,45 @@ function createRealtimeTranscriber(opts) {
         clearTimeout(silenceTimer);
         silenceTimer = null;
         if (sender) sender.replaceTrack(null).catch(() => {});
+        if (keepsCapture() && micTrack && micTrack.readyState === 'live') {
+            micTrack.enabled = false; // capture gardée : muette, prête à reprendre
+            return;
+        }
         try { mediaStream?.getTracks().forEach(piste => piste.stop()); } catch (_) {}
         try { micTrack?.stop(); } catch (_) {}
         mediaStream = micTrack = null;
+    }
+
+    // Détection de fin de tour changée EN COURS de session (`session.update`,
+    // documenté pour les sessions de transcription). Pendant que MIA lit, la
+    // détection de la session — faite pour écouter une demande — laisse un
+    // « stop » sec plusieurs secondes en suspens. La conversation pose donc
+    // une détection plus vive le temps de la lecture, et revient à celle de
+    // la session pour écouter. Les deux réglages viennent du serveur, et sont
+    // du MÊME type : OpenAI ignore un changement de type en cours de session
+    // (cf. ChatController::interruptionTurnDetection).
+    // Refusé par OpenAI : on ne réessaie plus de la page, la session garde sa
+    // détection d'origine — jamais une conversation coupée pour un réglage de
+    // confort. Le refus se reconnaît à NOTRE identifiant (`error.event_id`),
+    // ou, s'il n'est pas rendu, à ce qu'il arrive pendant qu'un changement
+    // attend sa confirmation : ce socle n'envoie rien d'autre à la session.
+    function setTurnDetection(name) {
+        const td = turnDetections[name];
+        if (!td || tdRejected || name === tdCurrent) return false;
+        if (!dc || dc.readyState !== 'open') return false;
+        try {
+            dc.send(JSON.stringify({
+                type: 'session.update',
+                event_id: 'mia_td_' + (++tdSeq),
+                session: { type: 'transcription', audio: { input: { turn_detection: td } } },
+            }));
+        } catch (_) { return false; }
+        tdCurrent = name;
+        tdPendingAt = Date.now();
+        return true;
+    }
+    function turnDetectionPending() {
+        return tdPendingAt > 0 && Date.now() - tdPendingAt < TD_CONFIRM_MS;
     }
 
     function teardown() {
@@ -10946,6 +11925,8 @@ function createRealtimeTranscriber(opts) {
             // même si le texte n'arrive qu'à la fin du tour.
             noteSignal();
             opts.onSpeechStart?.(itemId);
+        } else if (type === 'session.updated' || type === 'transcription_session.updated') {
+            tdPendingAt = 0; // changement de détection confirmé
         } else if (type === 'input_audio_buffer.speech_stopped') {
             opts.onSpeechStop?.(itemId);
         } else if (type.endsWith('input_audio_transcription.delta') || type === 'transcript.delta') {
@@ -10956,6 +11937,15 @@ function createRealtimeTranscriber(opts) {
             opts.onCompleted?.(m.transcript || m.delta || '', itemId);
         } else if (type === 'error') {
             const e = m.error || {};
+            // Changement de détection de tour refusé : la session continue
+            // avec sa détection d'origine, et l'on n'insiste plus.
+            if (String(e.event_id || '').startsWith('mia_td_') || turnDetectionPending()) {
+                console.warn('[mic] turn detection update refused', e.code || e.type || '', e.message || '');
+                tdRejected = true;
+                tdCurrent = 'base';
+                tdPendingAt = 0;
+                return;
+            }
             console.error('[mic] OpenAI error', JSON.stringify(m, null, 2));
             if (BENIGN_ERRORS.has(e.code)) return;
             const payload = openAiSessionError(e.code || e.type, 0);
@@ -10984,8 +11974,10 @@ function createRealtimeTranscriber(opts) {
                 const err = await r.json().catch(() => ({}));
                 // Quota atteint : même fenêtre que pour un message, et le micro
                 // s'arrête — y compris quand ce refus survient sur une
-                // reconnexion automatique, en pleine dictée.
-                if (handleQuotaExceededPayload(err)) {
+                // reconnexion automatique, en pleine dictée. Une session
+                // d'arrière-plan (opts.background) n'ouvre aucune fenêtre : la
+                // session principale la montrera, c'est le même quota.
+                if (!opts.background && handleQuotaExceededPayload(err)) {
                     stopRecording();
                     setLoading(false);
                     return false;
@@ -11001,6 +11993,10 @@ function createRealtimeTranscriber(opts) {
             token = data?.client_secret;
             model = data?.model || 'gpt-live-transcribe';
             activeModel = model;
+            // Nouvelle session : elle démarre sur SA détection de tour.
+            turnDetections = (data && data.turn_detections) || {};
+            tdCurrent = 'base';
+            tdPendingAt = 0;
             if (!token) throw new Error(t('Token éphémère manquant'));
         } catch (e) {
             setLoading(false);
@@ -11017,7 +12013,7 @@ function createRealtimeTranscriber(opts) {
         // faux), rien n'est capturé — attachMic le reprendra.
         if (wantMic) {
             try {
-                mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                mediaStream = await navigator.mediaDevices.getUserMedia({ audio: MIC_CONSTRAINTS });
                 micTrack = mediaStream.getAudioTracks()[0];
             } catch (_) {
                 setLoading(false);
@@ -11116,9 +12112,255 @@ function createRealtimeTranscriber(opts) {
         stop: stopRecording,
         attachMic,
         releaseMic,
+        setTurnDetection,
         isRecording: () => recording,
         isConnecting: () => connecting,
         model: () => activeModel,
+    };
+}
+
+/* =========================================================
+   Socle Voxtral (Mistral) — dictée phrase par phrase
+   Même interface que createRealtimeTranscriber pour la dictée
+   (start, stop, isRecording, isConnecting ; onState, onStarted,
+   onCompleted). Voxtral transcrit des FICHIERS : le micro est
+   écouté ici, découpé aux pauses (une phrase = un court WAV
+   16 kHz mono) et chaque phrase part au serveur, qui la relaie
+   à Mistral avec la clé de l'instance et facture la durée que
+   Mistral a mesurée. Les phrases partent en parallèle, leur
+   texte est posé dans l'ordre où elles ont été dites.
+   ========================================================= */
+const VoxtralCut = {
+    TARGET_RATE: 16000,
+    PAUSE_MS: 700,          // silence qui clôt une phrase
+    MIN_SPEECH_MS: 250,     // en dessous : un bruit, rien à transcrire
+    MAX_SEGMENT_MS: 25000,  // phrase coupée d'office (≈ 800 Ko de WAV)
+    PREROLL_MS: 300,        // le début du premier mot, entendu avant le seuil
+    /** Seuil de parole : au-dessus du bruit de fond, jamais sous un plancher. */
+    threshold(noise) { return Math.max(0.012, noise * 3.5); },
+    /** Rééchantillonne vers 16 kHz par moyenne de fenêtre (pure). */
+    downsample(input, inRate) {
+        if (inRate === this.TARGET_RATE) return Float32Array.from(input);
+        const ratio = inRate / this.TARGET_RATE;
+        const out = new Float32Array(Math.floor(input.length / ratio));
+        for (let i = 0; i < out.length; i++) {
+            const a = Math.floor(i * ratio);
+            const b = Math.min(input.length, Math.floor((i + 1) * ratio));
+            let sum = 0;
+            for (let j = a; j < b; j++) sum += input[j];
+            out[i] = b > a ? sum / (b - a) : 0;
+        }
+        return out;
+    },
+    rms(input) {
+        let sum = 0;
+        for (let i = 0; i < input.length; i++) sum += input[i] * input[i];
+        return input.length ? Math.sqrt(sum / input.length) : 0;
+    },
+    /** WAV PCM 16 bits mono à partir d'échantillons flottants (pure). */
+    wav(samples, rate) {
+        const buf = new ArrayBuffer(44 + samples.length * 2);
+        const v = new DataView(buf);
+        const str = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
+        str(0, 'RIFF'); v.setUint32(4, 36 + samples.length * 2, true); str(8, 'WAVE');
+        str(12, 'fmt '); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+        v.setUint32(24, rate, true); v.setUint32(28, rate * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+        str(36, 'data'); v.setUint32(40, samples.length * 2, true);
+        for (let i = 0; i < samples.length; i++) {
+            const s = Math.max(-1, Math.min(1, samples[i]));
+            v.setInt16(44 + i * 2, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+        }
+        return buf;
+    },
+    /**
+     * Découpeur aux pauses (pur, sans DOM) : on lui donne chaque tampon du
+     * micro, il rend les phrases terminées (tableaux d'échantillons 16 kHz).
+     */
+    cutter() {
+        const self = this;
+        let noise = 0.004, inSpeech = false, chunks = [], segMs = 0, speechMs = 0, silenceMs = 0;
+        let preroll = [], prerollMs = 0;
+        const done = [];
+        function close() {
+            if (speechMs >= self.MIN_SPEECH_MS) done.push(concat(chunks));
+            inSpeech = false; chunks = []; segMs = 0; speechMs = 0; silenceMs = 0;
+            preroll = []; prerollMs = 0;
+        }
+        function concat(list) {
+            let n = 0; list.forEach(c => { n += c.length; });
+            const out = new Float32Array(n); let o = 0;
+            list.forEach(c => { out.set(c, o); o += c.length; });
+            return out;
+        }
+        return {
+            /** @returns {boolean} vrai si le tampon portait de la parole */
+            push(input, inRate) {
+                const ms = input.length / inRate * 1000;
+                const level = self.rms(input);
+                const voiced = level > self.threshold(noise);
+                if (!voiced) noise = Math.max(0.002, noise * 0.9 + level * 0.1);
+                const pcm = self.downsample(input, inRate);
+                if (!inSpeech) {
+                    if (!voiced) {
+                        preroll.push({ pcm, ms }); prerollMs += ms;
+                        while (preroll.length > 1 && prerollMs - preroll[0].ms >= self.PREROLL_MS) prerollMs -= preroll.shift().ms;
+                        return false;
+                    }
+                    inSpeech = true;
+                    chunks = preroll.map(p => p.pcm); segMs = prerollMs;
+                    preroll = []; prerollMs = 0;
+                }
+                chunks.push(pcm); segMs += ms;
+                if (voiced) { speechMs += ms; silenceMs = 0; } else { silenceMs += ms; }
+                if (silenceMs >= self.PAUSE_MS || segMs >= self.MAX_SEGMENT_MS) close();
+                return voiced;
+            },
+            /** Arrêt : la phrase en cours part si elle porte de la parole. */
+            flush() { if (inSpeech) close(); },
+            take() { return done.splice(0, done.length); },
+        };
+    },
+};
+if (typeof window !== 'undefined') window.MiaVoxtralCut = VoxtralCut;
+
+function createVoxtralTranscriber(opts) {
+    const SILENCE_MS = 9000;
+    let recording = false, connecting = false;
+    let stream = null, audioCtx = null, source = null, proc = null;
+    let cutter = null;
+    let gen = 0;               // numéro de session : une phrase d'une dictée abandonnée est ignorée
+    let order = Promise.resolve();
+    let pending = 0, failed = false, emitted = false, heard = false;
+    let silenceTimer = null;
+
+    function emitState() { opts.onState?.({ connecting, recording }); }
+    function setPending(n) { pending = n; opts.onPending?.(pending); }
+    function fail(message, payload = null) {
+        showLlmErrorToast(payload, message, t('Dictée impossible'));
+    }
+
+    function send(samples) {
+        const myGen = gen;
+        const fd = new FormData();
+        fd.append('audio', new Blob([VoxtralCut.wav(samples, VoxtralCut.TARGET_RATE)], { type: 'audio/wav' }), 'dictee.wav');
+        fd.append('conversation_id', convId() || '');
+        setPending(pending + 1);
+        // Envoi tout de suite (en parallèle) ; le texte, lui, est posé dans
+        // l'ordre où les phrases ont été dites.
+        const request = fetchWithSessionGuard('/chat/dictation/transcribe', {
+            method: 'POST',
+            headers: { 'X-CSRF-Token': csrfToken },
+            body: fd,
+        }).then(async r => ({ ok: r.ok, data: await r.json().catch(() => ({})) }))
+          .catch(() => ({ ok: false, data: {} }));
+        order = order.then(() => request).then(({ ok, data }) => {
+            if (myGen !== gen) return;
+            setPending(Math.max(0, pending - 1));
+            if (!ok || !data.ok) {
+                if (failed) return;
+                failed = true;
+                if (handleQuotaExceededPayload(data)) { stopRecording({ discard: true }); return; }
+                fail(data.error || t('Voxtral n\'a pas pu transcrire la dictée.'), data.llm_error || null);
+                stopRecording({ discard: true });
+                return;
+            }
+            const text = String(data.text || '').trim();
+            if (!text) return;
+            opts.onCompleted?.((emitted ? ' ' : '') + text);
+            emitted = true;
+        });
+    }
+
+    function drain() { cutter.take().forEach(send); }
+
+    function teardownAudio() {
+        clearTimeout(silenceTimer);
+        silenceTimer = null;
+        try { if (proc) proc.onaudioprocess = null; proc?.disconnect(); } catch (_) {}
+        try { source?.disconnect(); } catch (_) {}
+        try { stream?.getTracks().forEach(piste => piste.stop()); } catch (_) {}
+        try { audioCtx?.close(); } catch (_) {}
+        stream = audioCtx = source = proc = null;
+    }
+
+    async function startRecording() {
+        if (recording || connecting) return false;
+        connecting = true;
+        emitState();
+        gen++; failed = false; emitted = false; heard = false;
+        setPending(0);
+        // Contexte audio créé DANS le geste (Safari n'en démarre pas un autre).
+        try {
+            const Ctx = window.AudioContext || window.webkitAudioContext;
+            audioCtx = new Ctx();
+        } catch (_) {
+            connecting = false; emitState();
+            fail(t('Ce navigateur ne permet pas d\'enregistrer le micro.'));
+            return false;
+        }
+        try {
+            stream = await navigator.mediaDevices.getUserMedia({
+                audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+            });
+            await audioCtx.resume();
+        } catch (_) {
+            teardownAudio();
+            connecting = false; emitState();
+            fail(t('Accès au micro refusé.'));
+            return false;
+        }
+        cutter = VoxtralCut.cutter();
+        source = audioCtx.createMediaStreamSource(stream);
+        // ScriptProcessor : disponible partout (Safari compris), sans module
+        // à servir. Sa sortie reste muette (aucun écho dans les haut-parleurs).
+        proc = audioCtx.createScriptProcessor(4096, 1, 1);
+        proc.onaudioprocess = (ev) => {
+            if (!recording) return;
+            const voiced = cutter.push(ev.inputBuffer.getChannelData(0), audioCtx.sampleRate);
+            if (voiced && !heard) { heard = true; clearTimeout(silenceTimer); }
+            drain();
+        };
+        source.connect(proc);
+        proc.connect(audioCtx.destination);
+
+        recording = true;
+        connecting = false;
+        emitState();
+        opts.onStarted?.();
+        silenceTimer = setTimeout(() => {
+            if (recording && !heard) {
+                showToast(t('Dictée : aucun texte reçu. Vérifiez que le micro capte du son.'), 'error');
+            }
+        }, SILENCE_MS);
+        return true;
+    }
+
+    /**
+     * Arrêt. La phrase en cours part (son texte arrive juste après) ;
+     * `discard` (message envoyé, refus) abandonne aussi ce qui est en route :
+     * un texte qui arriverait après l'envoi tomberait dans un champ vidé.
+     */
+    function stopRecording(o = {}) {
+        if (!recording && !connecting) {
+            if (o.discard) { gen++; setPending(0); }
+            return;
+        }
+        recording = false;
+        connecting = false;
+        if (cutter && !o.discard) { cutter.flush(); drain(); }
+        if (o.discard) { gen++; setPending(0); }
+        teardownAudio();
+        emitState();
+        opts.onStopped?.();
+    }
+
+    return {
+        start: startRecording,
+        stop: stopRecording,
+        isRecording: () => recording,
+        isConnecting: () => connecting,
+        isPending: () => pending > 0,
+        model: () => 'voxtral',
     };
 }
 
@@ -11127,7 +12369,11 @@ function createRealtimeTranscriber(opts) {
    ========================================================= */
 (() => {
     const micBtn = document.getElementById('micBtn');
-    if (!micBtn) return; // pas de clé OpenAI → bouton absent
+    if (!micBtn) return; // aucun moteur de dictée utilisable → bouton absent
+    // Moteur choisi par l'administrateur (Dictation, côté serveur) : OpenAI
+    // Realtime (texte au fil de la parole) ou Voxtral (phrase par phrase).
+    const engine = micBtn.dataset.engine === 'mistral' ? 'mistral' : 'openai';
+    let lastApplied = null;   // dernier texte posé par la dictée (Voxtral : arrivée tardive)
 
     let recording = false;    // miroir de l'état du socle, pour les libellés
     let baseBefore = '';
@@ -11142,6 +12388,15 @@ function createRealtimeTranscriber(opts) {
             : (recording ? t('Arrêter la dictée') : t('Dicter le message'));
     }
 
+    // Voxtral : des phrases sont en cours de transcription (le texte arrive
+    // une à deux secondes après la pause) — rien dans le champ, un signe
+    // sur le bouton.
+    function setMicPending(n) {
+        micBtn.classList.toggle('mic-transcribing', n > 0);
+        if (n > 0 && !recording) micBtn.title = t('Transcription en cours…');
+        else if (!recording) micBtn.title = t('Dicter le message');
+    }
+
     function setMicUi(on) {
         recording = on;
         micBtn.classList.toggle('mic-recording', on);
@@ -11153,10 +12408,23 @@ function createRealtimeTranscriber(opts) {
         }
     }
 
+    // Voxtral : une phrase peut arriver APRÈS l'arrêt, quand la personne a
+    // déjà retouché le champ — elle s'ajoute alors à la fin de ce qui y est,
+    // sans réécrire la retouche (le texte déjà dicté fait partie du champ).
+    function rebaseIfEdited() {
+        if (engine === 'mistral' && lastApplied !== null && msgInput.value !== lastApplied) {
+            baseBefore = msgInput.value;
+            baseAfter  = '';
+            finalText  = '';
+            deltaText  = '';
+        }
+    }
+
     function applyTranscript() {
         const inserted = (finalText + deltaText).replace(/\s+/g, ' ').trim();
         const sep = baseBefore && !/\s$/.test(baseBefore) && inserted ? ' ' : '';
         msgInput.value = baseBefore + sep + inserted + baseAfter;
+        lastApplied = msgInput.value;
         msgInput.classList.add('mic-transcribed');
         msgInput.dispatchEvent(new Event('input', { bubbles: true }));
     }
@@ -11170,8 +12438,10 @@ function createRealtimeTranscriber(opts) {
         });
     }
 
-    const transcriber = createRealtimeTranscriber({
+    const createTranscriber = engine === 'mistral' ? createVoxtralTranscriber : createRealtimeTranscriber;
+    const transcriber = createTranscriber({
         purpose: 'dictation',
+        onPending: setMicPending,
         onState: ({ connecting, recording: on }) => {
             setMicUi(on);
             setMicLoading(connecting);
@@ -11188,6 +12458,7 @@ function createRealtimeTranscriber(opts) {
             baseAfter  = msgInput.value.slice(insertStart);
             finalText  = '';
             deltaText  = '';
+            lastApplied = null;
             clearItalicOnUserEdit();
             msgInput.classList.add('mic-transcribed');
         },
@@ -11196,6 +12467,7 @@ function createRealtimeTranscriber(opts) {
             applyTranscript();
         },
         onCompleted: (transcript) => {
+            rebaseIfEdited();
             finalText += transcript;
             deltaText = '';
             applyTranscript();
@@ -11220,12 +12492,13 @@ function createRealtimeTranscriber(opts) {
     // Couvre les deux chemins d'envoi : clic sur "Envoyer" (#sendBtn) ET
     // submit clavier (Entrée). On utilise capture=true sur submit pour
     // garantir l'arrêt même si le handler du formulaire stop la propagation.
-    sendBtn?.addEventListener('click', () => { if (transcriber.isRecording()) stopRecording(); });
-    document.getElementById('chatForm')?.addEventListener(
-        'submit',
-        () => { if (transcriber.isRecording()) stopRecording(); },
-        true
-    );
+    // Voxtral : ce qui est encore en route est abandonné (`discard`) — un
+    // texte arrivé après l'envoi tomberait dans un champ vidé.
+    const stopOnSend = () => {
+        if (transcriber.isRecording() || transcriber.isPending?.()) transcriber.stop({ discard: true });
+    };
+    sendBtn?.addEventListener('click', stopOnSend);
+    document.getElementById('chatForm')?.addEventListener('submit', stopOnSend, true);
 })();
 
 /* =========================================================
@@ -11246,12 +12519,35 @@ function createRealtimeTranscriber(opts) {
        (runVoiceCardCommand), et MIA dit ce qui s'est passé ;
      - « stop » PENDANT la lecture fait taire MIA et lui rend l'écoute
        (interruption à la voix : le micro reste alors ouvert pendant
-       qu'elle lit — réglage par appareil, cf. bargeIn) ;
+       qu'elle lit — réglage par appareil, cf. bargeIn). Sa voix BAISSE
+       dès que l'on commence à parler, sans attendre la transcription
+       (cf. « Voix baissée dès que l'on parle ») ; Espace, Échap, un
+       toucher sur le bandeau ou le bouton du casque l'interrompent aussi.
+       Pendant la lecture, le micro part vers une SECONDE session Realtime,
+       au silence court : « stop » y est compris en moins d'une seconde
+       (cf. « L'oreille de la lecture ») ;
+     - « active Gmail », « coupe l'agenda » allument ou éteignent un
+       connecteur relié (les autres s'activent à la demande, cf.
+       « Connecteurs ») ; « lis-le » fait lire la carte en attente ;
      - « au revoir » termine la conversation.
    ========================================================= */
 (() => {
     const btn = document.getElementById('voiceChatBtn');
-    if (!btn) return; // réglage coupé ou clé OpenAI absente → bouton absent
+    if (!btn) return; // réglage coupé, ou aucune IA vocale utilisable → bouton absent
+
+    // Impossible avec l'IA vocale en vigueur (Voxtral sans clé OpenAI) : ni
+    // session ni micro. Le bouton garde sa pastille rouge, et le clic — seul
+    // moyen de lire la raison au doigt — la dit, sans rien tenter.
+    if (btn.dataset.voiceBlocked === '1') {
+        btn.addEventListener('click', () => {
+            showToast(btn.dataset.issueMessage || '', 'error', { title: btn.dataset.issueTitle || '' });
+        });
+        return;
+    }
+
+    // Titre au repos : il porte la raison d'une pastille non bloquante
+    // (crédit OpenAI épuisé), à retrouver quand la conversation se termine.
+    const idleTitle = btn.title;
 
     const bar       = document.getElementById('voiceChatBar');
     const barStatus = document.getElementById('voiceChatStatus');
@@ -11262,6 +12558,7 @@ function createRealtimeTranscriber(opts) {
     const volInput  = document.getElementById('voiceChatVolume');
     const lengthSel = document.getElementById('voiceChatLength');
     const bargeBtn  = document.getElementById('voiceChatBargeIn');
+    const barSources = document.getElementById('voiceChatSources');
 
     // Reconnaissance des ordres dits à voix haute (voice-commands.js). Absente
     // (script non chargé) : la conversation marche comme avant — tout ce qui
@@ -11278,6 +12575,17 @@ function createRealtimeTranscriber(opts) {
     let speakAbort = null;  // téléchargements audio en cours
     let playResolve = null; // résout la lecture en cours (fin naturelle, Passer, Terminer)
     let bargeMicOpen  = false; // micro ouvert PENDANT la lecture : à relâcher avant de redonner la parole
+    let bargeEar      = null;  // session qui tient ce micro : l'oreille de la lecture (interrupter), à défaut la session d'écoute
+    let interrupterTries = 0;  // ouvertures tentées de l'oreille de la lecture pendant cette conversation
+    // Tours commencés dans l'oreille de la lecture et pas encore transcrits
+    // (tour → rang d'arrivée), et ce qui est dit dans la foulée d'un « stop »
+    // (cf. « La suite d'un stop »).
+    const earBusy = new Map();
+    let earOrder  = 0;
+    let suite     = null;
+    const SUITE_GRACE_MS = 400;   // après « stop » : le temps qu'une parole enchaînée se signale
+    const SUITE_GAP_MS   = 700;   // silence qui clôt la suite (le silence court de l'oreille coupe aux virgules)
+    const SUITE_MAX_MS   = 12000; // au-delà, la suite part avec ce qui est déjà transcrit
     // Réponse du tour, lue PENDANT qu'elle s'écrit (cf. « Lecture en direct ») :
     let turnJobId   = null;  // sa génération — ses évènements, et eux seuls, pilotent la lecture
     let turnStream  = null;  // état de son flux (le texte déjà écrit sert à reconnaître un écho)
@@ -11285,6 +12593,16 @@ function createRealtimeTranscriber(opts) {
     let readerDone  = true;  // la lecture est finie, ou n'a jamais commencé
     let readerSpoke = false; // MIA a commencé à la lire à voix haute
     let liveWaiting = false; // la lecture attend la suite du texte (les tics reprennent)
+    // Voix baissée pendant que l'on parle par-dessus MIA (cf. « Voix baissée
+    // dès que l'on parle »). Déclaré ici : le curseur de volume le consulte.
+    const HUSH_LEVEL      = 0.18;  // part du volume gardée dès que l'on parle
+    const HUSH_PAUSE_MS   = 700;   // on parle toujours : MIA se tait tout à fait
+    const HUSH_VERDICT_MS = 3500;  // on s'est tu et aucun texte n'arrive : la voix reprend
+    const HUSH_MAX_MS     = 9000;  // filet : jamais baissée plus longtemps
+    const HUSH_MISSES_MAX = 3;     // fausses alertes tolérées par conversation
+    let hush = null;         // { itemId, volume, paused, pauseTimer, endTimer }
+    let hushMisses = 0;      // paroles entendues pendant la lecture qui n'étaient pas un « stop »
+    let cardReading = false; // MIA lit une carte en attente (« lis-le »)
 
     // UN SEUL élément audio, débloqué au clic (geste utilisateur) par un WAV
     // muet : iOS refuse un play() lancé plus tard hors geste, sauf sur un
@@ -11322,14 +12640,19 @@ function createRealtimeTranscriber(opts) {
             return ok;
         } catch (_) { return false; }
     }
+    // Là où le volume se règle, la voix peut aussi BAISSER quand on parle
+    // par-dessus ; ailleurs (iOS), elle se met en pause.
+    const canDuck = volumeIsWritable();
     function applyVolume(percent) {
         const level = Math.min(100, Math.max(0, Math.round(Number(percent) || 0)));
-        try { player.volume = level / 100; } catch (_) {}
+        // Voix baissée en ce moment : le nouveau réglage vaudra à la reprise.
+        if (hush) hush.volume = level / 100;
+        try { player.volume = (level / 100) * (hush && canDuck ? HUSH_LEVEL : 1); } catch (_) {}
         if (volInput && String(volInput.value) !== String(level)) volInput.value = String(level);
         return level;
     }
     if (volWrap && volInput) {
-        if (!volumeIsWritable()) {
+        if (!canDuck) {
             volWrap.hidden = true;
         } else {
             const saved = Number(readVoicePrefs().volume);
@@ -11442,6 +12765,8 @@ function createRealtimeTranscriber(opts) {
             writeVoicePrefs({ bargeIn });
             paintBargeIn();
             syncBargeMic(); // le réglage peut basculer en pleine lecture
+            // L'oreille de la lecture suit le réglage : ouverte avec lui, refermée avec lui.
+            if (bargeIn) ensureInterrupter(); else stopInterrupter();
             // L'infobulle ne s'affiche pas au doigt : le nouvel état se dit aussi
             // en toutes lettres — avec, sur iOS, ce qu'il coûte à la voix.
             showToast(bargeBtn.title, 'info');
@@ -11657,13 +12982,14 @@ function createRealtimeTranscriber(opts) {
         const on = next !== 'off';
         voiceModeActive = on;
         keepScreenAwake(on); // l'écran reste allumé tant que la conversation tourne, et seulement alors
+        bindMediaKeys(on);   // bouton du casque, touches média : interrompre MIA
         // Les cartes en attente affichent alors ce qui peut se DIRE (voiceHintHtml).
         document.body.classList.toggle('voice-chat-on', on);
         btn.classList.toggle('voice-on', on);
         btn.classList.toggle('voice-connecting', next === 'connecting');
         btn.classList.toggle('voice-listening', next === 'listening');
         btn.setAttribute('aria-pressed', on ? 'true' : 'false');
-        btn.title = on ? t('Terminer la conversation vocale') : t('Converser à la voix');
+        btn.title = on ? t('Terminer la conversation vocale') : idleTitle;
         if (bar) {
             bar.hidden = !on;
             bar.classList.toggle('is-listening', next === 'listening');
@@ -11671,6 +12997,8 @@ function createRealtimeTranscriber(opts) {
             bar.classList.toggle('is-speaking', next === 'speaking');
             if (barStatus) barStatus.textContent = statusText || '';
             if (barSkip) barSkip.hidden = next !== 'speaking';
+            // Pendant la lecture, tout le bandeau interrompt (cf. interruptNow).
+            bar.title = next === 'speaking' ? t('Touchez le bandeau, ou appuyez sur Espace ou Échap, pour interrompre MIA') : '';
         }
         if (next !== 'listening') setLive('');
     }
@@ -11700,12 +13028,19 @@ function createRealtimeTranscriber(opts) {
         // Pendant la lecture, le micro n'est ouvert que pour un éventuel
         // « stop » : le silence de l'utilisateur y est normal.
         expectsSpeech: () => mode === 'listening',
+        // Hors iPhone et iPad, la capture reste ouverte d'un tour à l'autre :
+        // reprendre le micro est immédiat. Sur iOS elle est refermée — c'est
+        // ce qui rend le haut-parleur et le volume du média (cf. releaseMic).
+        keepCapture: () => !IS_IOS,
         onFatal: (message, payload) => showLlmErrorToast(payload, message, t('Conversation vocale impossible')),
-        onStarted: () => startListening(),
+        onStarted: () => { startListening(); ensureInterrupter(); },
         onSpeechStart: (itemId) => {
-            if (originOf(itemId) === 'speaking') return;
+            // On parle par-dessus MIA : sa voix baisse TOUT DE SUITE, sans
+            // attendre le texte — c'est lui qui dira s'il fallait se taire.
+            if (originOf(itemId) === 'speaking') { startHush(itemId); return; }
             if (mode === 'listening' && !turnText) setLive('…');
         },
+        onSpeechStop: (itemId) => { hushSpeechEnded(itemId); },
         onDelta: (delta, itemId) => {
             if (originOf(itemId) === 'speaking' || mode !== 'listening') return;
             turnText += delta;
@@ -11713,7 +13048,7 @@ function createRealtimeTranscriber(opts) {
         },
         onCompleted: (transcript, itemId) => {
             if (originOf(itemId) === 'speaking') {
-                if (mode === 'speaking') hearWhileSpeaking(transcript);
+                if (mode === 'speaking' && !hearWhileSpeaking(transcript)) hushMissed(itemId);
                 return;
             }
             if (mode !== 'listening') return;
@@ -11725,8 +13060,173 @@ function createRealtimeTranscriber(opts) {
         onStopped: () => { if (mode !== 'off') endConversation(); },
     });
 
+    // ---- L'oreille de la lecture : une SECONDE session Realtime -----------
+    // La session d'écoute laisse finir une phrase (détection sémantique) —
+    // c'est ce qu'il faut pour une demande, et ce qui rend un « stop » lent :
+    // un ordre court « n'a pas l'air fini », son texte n'arrive que plusieurs
+    // secondes après le mot, et OpenAI ignore un passage à la détection au
+    // silence en cours de session. Pendant que MIA lit, le micro part donc
+    // vers une AUTRE session, ouverte dès sa création avec un silence court
+    // (purpose=interruption, cf. ChatController::interruptionSessionCandidates) :
+    // « stop » y est rendu en moins d'une seconde.
+    //  - Ce qu'elle entend PENDANT la lecture : un ordre d'arrêt, ou rien.
+    //    Jamais un message. Une fois l'ordre entendu, ce qui est dit dans la
+    //    foulée est le tour suivant (cf. « La suite d'un stop »).
+    //  - Le micro ne part que vers UNE session à la fois : les minutes
+    //    écoutées sont celles d'une seule session.
+    //  - Ouverte en arrière-plan, sans micro, dès que la conversation démarre
+    //    (interruption à la voix allumée). Ses pannes ne se voient pas : la
+    //    session d'écoute prend alors le relais, détection raccourcie
+    //    (cf. openBargeMic) — le comportement d'avant cette seconde session.
+    const INTERRUPTER_TRIES_MAX = 3;
+    const interrupter = createRealtimeTranscriber({
+        purpose: 'interruption',
+        background: true,           // ni toast, ni fenêtre de quota : la session d'écoute les porte
+        expectsSpeech: () => false, // le silence y est la règle
+        keepCapture: () => !IS_IOS,
+        onFatal: () => {},
+        // Établie trop tard (conversation finie, réglage éteint entre-temps) : refermée.
+        onStarted: () => { if (mode === 'off' || !bargeIn) interrupter.stop(); },
+        onSpeechStart: (itemId) => {
+            earBusy.set(itemId, ++earOrder);
+            if (suite) { suiteSpeech(suite); return; }
+            if (bargeEar === interrupter) startHush('ear:' + itemId);
+        },
+        onSpeechStop: (itemId) => { hushSpeechEnded('ear:' + itemId); },
+        onCompleted: (transcript, itemId) => {
+            const order = earBusy.get(itemId) || ++earOrder; // tour sans début signalé : le dernier arrivé
+            earBusy.delete(itemId);
+            if (suite) { suiteHeard(suite, transcript, order); return; }
+            // Phrase achevée après la fin de la lecture : ni ordre, ni message.
+            if (mode !== 'speaking' || bargeEar !== interrupter) return;
+            if (!hearWhileSpeaking(transcript, order)) hushMissed('ear:' + itemId);
+        },
+        // Perdue : en pleine lecture, la session d'écoute reprend le micro ;
+        // en pleine suite, celle-ci part avec ce qui est déjà transcrit.
+        onStopped: () => {
+            earBusy.clear();
+            if (suite) armSuite(suite, 0);
+            if (bargeEar !== interrupter) return;
+            bargeEar = null;
+            bargeMicOpen = false;
+            endHush(true);
+            syncBargeMic();
+        },
+    });
+
+    /** Ouvre l'oreille de la lecture, sans micro, si l'interruption à la voix est allumée. */
+    function ensureInterrupter() {
+        if (!bargeIn || mode === 'off') return;
+        if (interrupter.isRecording() || interrupter.isConnecting()) return;
+        if (interrupterTries >= INTERRUPTER_TRIES_MAX) return; // refusée à répétition : on n'insiste pas
+        interrupterTries++;
+        interrupter.releaseMic(); // ouverte SANS micro : il n'y part qu'à la lecture
+        Promise.resolve(interrupter.start()).catch(() => {});
+    }
+    function stopInterrupter() {
+        if (bargeEar === interrupter) bargeEar = null;
+        interrupter.stop();
+    }
+
+    // Micro de la lecture : vers l'oreille dédiée si elle est établie, sinon
+    // vers la session d'écoute, dont la détection de tour est raccourcie le
+    // temps de la lecture (elle reste du même type : « stop » y est plus lent).
+    // Rend la prise du micro (promesse).
+    function openBargeMic() {
+        bargeMicOpen = true;
+        earBusy.clear(); // une lecture neuve : rien n'y est encore dit
+        const ear = bargeEar = interrupter.isRecording() ? interrupter : transcriber;
+        if (ear === transcriber) {
+            transcriber.setTurnDetection?.('fast');
+            ensureInterrupter(); // pour la lecture suivante
+        }
+        return ear.attachMic();
+    }
+    function closeBargeMic() {
+        if (!bargeMicOpen) return;
+        bargeMicOpen = false;
+        const ear = bargeEar || transcriber;
+        bargeEar = null;
+        ear.releaseMic();
+    }
+
+    // ---- La suite d'un stop ------------------------------------------------
+    // « Stop, et pour demain ? » : le silence court de l'oreille coupe à la
+    // virgule — « Stop. » arrive seul, « Et pour demain ? » un instant plus
+    // tard, dans un autre tour (constaté contre l'API). MIA se tait à l'ordre ;
+    // le micro reste ensuite sur l'oreille le temps de savoir si l'on enchaîne :
+    //  - rien ne se dit dans SUITE_GRACE_MS : écoute ordinaire (repère, micro
+    //    rendu à la session d'écoute) ;
+    //  - on enchaîne : les tours qui suivent sont recollés jusqu'à un silence
+    //    de SUITE_GAP_MS, puis partent comme le tour suivant (routeTurn : un
+    //    message, ou un ordre pour une carte). Rien n'est perdu entre deux
+    //    sessions, et rien n'est envoyé coupé en deux.
+    // Un tour commencé AVANT l'ordre n'est jamais repris (règle de toujours :
+    // une phrase commencée pendant la lecture n'est pas un message). Un tour
+    // commencé après l'ordre mais avant que MIA se taise peut être sa voix,
+    // revenue par le micro : il est comparé au texte qu'elle lisait.
+    function beginSuite(first, spoken, stopOrder) {
+        const seq = newTurn();
+        // `duringReading` : rangs des tours déjà commencés, donc dits avant que MIA se taise.
+        const s = suite = { seq, parts: first ? [first] : [], spoken, stopOrder, duringReading: new Set(earBusy.values()), timer: null, deadline: null };
+        s.deadline = setTimeout(() => endSuite(s), SUITE_MAX_MS);
+        setMode('listening', t('Je vous écoute'));
+        setLive(first || '');
+        if (!suitePending(s)) armSuite(s, SUITE_GRACE_MS);
+    }
+    /** Un tour de la suite est-il encore en train d'être dit, ou transcrit ? */
+    function suitePending(s) {
+        for (const order of earBusy.values()) if (order > s.stopOrder) return true;
+        return false;
+    }
+    function armSuite(s, ms) {
+        clearTimeout(s.timer);
+        s.timer = setTimeout(() => { if (suite === s && !suitePending(s)) endSuite(s); }, ms);
+    }
+    // On enchaîne : la suite attend la fin de ce qui se dit.
+    function suiteSpeech(s) {
+        clearTimeout(s.timer);
+        s.timer = null;
+        if (!s.parts.length) setLive('…');
+    }
+    function suiteHeard(s, transcript, order) {
+        const said = String(transcript || '').replace(/\s+/g, ' ').trim();
+        const beforeOrder = order < s.stopOrder; // commencé avant « stop » : jamais un message
+        // Commencé avant que MIA se taise : ce peut être sa voix, revenue par le micro.
+        const echo = s.duringReading.has(order) && !!VC && VC.looksLikeEcho(said, s.spoken);
+        if (said && !beforeOrder && !echo) {
+            s.parts.push(said);
+            setLive(s.parts.join(' '));
+        }
+        if (!suitePending(s)) armSuite(s, SUITE_GAP_MS);
+    }
+    function endSuite(s) {
+        if (suite !== s) return;
+        cancelSuite();
+        if (mode !== 'listening' || s.seq !== turnSeq) {
+            // La conversation a bougé entre-temps : rien ne part, et le micro
+            // de la lecture n'est jamais laissé ouvert derrière soi.
+            if (mode !== 'speaking') closeBargeMic();
+            return;
+        }
+        const text = s.parts.join(' ').replace(/\s+/g, ' ').trim();
+        if (text) {
+            closeBargeMic();
+            if (routeTurn(text)) return;
+        }
+        startListening();
+    }
+    function cancelSuite() {
+        const s = suite;
+        if (!s) return;
+        suite = null;
+        clearTimeout(s.timer);
+        clearTimeout(s.deadline);
+    }
+
     /** Remet à zéro ce qui appartient à UN tour ; rend son numéro. */
     function newTurn() {
+        endHush(false); // la voix ne reste jamais baissée d'un tour sur l'autre
         turnText = '';
         speakAbort?.abort();
         speakAbort = null;
@@ -11745,17 +13245,19 @@ function createRealtimeTranscriber(opts) {
     // (interruption à la voix) est donc relâché AVANT le repère.
     async function startListening() {
         if (mode === 'off') return;
-        if (bargeMicOpen) {
-            bargeMicOpen = false;
-            transcriber.releaseMic();
-        }
+        cancelSuite();
+        closeBargeMic();
         const seq = newTurn();
         setMode('listening', t('Je vous écoute'));
         setLive(''); // l'invite « dites stop » de la lecture ne vaut plus : place à la transcription
         prefetchCardCues();
         await enqueueAudio(earcon('listen'), () => mode === 'listening' && seq === turnSeq);
         if (mode !== 'listening' || seq !== turnSeq) return;
+        // Pour une demande, la détection de fin de tour de la session (elle
+        // laisse finir une phrase) ; la courte ne vaut que pendant la lecture.
+        transcriber.setTurnDetection?.('base');
         transcriber.attachMic();
+        paintSources();
     }
 
     // Fin de tour : la phrase est d'abord ROUTÉE — ce qui a été dit n'est pas
@@ -11771,15 +13273,18 @@ function createRealtimeTranscriber(opts) {
     /**
      * Décide de ce qu'une phrase DÉCLENCHE, dans cet ordre :
      *  1. un ordre pour la carte en attente (« approuve », « envoie-le ») ;
-     *  2. la fin de la conversation (« au revoir ») ;
-     *  3. un ordre d'arrêt seul, alors que rien n'est lu : ni action, ni
+     *  2. un connecteur à allumer ou éteindre (« active Gmail ») ;
+     *  3. la fin de la conversation (« au revoir ») ;
+     *  4. un ordre d'arrêt seul, alors que rien n'est lu : ni action, ni
      *     message — « stop » n'a rien à dire à l'assistant (rend false) ;
-     *  4. sinon, un message ordinaire.
+     *  5. sinon, un message ordinaire.
      */
     function routeTurn(text) {
         if (VC) {
             const order = cardOrder(text);
             if (order) { actOnCard(order.card, order.cmd); return true; }
+            const sw = VC.connectorCommand ? VC.connectorCommand(text) : null;
+            if (sw) { switchConnectors(sw); return true; }
             if (VC.endCommand(text)) { farewell(); return true; }
             const stop = VC.stopCommand(text);
             if (stop && stop.hard && !stop.remainder) return false;
@@ -11867,7 +13372,9 @@ function createRealtimeTranscriber(opts) {
         enqueueAudio(earcon('sent'), alive);
         let cues = [];
         try {
-            cues = await runVoiceCardCommand(card, cmd, (type) => { sayCue(type, alive); });
+            cues = cmd.act === 'read'
+                ? await readCardAloud(card, alive)
+                : await runVoiceCardCommand(card, cmd, (type) => { sayCue(type, alive); });
         } catch (e) {
             console.error('[voice] card command failed', e);
             cues = ['vc_failed'];
@@ -11876,6 +13383,121 @@ function createRealtimeTranscriber(opts) {
             if (!alive()) return;
             await sayCue(type, alive);
         }
+        if (alive()) startListening();
+    }
+
+    // « Lis-le » : MIA lit la carte en attente — pour un email, à qui il part,
+    // son objet, son texte. Le serveur relit la carte EN BASE (jamais un texte
+    // envoyé d'ici) et en rend l'audio. Passer, Espace, Échap ou un toucher
+    // sur le bandeau coupent la lecture ; MIA écoute ensuite la décision.
+    async function readCardAloud(card, alive) {
+        const id = card && card.dataset ? String(card.dataset.actionId || '') : '';
+        if (!id) return ['vc_failed'];
+        if (barStatus) barStatus.textContent = t('Je vous la lis…');
+        const fd = new FormData();
+        fd.append('action_id', id);
+        const r = await fetchWithSessionGuard(`/chat/${convId()}/voice/card`, {
+            method: 'POST', headers: { 'X-CSRF-Token': csrfToken }, body: fd,
+        });
+        if (r.status === 204) return ['vc_failed']; // carte tranchée entre-temps, ou rien à lire
+        if (!r.ok) {
+            const err = await r.json().catch(() => ({}));
+            if (r.status === 429 && handleQuotaExceededPayload(err)) { endConversation(); return []; }
+            return ['vc_failed'];
+        }
+        const url = URL.createObjectURL(await r.blob());
+        if (!alive()) { URL.revokeObjectURL(url); return []; }
+        cardReading = true;
+        if (barSkip) barSkip.hidden = false;
+        try {
+            await enqueueAudio(url, alive, voiceRate);
+        } finally {
+            cardReading = false;
+            if (barSkip && mode !== 'speaking') barSkip.hidden = true;
+            URL.revokeObjectURL(url);
+        }
+        return [];
+    }
+
+    // ---- Connecteurs ------------------------------------------------------
+    // En conversation vocale, personne n'ouvre le menu « + » : les connecteurs
+    // reliés s'activent À LA DEMANDE (submitForm envoie « Laisser MIA
+    // choisir » dès que l'administrateur le propose — le serveur reste juge),
+    // et l'on peut en allumer ou en éteindre un à la voix (« active Gmail »).
+    // Le bandeau dit lesquels servent : sans cette ligne, impossible de savoir
+    // à l'oreille si MIA a accès aux mails ou à l'agenda.
+    function connectorRowsNow() {
+        return Array.from(document.querySelectorAll('#plusMenuFoldBody .plus-menu-row[data-connector]'))
+            .filter((row) => row.dataset.connector !== 'auto' && row.dataset.disabled !== '1');
+    }
+    function rowToggle(row) { return row.querySelector('input[type="checkbox"]'); }
+    function rowName(row) { return String(row.dataset.service || row.dataset.label || '').trim(); }
+    function modelUsesTools() {
+        const select = document.getElementById('llmSelect');
+        return !!(window.LLM_INFO && select && window.LLM_INFO[select.value] && window.LLM_INFO[select.value].tool_use);
+    }
+    function paintSources() {
+        if (!barSources) return;
+        const rows = connectorRowsNow();
+        const on   = rows.filter((row) => rowToggle(row)?.checked);
+        const auto = !!document.getElementById('connectorsAutoToggle');
+        let text = '';
+        if (rows.length > 0 && !modelUsesTools()) {
+            text = t('Connecteurs indisponibles avec ce modèle');
+        } else if (on.length > 0) {
+            text = t('Connecteurs : {liste}', { liste: on.map(rowName).join(', ') })
+                + (auto && on.length < rows.length ? ' · ' + t('les autres à la demande') : '');
+        } else if (rows.length > 0) {
+            text = auto
+                ? t('Connecteurs à la demande : {liste}', { liste: rows.map(rowName).join(', ') })
+                : t('Connecteurs éteints — dites « active » suivi de leur nom');
+        }
+        barSources.textContent = text;
+        barSources.hidden = text === '' || mode === 'off';
+    }
+    // Un interrupteur du menu « + » touché pendant la conversation : la ligne suit.
+    document.addEventListener('change', () => { if (mode !== 'off') paintSources(); });
+
+    // Allume ou éteint ce que l'ordre désigne ; rend l'annonce à dire. Le
+    // geste passe par l'interrupteur du menu « + » (même mémoire, mêmes
+    // indicateurs qu'un clic). Un service non relié ne s'allume pas d'ici.
+    function applyConnectorCommand(cmd) {
+        const rows = connectorRowsNow();
+        const byKey = new Map(rows.map((row) => [row.dataset.connector, row]));
+        const webToggle = document.getElementById('webAccessToggle');
+        const boxes = [];
+        if (cmd.all) {
+            rows.forEach((row) => boxes.push(rowToggle(row)));
+        } else {
+            (cmd.targets || []).forEach((keys) => {
+                if (keys.includes('web')) { if (webToggle) boxes.push(webToggle); return; }
+                const key = keys.find((k) => byKey.has(k));
+                if (key) boxes.push(rowToggle(byKey.get(key)));
+            });
+        }
+        const usable = boxes.filter((box) => box && !box.disabled);
+        if (!usable.length) return 'vc_connector_unlinked';
+        // Allumer un connecteur sur un modèle sans outils ouvrirait la fenêtre
+        // de choix du modèle : à la voix, on le dit simplement.
+        if (cmd.on && usable.some((box) => box !== webToggle) && !modelUsesTools()) return 'vc_connector_model';
+        usable.forEach((box) => {
+            if (box.checked === cmd.on) return;
+            box.checked = cmd.on;
+            box.dispatchEvent(new Event('change', { bubbles: true }));
+        });
+        paintSources();
+        return cmd.on ? 'vc_connector_on' : 'vc_connector_off';
+    }
+
+    async function switchConnectors(cmd) {
+        transcriber.releaseMic();
+        const seq = turnSeq;
+        const alive = () => mode === 'acting' && seq === turnSeq;
+        setMode('acting', t('Je m\'en occupe…'));
+        enqueueAudio(earcon('sent'), alive);
+        let cue = 'vc_failed';
+        try { cue = applyConnectorCommand(cmd); } catch (e) { console.error('[voice] connector command failed', e); }
+        await sayCue(cue, alive);
         if (alive()) startListening();
     }
 
@@ -11899,12 +13521,11 @@ function createRealtimeTranscriber(opts) {
     function syncBargeMic() {
         if (mode !== 'speaking') return;
         if (bargeIn && !bargeMicOpen) {
-            bargeMicOpen = true;
-            transcriber.attachMic();
+            openBargeMic();
             setLive(t('Dites « stop » pour l\'interrompre'));
         } else if (!bargeIn && bargeMicOpen) {
-            bargeMicOpen = false;
-            transcriber.releaseMic();
+            endHush(true);
+            closeBargeMic();
             setLive('');
         }
     }
@@ -11914,24 +13535,93 @@ function createRealtimeTranscriber(opts) {
     // la voix de MIA elle-même, revenue par le micro (MiaVoiceCommands.
     // interruption compare la phrase au texte en cours de lecture). Un ordre
     // suivi d'autre chose (« stop, et pour demain ? ») emporte la suite.
-    function hearWhileSpeaking(transcript) {
+    // `earRank` : rang du tour dans l'oreille de la lecture, quand c'est elle
+    // qui l'a entendu (cf. « La suite d'un stop ») ; absent pour la session d'écoute.
+    function hearWhileSpeaking(transcript, earRank) {
         const said = String(transcript || '').replace(/\s+/g, ' ').trim();
-        if (!said || !VC) return;
+        if (!said || !VC) return false;
         const hit = VC.interruption(said, spokenText());
-        if (hit) interruptSpeech(hit.remainder);
+        if (hit) interruptSpeech(hit.remainder, earRank);
+        return !!hit; // faux : ce n'était pas un ordre d'arrêt, la voix reprend (cf. hushMissed)
+    }
+
+    // ---- Voix baissée dès que l'on parle ---------------------------------
+    // Le texte d'un « stop » n'arrive qu'une fois le tour clos et transcrit :
+    // une à deux secondes pendant lesquelles MIA continuait à pleine voix,
+    // par-dessus celui qui voulait la couper. Dès que la détection de parole
+    // du serveur signale une voix PENDANT la lecture, la sienne baisse (ou se
+    // met en pause là où le volume ne se règle pas) ; si l'on parle encore
+    // HUSH_PAUSE_MS plus tard, elle se tait tout à fait. Le texte tranche
+    // ensuite : un ordre d'arrêt la coupe (interruptSpeech), tout le reste —
+    // une remarque, une toux, sa propre voix revenue par le micro — lui rend
+    // la parole là où elle s'était arrêtée.
+    // Un appareil dont le micro entend trop MIA la ferait hoqueter à chaque
+    // phrase : après HUSH_MISSES_MAX fausses alertes, la voix ne baisse plus
+    // de la conversation. « Stop » marche toujours, comme avant.
+    function startHush(itemId) {
+        if (hush || !bargeIn || mode !== 'speaking' || hushMisses >= HUSH_MISSES_MAX) return;
+        const h = hush = { itemId, volume: player.volume, paused: false, pauseTimer: null, endTimer: null };
+        const pause = () => {
+            if (hush !== h || player.paused || player.ended || !player.src) return;
+            try { player.pause(); h.paused = true; } catch (_) {}
+        };
+        if (canDuck) {
+            try { player.volume = h.volume * HUSH_LEVEL; } catch (_) {}
+            h.pauseTimer = setTimeout(pause, HUSH_PAUSE_MS);
+        } else {
+            pause();
+        }
+        h.endTimer = setTimeout(() => { if (hush === h) endHush(true); }, HUSH_MAX_MS);
+        bar?.classList.add('is-hushed');
+    }
+    // On s'est tu : le texte ne devrait plus tarder. S'il ne vient pas, la voix reprend.
+    function hushSpeechEnded(itemId) {
+        const h = hush;
+        if (!h || h.itemId !== itemId) return;
+        clearTimeout(h.endTimer);
+        h.endTimer = setTimeout(() => { if (hush === h) endHush(true); }, HUSH_VERDICT_MS);
+    }
+    // Ce qui a été dit n'était pas un ordre d'arrêt : fausse alerte.
+    function hushMissed(itemId) {
+        if (!hush || hush.itemId !== itemId) return;
+        hushMisses++;
+        endHush(true);
+    }
+    /** Rend son volume à la voix ; `resume` : elle reprend si elle avait été mise en pause. */
+    function endHush(resume) {
+        const h = hush;
+        if (!h) return;
+        hush = null;
+        clearTimeout(h.pauseTimer);
+        clearTimeout(h.endTimer);
+        try { player.volume = h.volume; } catch (_) {}
+        bar?.classList.remove('is-hushed');
+        if (resume && h.paused && mode === 'speaking' && player.src && player.paused) {
+            try {
+                const p = player.play();
+                if (p && typeof p.catch === 'function') p.catch(() => {});
+            } catch (_) {}
+        }
     }
 
     // « Stop » (ou Passer) : MIA se tait et vous écoute. Si sa réponse
     // s'écrit encore, l'écriture s'arrête aussi (cf. stopWriting).
-    function interruptSpeech(remainder) {
+    function interruptSpeech(remainder, earRank) {
         if (mode !== 'speaking') return;
+        hushMisses = 0; // un vrai « stop » : la baisse de la voix a servi
+        const spoken = spokenText();
         stopReading();
         stopWriting();
+        // Entendu par l'oreille de la lecture : ce qui est dit dans la foulée
+        // arrive en tours séparés — on les attend avant de rendre l'écoute.
+        if (earRank && bargeEar === interrupter) {
+            beginSuite(remainder, spoken, earRank);
+            return;
+        }
         if (remainder) {
             // L'ordre portait déjà la suite : elle part comme le tour suivant,
             // sans repasser par l'écoute.
-            bargeMicOpen = false;
-            transcriber.releaseMic();
+            closeBargeMic();
             newTurn();
             if (routeTurn(remainder)) return;
         }
@@ -11939,6 +13629,65 @@ function createRealtimeTranscriber(opts) {
     }
 
     function skipSpeech() { interruptSpeech(''); }
+
+    // ---- Interrompre sans la voix ----------------------------------------
+    // Passer, la barre d'espace, Échap, un toucher sur le bandeau, le bouton
+    // du casque : le même geste, immédiat — là où la voix demande le temps
+    // d'une transcription, et sur iPhone où l'interruption à la voix est
+    // éteinte par défaut. Coupe la lecture d'une réponse, ou celle d'une
+    // carte (« lis-le ») ; hors lecture, ne fait rien.
+    function interruptNow() {
+        if (mode === 'speaking') { skipSpeech(); return true; }
+        if (mode === 'acting' && cardReading) { stopPlayer(); return true; }
+        return false;
+    }
+    function canInterruptNow() {
+        return mode === 'speaking' || (mode === 'acting' && cardReading);
+    }
+    // Espace n'est confisqué que là où il ne sert à rien d'autre : jamais
+    // dans un champ où l'on écrit, ni sur un bouton ou un lien (il les
+    // actionne) — sauf le bouton de la conversation, que la souris vient de
+    // quitter et où Espace TERMINERAIT la conversation au lieu de couper MIA.
+    function spaceIsFree(target) {
+        if (!target || target === document.body || target === btn) return true;
+        if (target === msgInput) return msgInput.value === '';
+        if (target.isContentEditable) return false;
+        return !/^(INPUT|TEXTAREA|SELECT|BUTTON|A|SUMMARY)$/.test(String(target.tagName || ''));
+    }
+    let spaceTaken = false; // le relâchement de la touche ne doit pas « cliquer » le bouton
+    document.addEventListener('keydown', (ev) => {
+        if (!canInterruptNow() || ev.defaultPrevented || ev.ctrlKey || ev.metaKey || ev.altKey) return;
+        const space = ev.key === ' ' || ev.code === 'Space';
+        if (ev.key !== 'Escape' && !space) return;
+        if (space && !spaceIsFree(ev.target)) return;
+        ev.preventDefault();
+        spaceTaken = space;
+        interruptNow();
+    });
+    document.addEventListener('keyup', (ev) => {
+        if (!spaceTaken || !(ev.key === ' ' || ev.code === 'Space')) return;
+        spaceTaken = false;
+        ev.preventDefault();
+    });
+    // Le bandeau entier, hors de ses commandes.
+    bar?.addEventListener('click', (ev) => {
+        const target = ev && ev.target;
+        if (target && typeof target.closest === 'function' && target.closest('button, select, input, label')) return;
+        interruptNow();
+    });
+    // Bouton du casque, touches média du clavier, écran verrouillé : pause,
+    // stop et « suivant » interrompent ; « lecture » ne relance jamais un son
+    // que l'on vient de couper.
+    let mediaKeysBound = false;
+    function bindMediaKeys(on) {
+        if (on === mediaKeysBound) return;
+        const session = navigator.mediaSession;
+        if (!session || typeof session.setActionHandler !== 'function') return;
+        mediaKeysBound = on;
+        const set = (action, handler) => { try { session.setActionHandler(action, handler); } catch (_) {} };
+        ['pause', 'stop', 'nexttrack'].forEach((action) => set(action, on ? () => { interruptNow(); } : null));
+        set('play', on ? () => {} : null);
+    }
 
     // Interrompre MIA pendant qu'elle écrit encore arrête aussi l'écriture —
     // même demande que le bouton Stop du chat : on ne se tait pas en
@@ -11948,6 +13697,9 @@ function createRealtimeTranscriber(opts) {
     function stopWriting() {
         const st = turnStream;
         if (!st || st.done || !turnJobId || String(st.jobId) !== turnJobId) return;
+        // Même arrêt que le bouton Stop (le texte s'arrête tout de suite à
+        // l'écran, la réponse enregistrée est celle qui était écrite).
+        if (typeof window.miaStopJob === 'function') { window.miaStopJob(turnJobId); return; }
         st.aborted = true;
         fetch(`/jobs/${turnJobId}/cancel`, { method: 'POST', headers: { 'X-CSRF-Token': csrfToken } }).catch(() => {});
     }
@@ -12085,10 +13837,12 @@ function createRealtimeTranscriber(opts) {
         setMode('speaking', t('MIA vous répond'));
         await drainAudio();
         if (bargeIn && mode === 'speaking' && seq === speakSeq) {
-            bargeMicOpen = true;
             setLive(t('Dites « stop » pour l\'interrompre'));
+            // Le micro part vers l'oreille de la lecture (silence court : un
+            // « stop » y est compris en moins d'une seconde) ; à défaut vers
+            // la session d'écoute, détection raccourcie (cf. openBargeMic).
             await Promise.race([
-                transcriber.attachMic(),
+                openBargeMic(),
                 new Promise((resolve) => setTimeout(resolve, 1500)),
             ]);
         }
@@ -12096,6 +13850,7 @@ function createRealtimeTranscriber(opts) {
 
     // Coupe la lecture : téléchargements abandonnés, voix arrêtée.
     function stopReading() {
+        endHush(false);
         speakSeq++;
         speakAbort?.abort();
         speakAbort = null;
@@ -12219,6 +13974,8 @@ function createRealtimeTranscriber(opts) {
 
     function endConversation(message) {
         if (mode === 'off') return;
+        endHush(false);
+        cardReading = false;
         turnSeq++;
         speakSeq++;
         stopTicks();
@@ -12235,9 +13992,14 @@ function createRealtimeTranscriber(opts) {
         readerSpoke = false;
         liveWaiting = false;
         bargeMicOpen = false;
+        bargeEar = null;
+        cancelSuite();
+        earBusy.clear();
         itemOrigin.clear();
         announced = new Set();
+        interrupter.stop(); // l'oreille de la lecture : mêmes rapport et fermeture
         transcriber.stop(); // rapporte les minutes écoutées, coupe le micro (sans effet si déjà arrêté)
+        paintSources();
         if (message) showToast(message, 'warning');
     }
 
@@ -12245,7 +14007,10 @@ function createRealtimeTranscriber(opts) {
         if (mode !== 'off') return;
         window.stopDictation?.(); // un seul micro à la fois
         unlockAudio();
+        hushMisses = 0;
+        interrupterTries = 0;
         setMode('connecting', t('Connexion…'));
+        paintSources();
         CUE_PREFETCH.forEach((type) => { cueUrl(type); });
         const ok = await transcriber.start();
         if (!ok && mode !== 'off') endConversation();
@@ -12258,7 +14023,7 @@ function createRealtimeTranscriber(opts) {
         else endConversation();
     });
     barEnd?.addEventListener('click', () => endConversation());
-    barSkip?.addEventListener('click', skipSpeech);
+    barSkip?.addEventListener('click', () => { interruptNow(); });
     // Exclusion mutuelle avec la dictée, et changement de conversation.
     window.stopVoiceChat = () => endConversation();
 })();
@@ -12340,6 +14105,7 @@ function createRealtimeTranscriber(opts) {
         video: t('Vidéo'), presentation: t('Présentation'), map: t('Carte'),
         gamma: t('Présentation Gamma'), native_deck: t('Fichier réalisé par le modèle'),
         mybrain_feed: t('Apport au cerveau MyBrain'),
+        table_mission: t('Opération sur une table'),
         maintenance: t('Traitement'), credits_refresh: t('Mise à jour des prix'),
     };
     let timer = null;
@@ -12386,10 +14152,10 @@ function createRealtimeTranscriber(opts) {
             return;
         }
         if (btn.dataset.jobAct === 'cancel' && jobId) {
+            // Même arrêt que le bouton Stop : la réponse affichée s'arrête
+            // tout de suite, et la génération quitte le tiroir.
             btn.disabled = true;
-            fetch(`/jobs/${jobId}/cancel`, { method: 'POST', headers: { 'X-CSRF-Token': csrfToken } })
-                .then(() => refresh())
-                .catch(() => { btn.disabled = false; });
+            stopJobById(jobId);
         }
     });
 

@@ -236,12 +236,23 @@
     /**
      * Genre de fichier que la « Version soignée » d'un modèle produirait depuis cette
      * carte : 'pptx' pour une présentation, 'xlsx' pour un tableau (classeur,
-     * CSV), '' sinon. Même règle que NativeDeck::kindFor côté serveur.
+     * CSV), 'pdf' pour un document déclaré en .pdf, 'docx' pour un document
+     * déclaré en .docx ou .rtf, '' sinon. Même règle que NativeDeck::kindFor
+     * côté serveur.
      */
     function nativeKind(file) {
         if (offersGamma(file)) return 'pptx';
         if (file.preview === 'table' && file.targets.indexOf('xlsx') !== -1) return 'xlsx';
+        if (!file.refusal && file.format.family === 'document') {
+            if (file.ext === 'pdf') return 'pdf';
+            if (file.ext === 'docx' || file.ext === 'rtf') return 'docx';
+        }
         return '';
+    }
+
+    /** Un document (PDF ou Word) plutôt qu'une présentation ou un classeur ? */
+    function isDocKind(kind) {
+        return kind === 'pdf' || kind === 'docx';
     }
 
     // ------------------------------------------------------------------
@@ -557,8 +568,45 @@
         return !!close && close[1].charAt(0) === fence.charAt(0) && close[1].length >= fence.length;
     }
 
+    /**
+     * Genre de fichier pour l'habillage de l'entreprise : 'pptx' (présentation),
+     * 'docx' (document Word ou RTF), 'pdf' ; '' sinon — un classeur, un texte
+     * ou un format refusé n'embarque ni modèle ni logo.
+     */
+    function refsKind(file) {
+        if (file.refusal) return '';
+        if (file.format.family === 'presentation') return 'pptx';
+        if (file.ext === 'docx' || file.ext === 'rtf') return 'docx';
+        if (file.ext === 'pdf') return 'pdf';
+        return '';
+    }
+
+    /**
+     * Ce que l'entreprise a déposé et qui sert à ce genre de fichier — une case
+     * par élément : son modèle (PowerPoint pour une présentation, Word pour un
+     * document Word ; un PDF n'en a pas) et son logo. `company` =
+     * window.FILE_COMPANY (CompanyProfile::availableReferences). Pure.
+     */
+    function refsFor(kind, company) {
+        if (!company || kind === '') return [];
+        const name = String(company.name || '');
+        const out = [];
+        if (kind === 'pptx' && company.pptx) {
+            out.push({ ref: 'template', label: name ? t('Modèle PowerPoint de {name}', { name: name }) : t('Modèle PowerPoint de votre entreprise') });
+        }
+        if (kind === 'docx' && company.docx) {
+            out.push({ ref: 'template', label: name ? t('Modèle Word de {name}', { name: name }) : t('Modèle Word de votre entreprise') });
+        }
+        if (company.logo) {
+            out.push({ ref: 'logo', label: name ? t('Logo de {name}', { name: name }) : t('Logo de votre entreprise') });
+        }
+        return out;
+    }
+
     const api = {
         parseInfo: parseInfo,
+        refsKind: refsKind,
+        refsFor: refsFor,
         describe: describe,
         parseTable: parseTable,
         extensionOf: extensionOf,
@@ -654,6 +702,7 @@
         if (!gamma && !nativeAvailable()) return noModelReason();
         let title = gamma ? t('Une mise en page soignée, par un modèle ou par Gamma')
             : kind === 'xlsx' ? t('Le modèle compose le classeur lui-même : formules, mise en forme, graphique')
+            : isDocKind(kind) ? t('Le modèle compose le document lui-même : mise en page, tableaux, typographie')
             : t('Le modèle compose la présentation lui-même, avec sa propre mise en page');
         const chosen = planModel(plan);
         if (chosen) {
@@ -783,8 +832,76 @@
             + '</div>'
             + actions
             + '</div>'
+            + (closed ? refsHtml(refsKind(file), '') : '')
             + '<pre class="file-card-source" hidden><code>' + esc(source) + '</code></pre>'
             + '</div>\n';
+    }
+
+    // ------------------------------------------------------------------
+    // Modèle et logo de l'entreprise : embarqués ou non
+    // ------------------------------------------------------------------
+
+    /**
+     * Choix de la personne, mémorisé pour son compte sur cet appareil : tout
+     * est embarqué tant qu'elle n'a rien décoché. Vaut pour la version rapide
+     * (Télécharger), la version soignée (fenêtre, ou choisie avant l'écriture)
+     * et toutes les cartes à la fois.
+     */
+    const REFS_KEY = 'fileCompanyRefs:' + String(root.CURRENT_USER_ID || '');
+
+    function companyRefs() {
+        try {
+            const saved = JSON.parse(root.localStorage.getItem(REFS_KEY) || '{}') || {};
+            return { template: saved.template !== false, logo: saved.logo !== false };
+        } catch (_e) {
+            return { template: true, logo: true };
+        }
+    }
+
+    function setCompanyRef(ref, on) {
+        if (ref !== 'template' && ref !== 'logo') return;
+        const refs = companyRefs();
+        refs[ref] = !!on;
+        try { root.localStorage.setItem(REFS_KEY, JSON.stringify(refs)); } catch (_e) { /* navigation privée */ }
+        // Toutes les cases suivent, et les fenêtres déjà préparées sont oubliées.
+        document.querySelectorAll('input[data-file-ref="' + ref + '"], input[data-polish-ref="' + ref + '"]').forEach(function (input) {
+            input.checked = !!on;
+        });
+        document.querySelectorAll('.file-card').forEach(function (card) { card.__plan = null; });
+    }
+
+    /** Cases « Embarquer : Modèle … · Logo … » ; '' quand l'entreprise n'a rien déposé pour ce genre. */
+    function refsHtml(kind, extraClass) {
+        const items = refsFor(kind, root.FILE_COMPANY);
+        if (!items.length) return '';
+        const refs = companyRefs();
+
+        return '<div class="file-refs' + (extraClass || '') + '" role="group" aria-label="' + esc(t('À embarquer dans le fichier')) + '">'
+            + '<span class="file-refs-label">' + esc(t('Embarquer :')) + '</span>'
+            + items.map(function (item) {
+                return '<label class="file-ref"><input type="checkbox" data-file-ref="' + esc(item.ref) + '"'
+                    + (refs[item.ref] ? ' checked' : '') + '><span>' + esc(item.label) + '</span></label>';
+            }).join('')
+            + '</div>';
+    }
+
+    /**
+     * Sous les boutons « Version rapide / soignée » posés AVANT l'écriture
+     * (PolishOffer) : les mêmes cases, pour choisir ce qui sera embarqué avant
+     * que le fichier ne soit fabriqué. Figées une fois la question tranchée.
+     */
+    function offerRefs(card, kind, state) {
+        if (!card || !card.parentNode) return;
+        let box = card.nextElementSibling;
+        if (!box || !box.classList.contains('file-refs')) {
+            const html = refsHtml(kind, ' is-offer');
+            if (html === '') return;
+            card.insertAdjacentHTML('afterend', html);
+            box = card.nextElementSibling;
+        }
+        const frozen = state === 'answered' || state === 'superseded';
+        box.classList.toggle('is-frozen', frozen);
+        box.querySelectorAll('input').forEach(function (input) { input.disabled = frozen; });
     }
 
     /**
@@ -1084,6 +1201,9 @@
         body.append('origin', request.origin || request.name);
         body.append('language', request.language || '');
         body.append('source', request.source);
+        const refs = companyRefs();
+        body.append('company_template', refs.template ? '1' : '0');
+        body.append('company_logo', refs.logo ? '1' : '0');
 
         const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
         const timer = controller ? setTimeout(function () { controller.abort(); }, BUILD_TIMEOUT_MS) : null;
@@ -1115,7 +1235,14 @@
                             return requestBuild(request, true);
                         });
                     }
-                    throw buildError((data && data.code) || 'failed', data && data.error, data && data.alternatives);
+                    // Sans `code`, la réponse vient du gestionnaire global
+                    // d'erreurs (panne imprévue : « Une erreur interne est
+                    // survenue ») : on dit ce qui a échoué, et la carte propose
+                    // les autres formats de son menu.
+                    if (!data || !data.code) {
+                        throw buildError('failed', '', []);
+                    }
+                    throw buildError(data.code, data.error, data.alternatives);
                 });
             }
             if (type.indexOf('text/html') === 0 && !/\.html?$/i.test(request.name)) {
@@ -1245,7 +1372,12 @@
         if (['network', 'failed', 'unavailable'].indexOf(err.code) !== -1) {
             add(t('Réessayer'), 'file-retry', { ext: ext });
         }
-        (err.alternatives || []).filter(function (alt) { return alt !== ext; }).slice(0, 3).forEach(function (alt) {
+        // Échec imprévu sans issue désignée par le serveur : les autres
+        // formats du menu de la carte (un autre fabricant réussit souvent).
+        const alternatives = (err.alternatives && err.alternatives.length) || err.code !== 'failed'
+            ? (err.alternatives || [])
+            : (file.targets || []);
+        alternatives.filter(function (alt) { return alt !== ext; }).slice(0, 3).forEach(function (alt) {
             add(t('Télécharger en {format}', { format: menuLabel(alt) }), 'file-alt', { ext: alt });
         });
         add(t('Contenu brut (.{ext})', { ext: rawExtension(file) }), 'file-raw', {});
@@ -1551,7 +1683,8 @@
             message_id: request.messageId || '',
             model: request.model || '',
             exclude: request.exclude || [],
-            company: request.company === false ? '0' : '1',
+            company_template: request.template === false ? '0' : '1',
+            company_logo: request.logo === false ? '0' : '1',
             note: request.note || '',
         }, t('Le modèle n’a pas pu être sollicité. Réessayez dans un instant.'));
     }
@@ -1751,7 +1884,9 @@
     function panelHead(panel) {
         const intro = panel.__kind === 'xlsx'
             ? t('Le modèle compose lui-même le classeur : types, formules, mise en forme. Vérifiez ce qui part avant de lancer.')
-            : t('Le modèle compose lui-même la présentation, avec sa propre mise en page. Vérifiez ce qui part avant de lancer.');
+            : isDocKind(panel.__kind)
+                ? t('Le modèle compose lui-même le document : mise en page, tableaux, typographie. Vérifiez ce qui part avant de lancer.')
+                : t('Le modèle compose lui-même la présentation, avec sa propre mise en page. Vérifiez ce qui part avant de lancer.');
 
         return '<div class="file-polish-head">'
             + '<span class="file-polish-icon" aria-hidden="true">' + ICON_SPARK + '</span>'
@@ -1808,9 +1943,15 @@
         (plan.files || []).forEach(function (f) {
             rows += rowHtml(' data-polish-file value="' + esc(f.name) + '"', f.name, f.note, '', !f.older, false);
         });
-        if (plan.company) rows += rowHtml(' data-polish-company', plan.company.label, plan.company.note, '', true, false);
+        // Modèle et logo de l'entreprise : une ligne chacun, cochée selon le choix de la carte.
+        const refs = companyRefs();
+        (Array.isArray(plan.company) ? plan.company : []).forEach(function (row) {
+            rows += rowHtml(' data-polish-ref="' + esc(row.ref) + '"', row.label, row.note, '', refs[row.ref] !== false, false);
+        });
 
-        const placeholder = xlsx ? t('Ex. : un graphique par trimestre') : t('Ex. : style sobre, un chiffre clé par slide');
+        const placeholder = xlsx ? t('Ex. : un graphique par trimestre')
+            : isDocKind(panel.__kind) ? t('Ex. : sobre, une page de titre, en-têtes de tableau en couleur')
+            : t('Ex. : style sobre, un chiffre clé par slide');
 
         panel.innerHTML = panelHead(panel)
             + '<div class="file-polish-section">'
@@ -1826,7 +1967,7 @@
             + '<div class="file-polish-section">'
             + '<span class="file-polish-heading" data-polish-provider></span>'
             + '<div class="file-polish-list">' + rows + '</div>'
-            + ((plan.files || []).length || plan.company ? '<span class="file-polish-hint" data-polish-hint></span>' : '')
+            + ((plan.files || []).length || (plan.company || []).length ? '<span class="file-polish-hint" data-polish-hint></span>' : '')
             + '</div>'
             + '<div class="file-polish-section">'
             + '<label class="file-polish-heading" for="polishNote' + panel.__seq + '">' + esc(t('Une précision pour la mise en page ?'))
@@ -1868,7 +2009,7 @@
             ? [chosen.estimate, t('1 à 3 min')].filter(Boolean).join(' · ')
             : t('Choisissez le modèle qui réalisera le fichier.'));
         setText('[data-polish-basis]', chosen
-            ? [chosen.basis, t('fichier gardé {days} jours', { days: String(plan.days || 30) })].filter(Boolean).join(' · ')
+            ? [chosen.basis, chosen.cap, t('fichier gardé {days} jours', { days: String(plan.days || 30) })].filter(Boolean).join(' · ')
             : '');
 
         const launch = panel.querySelector('.file-polish-launch');
@@ -1912,7 +2053,8 @@
         const exclude = Array.prototype.slice.call(panel.querySelectorAll('input[data-polish-file]'))
             .filter(function (input) { return !input.checked; })
             .map(function (input) { return input.value; });
-        const company = panel.querySelector('input[data-polish-company]');
+        const template = panel.querySelector('input[data-polish-ref="template"]');
+        const logo = panel.querySelector('input[data-polish-ref="logo"]');
         const note = panel.querySelector('.file-polish-note');
         const xlsx = panel.__kind === 'xlsx';
 
@@ -1932,7 +2074,8 @@
             messageId: ctx.messageId,
             model: chosen.slug,
             exclude: exclude,
-            company: company ? company.checked : true,
+            template: template ? template.checked : companyRefs().template,
+            logo: logo ? logo.checked : companyRefs().logo,
             note: note ? note.value : '',
         }).then(function (data) {
             closePolishPanel(panel);
@@ -1942,6 +2085,10 @@
                 status = data.already
                     ? t('Ce classeur est déjà en cours de réalisation : le fichier arrivera dans la conversation.')
                     : t('{model} réalise le classeur : le fichier arrivera dans la conversation dans une à trois minutes.', { model: chosen.label });
+            } else if (isDocKind(panel.__kind)) {
+                status = data.already
+                    ? t('Ce document est déjà en cours de réalisation : le fichier arrivera dans la conversation.')
+                    : t('{model} réalise le document : le fichier arrivera dans la conversation dans une à trois minutes.', { model: chosen.label });
             } else {
                 status = data.already
                     ? t('Cette présentation est déjà en cours de réalisation : le fichier arrivera dans la conversation.')
@@ -2047,9 +2194,21 @@
      */
     const NATIVE_LINK = /^\/chat\/\d+\/presentation\/[0-9a-f]{32}$/;
 
+    /**
+     * Lien d'une table de travail remise en fichier (outil `exporter_table`,
+     * `/chat/{id}/tables/{table}/{nom}.xlsx|csv`) : même chemin unique
+     * d'enregistrement — dans l'application mobile, un lien de téléchargement
+     * ne mène nulle part.
+     */
+    // « p12 » : table PERMANENTE (Bases de connaissances) jointe à la conversation ;
+    // `?vue=…` : une vue de cette table (filtrée, triée), calculée au clic.
+    const TABLE_LINK = /^\/chat\/\d+\/tables\/p?\d+\/[a-z0-9][a-z0-9-]{0,60}\.(?:xlsx|csv)(?:\?vue=[A-Za-z0-9_-]{4,1800})?$/;
+
     function downloadNativeLink(link) {
         const href = link.getAttribute('href') || '';
-        const fallback = (link.textContent || '').trim() || 'presentation.pptx';
+        // Carte de réalisation : le nom vit dans data-filename (le lien porte aussi « Télécharger »).
+        const fallback = (link.getAttribute('data-filename') || link.textContent || '').trim()
+            || (TABLE_LINK.test(href) ? href.split('?')[0].split('/').pop() : 'presentation.pptx');
         fetch(href, { credentials: 'same-origin' }).then(function (res) {
             if (!res.ok) {
                 return res.text().then(function (text) { toast(text || t('Ce fichier n’existe plus.'), 'error'); });
@@ -2281,7 +2440,8 @@
         // Présentation réalisée par le modèle : téléchargée, jamais ouverte
         // (le fil ouvrirait le lien dans un onglet, l'application mobile nulle part).
         const link = target.closest('a[href]');
-        if (link && NATIVE_LINK.test(link.getAttribute('href') || '')) {
+        const href = link ? (link.getAttribute('href') || '') : '';
+        if (link && (NATIVE_LINK.test(href) || TABLE_LINK.test(href))) {
             event.preventDefault();
             event.stopPropagation();
             downloadNativeLink(link);
@@ -2415,6 +2575,14 @@
         if (!target.closest('.file-menu, .file-polish-menu')) closeMenus();
     });
 
+    // Modèle ou logo de l'entreprise coché ou décoché (carte, question posée
+    // avant l'écriture, fenêtre « Version soignée ») : mémorisé, et toutes les
+    // cases de la page suivent.
+    document.addEventListener('change', function (event) {
+        const input = event.target && event.target.closest ? event.target.closest('input[data-file-ref], input[data-polish-ref]') : null;
+        if (input) setCompanyRef(input.getAttribute('data-file-ref') || input.getAttribute('data-polish-ref'), input.checked);
+    });
+
     // Le modèle coché change : éditeur, estimation et bouton de la fenêtre suivent.
     document.addEventListener('change', function (event) {
         const input = event.target && event.target.closest ? event.target.closest('input[data-polish-model]') : null;
@@ -2483,6 +2651,8 @@
         saveBlob: saveBlob,
         cardHtml: cardHtml,
         refreshNative: refreshNative,
+        companyRefs: companyRefs,
+        offerRefs: offerRefs,
         // Rendu en cours d'un APERÇU de document : un bloc spécial (fichier,
         // choix en boutons) n'y est que du contenu — choice-buttons.js le lit.
         isPreviewing: function () { return previewDepth > 0; },

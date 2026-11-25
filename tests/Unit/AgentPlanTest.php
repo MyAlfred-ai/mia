@@ -77,7 +77,7 @@ final class AgentPlanTest extends TestCase
         $this->assertMatchesRegularExpression(
             '/if \(\$registry->engagedConnectors\(\) !== \[\] \|\| \$autoConnectors !== \[\]\) \{\s*\$registry->add\(new PlanTools\(/', $src);
         $this->assertStringContainsString('$this->turnPlan = null;', $src, 'Remis à zéro à chaque tour (instance réutilisée par le worker).');
-        $this->assertStringContainsString("Message::setAgent((int)\$msg['id'], ['plan' => \$this->turnPlan, 'suite' => \$followUp]);", $src);
+        $this->assertStringContainsString("Message::setAgent((int)\$msg['id'], ['plan' => \$this->turnPlan, 'suite' => \$followUp, 'offer' => \$polishOffer, 'tables' => \$turnTableIds]);", $src);
         $this->assertStringContainsString("'plan' => \$this->turnPlan,", $src, 'Rejoué dans le payload `done` (attache tardive).');
         $this->assertStringContainsString("'suite'        => \$m['role'] === 'assistant'", $src, 'Historique JSON.');
         $this->assertStringContainsString('PlanTools::TOOL', (string)file_get_contents(ROOT . '/src/Agent/AgentGuidance.php'),
@@ -136,6 +136,8 @@ final class AgentPlanTest extends TestCase
     {
         $this->assertSame('high', ChatController::toolLoopOptions(1, ['drive'])['effort'] ?? null);
         $this->assertArrayNotHasKey('effort', ChatController::toolLoopOptions(1, []), 'Une question simple garde l’effort du modèle.');
+        $this->assertArrayNotHasKey('effort', ChatController::toolLoopOptions(1, ['drive'], true),
+            'Conversation vocale : jamais relevé — une seconde de réflexion est un silence à l’oreille.');
         $this->assertArrayNotHasKey('task_budget', ChatController::toolLoopOptions(1, ['drive']),
             'Budget de tâche déconseillé par Anthropic en session interactive.');
     }

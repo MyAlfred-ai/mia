@@ -11,11 +11,14 @@ declare(strict_types=1);
  * seulement annoncé au modèle : la requête du filtre accompagne CHAQUE
  * recherche, quoi que le modèle demande.
  *
+ * Une brique Slack qui PUBLIE y ajoute sa destination et ses fichiers
+ * (WorkflowSlack::forPass) : posés sur le message quoi que le modèle écrive.
+ *
  * Pur ; un périmètre vide ne change rien (le chat ordinaire en a un vide).
  */
 final class SearchScope
 {
-    private function __construct(private readonly array $f)
+    private function __construct(private readonly array $f, private readonly ?array $slack = null)
     {
     }
 
@@ -24,10 +27,49 @@ final class SearchScope
         return new self(WorkflowFilters::blank());
     }
 
-    /** @param array $filters filtres WorkflowFilters, remplis */
-    public static function fromFilters(array $filters): self
+    /**
+     * @param array $filters filtres WorkflowFilters, remplis
+     * @param ?array $slack réglages d'une brique Slack (charge du job) — gardés s'ils publient
+     */
+    public static function fromFilters(array $filters, ?array $slack = null): self
     {
-        return new self(WorkflowFilters::normalize($filters));
+        return new self(WorkflowFilters::normalize($filters), WorkflowSlack::posts($slack) ? $slack : null);
+    }
+
+    // ------------------------------------------------------------------
+    // Slack (brique qui publie)
+    // ------------------------------------------------------------------
+
+    /** Publication Slack imposée par une brique de workflow (destination, fichiers), null sinon. */
+    public function slackPost(): ?array
+    {
+        return $this->slack;
+    }
+
+    /**
+     * Arguments d'un message Slack : la destination de la brique remplace
+     * celle du modèle (canal OU personne), jamais de fil. Sans brique Slack :
+     * inchangés.
+     */
+    public function applyToSlackPost(array $args): array
+    {
+        $s = $this->slack;
+        if ($s === null) {
+            return $args;
+        }
+        unset($args['canal'], $args['personne'], $args['repondre_a']);
+        if (($s['where'] ?? '') === WorkflowSpec::SLACK_PERSON) {
+            $args['personne'] = (string)($s['person'] ?? '');
+        } else {
+            $args['canal'] = (string)($s['channel'] ?? '');
+        }
+        return $args;
+    }
+
+    /** Fichiers que la brique joint au message (références internes, posées par le serveur). @return list<array> */
+    public function slackAttach(): array
+    {
+        return $this->slack !== null ? array_values(array_filter((array)($this->slack['attach'] ?? []), 'is_array')) : [];
     }
 
     public function isEmpty(): bool
@@ -208,36 +250,66 @@ final class SearchScope
      */
     public function writeRefusal(string $tool, array $args): ?string
     {
-        if (!in_array($tool, ['creer_brouillon_gmail', 'creer_brouillon_outlook'], true) || trim($this->f['recipients']) === '') {
+        // Une réunion avec invités leur ÉCRIT (Outlook envoie l'invitation ;
+        // Google l'envoie par défaut et l'ajoute à leur agenda) : les invités
+        // suivent le même filtre qu'un destinataire.
+        $invite = in_array($tool, [
+            UserOutlookCalendarService::TOOL_CREATE, UserOutlookCalendarService::TOOL_UPDATE,
+            UserCalendarService::TOOL_CREATE, UserCalendarService::TOOL_UPDATE,
+        ], true);
+        if ((!$invite && !in_array($tool, ['creer_brouillon_gmail', 'creer_brouillon_outlook'], true)) || trim($this->f['recipients']) === '') {
             return null;
         }
         $rules = WorkflowFilters::recipientRules($this->f['recipients']);
         if ($rules['addresses'] === [] && $rules['domains'] === []) {
             return null;
         }
-        $to = trim((string)($args['destinataire'] ?? '') . ', ' . (string)($args['cc'] ?? ''), ', ');
+        if ($invite) {
+            $parts = [];
+            // La salle aussi : sa boîte reçoit la demande de réservation.
+            foreach (['invites', 'invites_optionnels', 'participants', 'ajouter_invites', 'ajouter_invites_optionnels', 'salle'] as $k) {
+                $v = $args[$k] ?? null;
+                $parts[] = is_array($v) ? implode(', ', array_filter($v, 'is_scalar')) : (is_scalar($v) ? (string)$v : '');
+            }
+            $to = implode(', ', $parts);
+        } else {
+            $to = trim((string)($args['destinataire'] ?? '') . ', ' . (string)($args['cc'] ?? ''), ', ');
+        }
         $emails = [];
         preg_match_all('/[A-Za-z0-9._%+\'-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,24}/', $to, $m);
         foreach ($m[0] ?? [] as $e) {
             $emails[] = mb_strtolower($e);
         }
         if ($emails === []) {
+            if ($invite) {
+                return null; // évènement sans invité : personne à qui écrire
+            }
             return "Le workflow n'autorise d'emails que vers : " . $this->f['recipients']
                 . ". Indique explicitement le destinataire (« destinataire »), même pour une réponse.";
         }
         $refused = array_values(array_filter(array_unique($emails), static fn(string $e): bool => !WorkflowFilters::recipientAllowed($e, $rules)));
         if ($refused !== []) {
-            return "Destinataire non autorisé par le filtre du workflow : " . implode(', ', $refused)
+            return ($invite ? 'Invité' : 'Destinataire') . " non autorisé par le filtre du workflow : " . implode(', ', $refused)
                 . ". Seules ces adresses sont permises : " . $this->f['recipients'] . ".";
         }
         return null;
     }
 
-    /** Une création Drive part dans le dossier du périmètre (rangée après création). */
+    /**
+     * Une création Drive part dans le dossier du périmètre (rangée après
+     * création) ; un message Slack, vers la destination de la brique, avec
+     * ses fichiers.
+     */
     public function applyToWrite(string $tool, array $args): array
     {
         if (in_array($tool, ['creer_google_doc', 'creer_google_sheet'], true) && $this->driveFolder() !== '') {
             $args[WorkflowDeliveries::FOLDER_KEY] = $this->driveFolder();
+        }
+        if ($tool === 'envoyer_message_slack' && $this->slack !== null) {
+            $args = $this->applyToSlackPost($args);
+            if ($this->slackAttach() !== []) {
+                $args[WorkflowDeliveries::ATTACH_KEY] = $this->slackAttach();
+            }
         }
         return $args;
     }
@@ -287,6 +359,83 @@ final class SearchScope
     private static function plain(string $s): string
     {
         return trim((string)preg_replace('/\s+/u', ' ', (string)preg_replace('/[()"]+/u', ' ', $s)));
+    }
+
+    // ------------------------------------------------------------------
+    // Collectes dans une table de travail (WorkTableTools)
+    // ------------------------------------------------------------------
+
+    /**
+     * Requête d'une collecte d'emails : les critères du filtre s'ajoutent à
+     * celle du modèle, comme pour une recherche.
+     */
+    public function collectQuery(string $source, string $query): string
+    {
+        return match ($source) {
+            WorkTableCollector::SOURCE_GMAIL   => $this->gmailQuery($query),
+            WorkTableCollector::SOURCE_OUTLOOK => $this->outlookQuery($query),
+            default                            => $query,
+        };
+    }
+
+    /** Dossier d'une collecte de fichiers : celui du filtre, quand le modèle n'en nomme aucun. */
+    public function collectFolder(string $folder): string
+    {
+        return trim($folder) !== '' ? $folder : $this->driveFolder();
+    }
+
+    /**
+     * Une collecte que le périmètre ne permet pas de tenir, AVANT tout appel :
+     * Outlook avec « non lus », « pièce jointe » ou une période (ils ne se
+     * vérifient que sur des résultats de recherche) ; un dossier Drive hors
+     * de celui du filtre. Rend le message pour le modèle, ou null.
+     */
+    public function collectRefusal(string $source, string $folder): ?string
+    {
+        $m = $this->f['mail'];
+        if ($source === WorkTableCollector::SOURCE_OUTLOOK && ($m['unread'] || $m['attachment'] || $m['days'] > 0)) {
+            return "Les filtres de cette étape (non lus, pièce jointe ou période) ne s'appliquent pas à une collecte Outlook dans une "
+                . "table : utilise rechercher_outlook, qui les applique.";
+        }
+        $root = $this->driveFolder();
+        if ($source === WorkTableCollector::SOURCE_DRIVE && $root !== '' && trim($folder) !== '') {
+            $f = self::fold($folder);
+            $r = self::fold($root);
+            // Minuscules sans accents ni ponctuation : « Clients/Durand/2026 » → « clients durand 2026 ».
+            if ($f !== $r && !str_starts_with($f, $r . ' ') && !str_starts_with($f, $r . '/')) {
+                return "Cette étape ne consulte que le dossier « " . $root . " » (et ses sous-dossiers) : collecte dans ce dossier.";
+            }
+        }
+        return null;
+    }
+
+    /** Lignes d'une collecte de fichiers gardées : nature, nom, période (WorkTableCollector::fileRow). */
+    public function filterFileRows(array $rows, ?\DateTimeImmutable $now = null): array
+    {
+        $d = $this->f['drive'];
+        if ($d['kind'] === '' && $d['name'] === '' && $d['days'] === 0) {
+            return $rows;
+        }
+        $limit = $d['days'] > 0 ? ($now ?? new \DateTimeImmutable())->modify('-' . $d['days'] . ' days')->format('Y-m-d') : null;
+        $name = self::fold($d['name']);
+        return array_values(array_filter($rows, static function ($r) use ($d, $limit, $name): bool {
+            if (!is_array($r)) {
+                return false;
+            }
+            if ($d['kind'] !== '' && !self::kindMatches($d['kind'], (string)($r['type'] ?? ''))) {
+                return false;
+            }
+            if ($name !== '' && !str_contains(self::fold((string)($r['nom'] ?? '')), $name)) {
+                return false;
+            }
+            if ($limit !== null) {
+                $key = WorkTableOps::dateKey((string)($r['modifie_le'] ?? ''));
+                if ($key !== null && substr($key, 0, 10) < $limit) {
+                    return false;
+                }
+            }
+            return true;
+        }));
     }
 
     /** Minuscules sans accents : la même règle que la recherche Drive. */

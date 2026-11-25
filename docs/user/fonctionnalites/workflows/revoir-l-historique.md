@@ -19,8 +19,9 @@ démarre, y compris ceux d'avant cette fonctionnalité.
 ## Étapes
 
 1. Ouvrez **Workflows**, onglet **Historique des exécutions**. Depuis un workflow, le bouton
-   **Historique** (en haut, à côté de **Réglages**, avec le nombre de lancements) y mène directement,
-   filtré sur ce workflow ; depuis la page d'une exécution, **Historique** l'ouvre sur ce lancement.
+   **Lancements** (en haut, à côté de **Réglages**, avec leur nombre) y mène directement, filtré sur
+   ce workflow ; depuis la page d'une exécution, **Historique** l'ouvre sur ce lancement. Les
+   **versions** du workflow, elles, se revoient par le bouton **Versions** de l'éditeur.
 2. À gauche, la liste des **lancements**, rangés par jour. Chaque ligne dit de quel workflow il s'agit
    (sa couleur, son nom, le numéro du lancement), **ce qu'il traitait** (les champs remplis au départ,
    l'objet d'un email reçu, le nom d'un fichier), l'heure, ce qui l'a lancé, sa durée, la version du
@@ -41,6 +42,8 @@ démarre, y compris ceux d'avant cette fonctionnalité.
    - le **nom du workflow**, en haut, ouvre l'éditeur.
 
 ## Ce que montre le journal
+
+![L'onglet Historique des exécutions : à gauche, trois lancements rangés par jour, chacun avec son workflow, son état Terminé, ce qu'il traitait, son déclencheur, sa durée et sa bande de briques. Le lancement de « Trier les demandes reçues par email » est ouvert à droite : l'email traité, le déclencheur Un email reçu, la durée, les briques faites, le coût et la version, puis le résultat, la Fiche de la demande, et le début du déroulé, où le Départ montre l'email reçu.](../../images/workflow-historique.png)
 
 - **En tête** : le workflow, l'état, la date, ce que le lancement traitait, le déclencheur, la durée,
   le nombre de briques faites, le coût en crédits, la version (signalée quand une plus récente est

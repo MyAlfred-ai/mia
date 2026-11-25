@@ -142,13 +142,14 @@ final class CreditCoherencePipelineTest extends DatabaseTestCase
         // tous les modèles mélangés n'était, avant, jamais celle de personne).
         $choix = ['llms' => ['openai::gpt-5.6' => 'GPT-5.6', 'openai::gpt-6-luna' => 'Luna'], 'default_llm' => 'openai::gpt-6-luna', 'profiles' => []];
         $def = ['nodes' => [['type' => WorkflowSpec::TYPE_STEP, 'key' => 'e1', 'llm' => 'openai::gpt-5.6', 'sources' => []]]];
+        $fourchette = static fn(?array $e): ?array => $e === null ? null : ['min' => $e['min'], 'max' => $e['max']];
         $this->assertSame(
             ['min' => (int)floor($sol['credits'] * 0.6), 'max' => (int)ceil($sol['credits'] * 1.6)],
-            WorkflowCatalog::estimate($def, $choix)
+            $fourchette(WorkflowCatalog::estimate($def, $choix))
         );
         $def['nodes'][0]['llm'] = 'openai::gpt-6-luna';
         $luna = CreditEstimate::chatReply('openai::gpt-6-luna')['credits'];
-        $this->assertSame(['min' => max(1, (int)floor($luna * 0.6)), 'max' => max(1, (int)ceil($luna * 1.6))], WorkflowCatalog::estimate($def, $choix));
+        $this->assertSame(['min' => max(1, (int)floor($luna * 0.6)), 'max' => max(1, (int)ceil($luna * 1.6))], $fourchette(WorkflowCatalog::estimate($def, $choix)));
     }
 
     public function testLeCoutDUnOutilSuitSesGenerationsReelles(): void

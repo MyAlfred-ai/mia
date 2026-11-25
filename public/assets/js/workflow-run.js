@@ -205,6 +205,21 @@
                     : T('« {titre} » a préparé des actions (email, évènement…). Approuvez-les ou annulez-les dans la conversation : le workflow reprend ensuite tout seul.', { titre: nodeTitle(s.current) })) + '</p>'
                 + (s.conversation_url ? '<div class="actions"><a class="wf-btn primary" href="' + esc(s.conversation_url) + '">' + icon('chat') + esc(T('Ouvrir la conversation')) + '</a></div>' : '') + '</section>';
         }
+        // La brique en cours est un appel : c'est le workflow appelé qui travaille
+        // — ou qui attend la personne, dans SON exécution.
+        var curSt = (s.nodes || {})[s.current];
+        var called = curSt && curSt.child && curSt.status === 'running' ? curSt.child : null;
+        if (s.status === 'running' && called && called.waiting) {
+            return '<section class="wf-gate"><div class="wf-ins-kicker" style="--hue:var(--wf-gate)"><span class="wf-node-ic">' + icon('hand') + '</span>' + esc(T('À vous')) + '</div>'
+                + '<h3>' + esc(T('« {nom} » attend votre décision', { nom: called.name })) + '</h3>'
+                + '<p>' + esc(T('Ce workflow l’a appelé et l’attend. Sa relecture (ou ses actions à approuver) se trouve dans son exécution : dès qu’il aura terminé, celui-ci reprendra tout seul.')) + '</p>'
+                + '<div class="actions"><a class="wf-btn primary" href="' + esc(called.url) + '">' + icon('call') + esc(T('Ouvrir son exécution')) + '</a></div></section>';
+        }
+        if (s.status === 'running' && called && called.url) {
+            return '<section class="wf-panel"><h3><span class="wf-spinner"></span>' + esc(T('En cours : {titre}', { titre: nodeTitle(s.current) })) + '</h3>'
+                + '<p class="wf-hint">' + esc(T('« {nom} » travaille : ce workflow reprendra dès qu’il aura terminé. Vous pouvez quitter cette page.', { nom: called.name })) + '</p>'
+                + '<p class="wf-hint"><a href="' + esc(called.url) + '">' + esc(T('Suivre l’exécution de « {nom} »', { nom: called.name })) + '</a></p></section>';
+        }
         if (s.status === 'running') {
             return '<section class="wf-panel"><h3><span class="wf-spinner"></span>' + esc(T('En cours : {titre}', { titre: nodeTitle(s.current) })) + '</h3>'
                 + '<p class="wf-hint">' + esc(T('Vous pouvez quitter cette page : le workflow continue, et vous serez prévenu s’il a besoin de vous.')) + '</p>'
@@ -226,6 +241,8 @@
                     acts += '<button type="button" class="wf-btn sm" data-do="skip">' + icon('skip') + esc(atEndF ? T('Terminer sans elles') : T('Ignorer et continuer')) + '</button>';
                 }
             }
+            // Arrêtée sur un appel : l'exécution du workflow appelé, là où la cause se lit.
+            if (err.child_run) { acts += '<a class="wf-btn sm" href="/workflows/runs/' + encodeURIComponent(err.child_run) + '">' + icon('call') + esc(T('Ouvrir l’exécution appelée')) + '</a>'; }
             if (s.conversation_url) { acts += '<a class="wf-btn ghost sm" href="' + esc(s.conversation_url) + '">' + esc(T('Voir la conversation')) + '</a>'; }
             return '<section class="wf-err-box"><b>' + esc(s.status === 'paused' ? T('Exécution en pause') : T('L’exécution s’est arrêtée')) + '</b>'
                 + '<div>' + esc(T('À « {titre} » : {cause}', { titre: nodeTitle(s.current), cause: err.title || msg })) + '</div>'
@@ -436,6 +453,10 @@
         } else if (p.form === 'page') { list = [['html', T('Page (.html)')], ['pdf', 'PDF'], ['docx', 'Word']]; }
         else if (p.form === 'map') { list = [['docx', 'Word'], ['pdf', 'PDF'], ['md', 'Markdown']]; }
         else if (p.form === 'table') { list = [['xlsx', 'Excel'], ['csv', 'CSV']]; }
+        else if (p.form === 'document' && p.format && ['docx', 'pdf', 'rtf', 'pptx', 'md', 'xlsx'].indexOf(p.format) < 0) {
+            // Un fichier écrit tel quel (script, données…) : lui seul, sans conversion.
+            list = [[p.format, (L.fileFormats || {})[p.format] || ('.' + p.format)]];
+        }
         else if (p.form === 'document') { list = [[p.format || 'docx', (L.docFormats || {})[p.format] || (p.format || 'docx').toUpperCase()]].concat([['pdf', 'PDF'], ['md', 'Markdown']].filter(function (x) { return x[0] !== p.format; })); }
         else { list = [['docx', 'Word'], ['pdf', 'PDF'], ['md', 'Markdown']]; }
         return list.map(function (x, i) {
@@ -468,6 +489,10 @@
                 + (p.text ? '<div class="content">' + md(p.text.slice(0, 4000)) + '</div>' : '');
         }
         if (isCreation(p.form)) { return creationContent(p); }
+        if (p.form === 'document' && p.format && ['docx', 'pdf', 'rtf', 'pptx', 'md', 'xlsx'].indexOf(p.format) < 0) {
+            // Un fichier écrit tel quel : son contenu exact, jamais lu en Markdown.
+            return '<div class="content"><pre><code>' + esc(String(p.source || p.text || '').slice(0, 20000)) + '</code></pre></div>';
+        }
         return '<div class="content">' + md(p.form === 'document' ? (p.source || p.text) : p.text) + '</div>';
     }
 
@@ -603,7 +628,8 @@
                 ? Object.keys(pm).filter(function (k) { return pm[k].producer === 'start' && state.pieces[k]; })
                 : ((def.end || {}).pieces || []).filter(function (k) { return state.pieces[k]; });
             return head(key, kinds[key] || '', nodeTitle(key), hues[key])
-                + (key === 'start' && state.trigger ? sec(T('Lancé'), '<p class="wf-hint">' + esc(state.trigger) + '</p>') : '')
+                + (key === 'start' && state.trigger ? sec(T('Lancé'), '<p class="wf-hint">' + esc(state.trigger) + '</p>'
+                    + (state.caller ? '<p class="wf-hint"><a href="' + esc(state.caller.url) + '">' + esc(T('Voir l’exécution de « {nom} » qui l’a appelée', { nom: state.caller.name })) + '</a></p>' : '')) : '')
                 + (key === 'end' && state.end_note ? sec(T('Un mot à la fin'), '<p class="wf-hint">' + esc(state.end_note) + '</p>') : '')
                 + sec(key === 'start' ? T('Ce qui a été fourni') : T('Ce que vous obtenez'),
                     keys.length ? pieceList(keys) : '<p class="wf-hint">' + esc(T('Les pièces apparaîtront ici à mesure que les étapes les remettent.')) + '</p>')
@@ -626,10 +652,17 @@
             var prof = node.profile_id ? findIn(cat.profiles, 'id', node.profile_id) : null;
             if (prof && prof.color) { hue = prof.color; }
             var llm = prof ? prof.model : ((findIn(cat.llms, 'slug', node.llm || cat.default_llm) || {}).label || '');
-            body += sec(T('Qui fait le travail'), '<div class="wf-who">' + R.avatar(prof, cat) + '<div><b>' + esc(prof ? prof.name : 'MIA') + '</b>'
+            body += sec(T('Qui fait le travail'), '<div class="wf-who">' + R.avatar(prof, cat, node.llm) + '<div><b>' + esc(prof ? prof.name : 'MIA') + '</b>'
                 + (llm ? '<small>' + esc(llm) + '</small>' : '') + '</div></div>');
             body += sec(T('Consigne'), '<div class="wf-preview">' + R.richText(node.instruction || '', pm) + '</div>');
             body += readHtml(T('Lit'));
+            if (node.output && R.isCreationForm(node.output.form)) {
+                // L'étape prépare la demande, l'outil de sa pièce la fabrique.
+                var mt = R.findCreation(cat, node.output.tool_id);
+                var mused = (st && st.detail && st.detail.tool) || (mt ? mt.name : '');
+                body += sec(T('Créée par'), '<p>' + esc(((L.forms || {})[node.output.form] || '') + (mused ? ' · ' + mused : '')) + '</p>'
+                    + (st && st.detail && st.detail.phase === 'create' && st.status === 'running' ? '<p class="wf-hint">' + esc(T('La demande est rédigée : l’outil fabrique la pièce.')) + '</p>' : ''));
+            }
             body += outputSection(node);
             if (st && st.cards && st.cards.length) { body += sec(T('Actions proposées'), cardList(st.cards)); }
         } else if (node.type === 'create') {
@@ -670,14 +703,56 @@
             } else if (node.message) {
                 body += sec(T('Le mot de la fin'), '<div class="wf-preview">' + R.richText(node.message, pm) + '</div>');
             }
+        } else if (node.type === 'action' && R.readingAction(node)) {
+            // Slack qui lit : où, sur quelle période, la pièce remise.
+            var rs = node.slack || {};
+            var rfrom = ((L.slack || {}).from || {})[rs.where] || '';
+            var rwhere = rs.where === 'person' ? rs.person : (rs.where === 'search' ? rs.query : rs.channel);
+            body += sec(T('Où lire'), '<p>' + esc('Slack · ' + rfrom) + '</p><div class="wf-preview">' + R.richText(rwhere || '', pm) + '</div>'
+                + '<p class="wf-hint">' + esc((((L.slack || {}).days || {})[rs.days]) || T('{n} jours', { n: rs.days || 7 })) + '</p>');
+            if (node.instruction) { body += sec(T('Ce qu’il faut en retenir'), '<div class="wf-preview">' + R.richText(node.instruction, pm) + '</div>'); }
+            body += outputSection(node);
         } else if (node.type === 'action') {
             var tg = findIn(cat.targets, 'key', node.target);
             body += sec(T('Outil'), '<p>' + esc(tg ? tg.label : '') + ' · ' + esc(node.write === 'auto' ? T('Sans validation') : T('À approuver')) + '</p>');
+            if (node.target === 'slack' && node.slack) {
+                // Slack qui publie : où, et ce qui part avec le message.
+                var ps = node.slack;
+                body += sec(ps.where === 'person' ? T('À qui') : T('Où publier'), '<div class="wf-preview">' + R.richText((ps.where === 'person' ? ps.person : ps.channel) || '', pm) + '</div>');
+                if ((ps.attach || []).length) {
+                    body += sec(T('Pièces jointes'), '<div class="wf-chips">' + ps.attach.map(function (k) {
+                        return state.pieces[k] ? openChips([k]) : (pm[k] ? R.pieceChip(pm[k], 'read') : '');
+                    }).join('') + '</div>');
+                }
+            }
             body += sec(T('Consigne'), '<div class="wf-preview">' + R.richText(node.instruction || '', pm) + '</div>');
             body += readHtml(T('Lit'));
             body += sec(T('Ce qui a été fait'), st && st.cards && st.cards.length
                 ? cardList(st.cards)
                 : '<p class="wf-hint">' + esc(st ? T('Aucune action proposée.') : T('Pas encore faite.')) + '</p>');
+        } else if (node.type === 'call') {
+            // Le workflow appelé : son exécution, ce qui lui a été donné, ce qui en revient.
+            var cw = R.findWorkflow(cat, node.workflow_id);
+            var ch = st && st.child ? st.child : null;
+            // La teinte de l'espace Workflows ; la couleur du workflow appelé marque son point.
+            hue = 'var(--wf-call, ' + ((cat.hues || {}).call || '#0d9488') + ')';
+            var ccolor = (ch && ch.color) || (cw && cw.color) || '';
+            kindIcon = 'workflow';
+            var cname = (ch && ch.name) || (cw ? cw.name : T('Workflow à choisir'));
+            body += sec(T('Workflow appelé'), '<div class="wf-call-run"><span class="wf-call-dot" style="--c:' + esc(ccolor || hue) + '">' + icon('workflow') + '</span>'
+                + '<div class="grow"><b>' + esc(cname) + '</b><small>' + esc(ch && ch.status_label ? ch.status_label + (ch.error ? ' — ' + ch.error : '') : T('Pas encore appelé')) + '</small></div>'
+                + (ch && ch.url ? '<a class="wf-btn sm" href="' + esc(ch.url) + '">' + esc(T('Ouvrir son exécution')) + '</a>' : '') + '</div>');
+            if (ch && (ch.params || []).length) {
+                body += sec(T('Ce qui lui a été donné'), '<ul class="wf-call-given">' + ch.params.map(function (p) {
+                    return '<li><span>' + esc(p.label) + '</span><b>' + esc(p.value) + '</b></li>';
+                }).join('') + '</ul>');
+            }
+            body += readHtml(T('Lit'));
+            if (st && st.status === 'done' && st.outcome === 'stopped') {
+                body += sec(T('Ce qui en revient'), '<p class="wf-hint">' + esc(T('Il s’est arrêté avant son livrable : aucune pièce n’est revenue.')) + '</p>');
+            } else {
+                body += outputSection(node);
+            }
         } else if (node.type === 'condition') {
             body += sec(node.mode === 'rule' ? T('Règle') : T('Question à MIA'), node.mode === 'rule'
                 ? '<p class="wf-hint">' + esc(((st || {}).detail || {}).lines ? st.detail.lines.join(' · ') : '') + '</p>'

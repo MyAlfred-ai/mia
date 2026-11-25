@@ -5,7 +5,8 @@ sidebar:
   order: 3
 ---
 
-**Administration → Modèles IA → Modèles**, carte **Comportement par défaut**, en tête de page. Deux réglages qui valent pour toute
+**Administration → Modèles IA → Fournisseurs et modèles**, carte **Qui répond par défaut**, en tête de
+page : un schéma « Conversation sans assistant → Par défaut → en cas de panne → Secours ». Deux réglages qui valent pour toute
 l'instance.
 
 Le vocabulaire de l'organisation (sigles, lexique maison) se règle désormais avec l'entreprise :
@@ -17,15 +18,16 @@ Au moins un modèle est activé — voir [Activer les modèles](activer-les-mode
 
 ## Étapes
 
-1. **LLM par défaut (sans assistant)** : choisissez le modèle. La liste propose tous les modèles
+1. **Par défaut** : choisissez le modèle. La liste propose tous les modèles
    activés et le LLM local, sans filtre de groupe.
-2. **LLM de secours (facultatif)** : choisissez un modèle — idéalement chez un **autre** éditeur —,
+2. **Secours** (facultatif) : choisissez un modèle — idéalement chez un **autre** éditeur —,
    ou **— Aucun (échec sans bascule) —**. Le modèle par défaut est grisé dans cette liste.
 3. L'enregistrement est automatique : « Comportement par défaut enregistré. »
 
 ## Résultat
 
-Dans la liste **Modèles activés**, juste en dessous, les badges **Défaut** et **Secours** désignent les deux modèles.
+Dans le panneau de chaque fournisseur, les badges **Par défaut** et **Secours** désignent les deux
+modèles, et le logo de leur éditeur s'affiche dans le schéma.
 
 ## Quand aucun modèle par défaut n'est enregistré
 
@@ -43,6 +45,12 @@ choisissez-en un autre : l'avertissement disparaît dès l'enregistrement.
 **MIA : mode d'emploi**, au découpage des documents des bases de connaissances et à l'aide à la
 rédaction des consignes d'assistant. Pour un utilisateur qui n'est que dans le groupe ★ Par défaut
 sans liste de modèles, c'est le **seul** modèle proposé.
+
+Chaque personne peut **choisir son propre modèle par défaut** parmi ceux que ses groupes lui
+proposent : l'étoile du sélecteur de modèle, ou **Réglages → Préférences IA**. Il ouvre alors ses
+nouvelles conversations à la place du vôtre ; tant qu'elle n'en a pas choisi, elle suit le vôtre et
+ses changements. Un modèle que vous retirez de ses groupes cesse aussitôt de servir : le vôtre
+reprend. Les assistants n'en tiennent jamais compte.
 
 **Le LLM de secours** prend le relais quand le modèle d'une conversation — quel qu'il soit — échoue
 **avant son premier mot** : panne ou surcharge de l'éditeur, saturation, délai dépassé, ou compte de
@@ -71,6 +79,6 @@ raison entre parenthèses ; la liste des actions de la réponse la garde. Le sec
 | Ce qui arrive | Quoi faire |
 |---|---|
 | « Aucun modèle par défaut n'est enregistré : MIA utilise … » | **Confirmer ce modèle**, ou en choisir un autre. |
-| Aucun badge **Défaut** dans **Modèles activés** | Aucun modèle n'est activé, ou aucune clé n'est enregistrée : voir [Activer les modèles](activer-les-modeles.md). |
+| Aucun badge **Par défaut** dans **Fournisseurs et modèles** | Aucun modèle n'est activé, ou aucune clé n'est enregistrée : voir [Activer les modèles](activer-les-modeles.md). |
 | Un utilisateur reçoit « Ce LLM n'est pas autorisé pour votre groupe. » | Le modèle qu'il a choisi n'est coché dans aucun de ses groupes : le cocher, ou lui faire choisir un modèle autorisé. |
 | Des réponses arrivent d'un autre modèle que celui choisi | Le secours a pris le relais : l'éditeur du modèle choisi était en panne, ou son compte sans crédit. La raison est dans le message de bascule : voir [Réagir à une erreur de modèle](reagir-a-une-erreur-de-modele.md). |

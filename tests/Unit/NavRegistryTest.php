@@ -128,6 +128,7 @@ final class NavRegistryTest extends TestCase
         $this->assertContains('/settings/connections#connector-gmail', $hrefs, 'La connexion à reconnecter est proposée.');
         $this->assertNotContains('/admin/profiles/new', $hrefs);
         $this->assertContains('/', $hrefs, 'Nouvelle conversation est proposée à tous.');
+        $this->assertContains('/settings/usage?vue=historique', $hrefs, 'L’historique des usages se trouve par la palette.');
 
         $admin = NavRegistry::paletteEntries(self::ADMIN);
         $this->assertSame(['work', 'me', 'admin'], array_values(array_unique(array_column($admin, 'space'))));
@@ -178,8 +179,8 @@ final class NavRegistryTest extends TestCase
             }
             $this->assertSame('Pruning', $parAdresse['/admin/pruning']['label'] ?? null, 'Onglet : libellé d’AdminTabs.');
             $this->assertSame('Administration › Maintenance', $parAdresse['/admin/pruning']['path'] ?? null);
-            $this->assertSame(AdminMenu::pageText('llms-models'), $parAdresse['/admin/llms/models']['label'] ?? null);
-            $this->assertSame('Models', $parAdresse['/admin/llms/models']['label'] ?? null);
+            $this->assertSame(AdminMenu::pageText('llms-keys'), $parAdresse['/admin/llms']['label'] ?? null);
+            $this->assertSame('Providers and models', $parAdresse['/admin/llms']['label'] ?? null);
             $this->assertSame('Administration › ' . AdminMenu::label('people'), $parAdresse['/admin/users']['path'] ?? null);
         } finally {
             I18n::use($avant);

@@ -51,12 +51,18 @@ class FileController
         }
 
         try {
-            $file = FileFactory::build(
-                self::field('name', 300),
-                (string)($_POST['source'] ?? ''),
-                self::field('language', 40),
-                self::field('origin', 300),
-                ['locale' => $locale, 'author' => $author !== '' ? $author : 'MIA']
+            // Modèle et logo de l'entreprise : embarqués sauf si la personne les
+            // a décochés sur la carte du fichier (« 0 » ; absent = embarqué).
+            $file = CompanyProfile::withReferences(
+                self::flag('company_template'),
+                self::flag('company_logo'),
+                static fn (): GeneratedFile => FileFactory::build(
+                    self::field('name', 300),
+                    (string)($_POST['source'] ?? ''),
+                    self::field('language', 40),
+                    self::field('origin', 300),
+                    ['locale' => $locale, 'author' => $author !== '' ? $author : 'MIA']
+                )
             );
         } catch (FileBuildException $e) {
             $this->fail($e);
@@ -73,6 +79,12 @@ class FileController
         // le navigateur depuis notre origine : pièce jointe, type non deviné.
         header('X-Content-Type-Options: nosniff');
         echo $file->bytes;
+    }
+
+    /** Case de la carte : décochée seulement par « 0 » (une carte d'avant n'envoie rien). */
+    private static function flag(string $name): bool
+    {
+        return (string)($_POST[$name] ?? '1') !== '0';
     }
 
     /** Champ court du formulaire : borné, sans octet de contrôle. */

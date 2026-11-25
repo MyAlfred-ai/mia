@@ -24,7 +24,7 @@ serveur. Chaque étape renvoie à sa page pour le détail.
    « Compte créé — MIA est prête » donne chaque réglage avec son état réel et un lien vers sa page.
    Seule la première ligne est indispensable.
 3. **Enregistrez une clé d'API** : le bouton **Admin**, en bas de la barre latérale, mène à
-   l'administration ; dans le menu de gauche, choisissez **Modèles IA → Clés API**. Tant
+   l'administration ; dans le menu de gauche, choisissez **Modèles IA → Fournisseurs et modèles**. Tant
    qu'il n'y en a aucune, une pastille ambre clignote sur **Modèles IA**. Une clé OpenAI, Mistral ou Gemini sert aussi à la recherche dans les
    bases de connaissances : sans elle, cette recherche reste possible, mais moins pertinente.
    → [Enregistrer les clés API](../modeles/enregistrer-les-cles-api.md)

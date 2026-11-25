@@ -58,7 +58,10 @@ final class RealtimeTranscriptionTest extends TestCase
         $src = file_get_contents(ROOT . '/src/Controllers/ChatController.php') ?: '';
         $debut = strpos($src, 'public function realtimeTranscriptionToken');
         self::assertIsInt($debut, 'Méthode realtimeTranscriptionToken introuvable');
-        return substr($src, (int)$debut, 4000);
+        // Jusqu'à la méthode suivante : une fenêtre fixe se laisse distancer
+        // dès que la route gagne un commentaire.
+        $fin = strpos($src, "\n    public function ", (int)$debut + 20);
+        return substr($src, (int)$debut, $fin === false ? 16000 : $fin - (int)$debut);
     }
 
     public function testTousLesModelesSontConnusDeLApi(): void

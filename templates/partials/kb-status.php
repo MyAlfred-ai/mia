@@ -334,6 +334,25 @@ $renderLegend = static function () use ($legend): void {
             </span>
         <?php endif; ?>
     </div>
+    <?php elseif (!empty($st['table'])): ?>
+    <?php /* Table permanente : ses lignes sont déjà dans le titre de l'état ;
+             ici, ses colonnes et ce qu'on en a fait. */ ?>
+    <div class="kb-meta">
+        <span class="kb-meta-item" title="<?= te('Colonnes de la table') ?>"><?= $boldCount(I18n::plural((int)$st['table_columns'], '{b}{n}{/b} colonne', '{b}{n}{/b} colonnes')) ?></span>
+        <?php if ($usageCountSt > 0): ?>
+            <span class="kb-meta-item kb-meta-use"
+                  title="<?= $usageLastSt !== ''
+                      ? te('Réponses pour lesquelles MIA a lu cette table — dernière fois : {date}', ['date' => $usageLastSt])
+                      : te('Réponses pour lesquelles MIA a lu cette table') ?>">
+                <?= $boldCount(I18n::plural($usageCountSt, '{b}{n}{/b} utilisation', '{b}{n}{/b} utilisations')) ?>
+            </span>
+        <?php else: ?>
+            <span class="kb-meta-item kb-meta-unused"
+                  title="<?= te('Aucune réponse n\'a encore lu cette table : elle n\'est cochée dans aucune conversation, ou liée à aucun assistant.') ?>">
+                <?= te('jamais utilisée') ?>
+            </span>
+        <?php endif; ?>
+    </div>
     <?php else: ?>
     <div class="kb-meta">
         <span class="kb-meta-item" title="<?= te('Documents dans la base') ?>"><?= $boldCount(I18n::plural($docCountSt, '{b}{n}{/b} doc', '{b}{n}{/b} docs')) ?></span>

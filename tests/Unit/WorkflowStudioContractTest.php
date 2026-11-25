@@ -56,7 +56,7 @@ final class WorkflowStudioContractTest extends TestCase
             'Refus d’un destinataire non permis : avant la carte, ET dans le chemin « sans validation ».');
         $this->assertStringContainsString('$args = $searchScope->applyToWrite($tool, WorkflowDeliveries::stripInternal($args));', $chat,
             'Le dossier imposé est posé par le serveur APRÈS le retrait des arguments internes venus du modèle.');
-        $this->assertMatchesRegularExpression('/\$timeZone,\s*\$searchScope\s*\);/', $chat, 'Le périmètre accompagne le tour (AgentTurn).');
+        $this->assertMatchesRegularExpression('/\$timeZone,\s*\$searchScope\s*(?:\);|,)/', $chat, 'Le périmètre accompagne le tour (AgentTurn).');
     }
 
     public function testLeMoteurRemplitLesFiltresEtMeneLaDecision(): void

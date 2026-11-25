@@ -145,14 +145,19 @@ final class WorkflowInsertsTest extends TestCase
         $this->assertStringContainsString('@{resume} @{inconnue}', $out['corps']);
         $html = MailHtml::withInlineImages(MailHtml::toHtml($out['corps']), MailDraftReview::inlineImages($out));
         $this->assertStringNotContainsString('img9', $html, 'Un repère d’image que le serveur n’a pas posé est retiré.');
-        // Hors email : une image reste son nom, aucune pièce jointe.
+        // Slack : une image citée part en FICHIER joint, son repère quitte le texte (une fois).
         $def = self::def();
         $arts = self::artifacts();
         $slack = WorkflowInserts::fill('envoyer_message_slack', ['canal' => '#equipe', 'texte' => "@{message_slack}\n@{image}"],
             WorkflowInserts::forPass($def, WorkflowSpec::node($def, 'mail'), $arts), $def, $arts, 77, static fn(): bool => true);
         $this->assertStringContainsString('Bienvenue à Lina', $slack['texte']);
-        $this->assertStringContainsString('« Image »', $slack['texte']);
-        $this->assertArrayNotHasKey('_wf_attach', $slack);
+        $this->assertStringNotContainsString('Image', $slack['texte']);
+        $this->assertSame([['run_id' => 77, 'piece' => 'image', 'name' => 'Image']], $slack['_wf_attach']);
+        // Hors email et hors Slack (Drive) : une image reste son nom, aucune pièce jointe.
+        $drive = WorkflowInserts::fill('creer_google_doc', ['titre' => 'Note', 'contenu' => '@{image}'],
+            WorkflowInserts::forPass($def, WorkflowSpec::node($def, 'mail'), $arts), $def, $arts, 77, static fn(): bool => true);
+        $this->assertStringContainsString('« Image »', $drive['contenu']);
+        $this->assertArrayNotHasKey('_wf_attach', $drive);
         // Hors workflow : rien ne change.
         $this->assertSame(['corps' => '@{x}'], WorkflowInserts::forTurn('creer_brouillon_gmail', ['corps' => '@{x}'], null, 1));
     }
@@ -513,7 +518,7 @@ final class WorkflowInsertsTest extends TestCase
         );
         $engine = self::src('src/Workflow/WorkflowEngine.php');
         $this->assertStringContainsString("'inserts'        => WorkflowInserts::forPass(\$def, \$node, \$artifacts),", $engine);
-        $save = substr($engine, (int)strpos($engine, '$read = ArtifactContract::extract($piece, $text);'));
+        $save = substr($engine, (int)strpos($engine, 'ArtifactContract::extract($piece, $text);'));
         $this->assertLessThan(strpos($save, 'WorkflowRun::saveArtifact('), strpos($save, 'WorkflowInserts::expandContent('),
             'La pièce d’une étape est remplie AVANT d’entrer au dossier.');
         $deliveries = self::src('src/Workflow/WorkflowDeliveries.php');

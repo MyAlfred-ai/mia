@@ -23,7 +23,7 @@ modèle ou par Gamma. Ce qu'est un outil : [Les outils](index.md).
 | **Modifier les slides** | Ouvre la présentation dans l'éditeur, dans le volet de droite |
 | **Version soignée** | Un modèle compose lui-même le fichier, d'après votre demande, les fichiers joints à la conversation et le modèle PowerPoint de l'entreprise — une fenêtre montre le modèle choisi, ce qui part et le coût estimé avant de lancer (1 à 3 minutes, compté dans vos crédits). Si votre organisation utilise Gamma, le même bouton propose aussi **Par Gamma**. Voir [Télécharger un fichier](../conversations/telecharger-un-fichier.md#la-version-soignée-par-un-modèle-ou-par-gamma) |
 
-Pour changer le contenu — une slide de plus, un ton plus direct —, demandez-le simplement dans la
+Pour changer le contenu — une slide de plus, un ton plus direct —, demandez-le dans la
 conversation : MIA renvoie la présentation entière, sur une nouvelle carte.
 
 ## Retoucher les slides

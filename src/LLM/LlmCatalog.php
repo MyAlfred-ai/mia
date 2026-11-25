@@ -57,10 +57,59 @@ class LlmCatalog
     }
 
     /**
+     * Modèle que MIA ne propose pas (`retired_models` du fournisseur : retiré
+     * du catalogue, ou jamais proposé) mais qu'une instance peut encore
+     * porter — une ligne `llm_models` activée avant son retrait, le modèle de
+     * référence d'une clé. Seul son arrêt y est déclaré. Null pour un modèle du
+     * catalogue : `models` et `retired_models` ne se recouvrent jamais.
+     *
+     * @return array<string, mixed>|null
+     */
+    public static function retiredModel(string $provider, string $model): ?array
+    {
+        if (self::model($provider, $model) !== null) {
+            return null;
+        }
+        $m = self::provider($provider)['retired_models'][$model] ?? null;
+        return is_array($m) ? $m : null;
+    }
+
+    /**
+     * Libellé d'un modèle : celui du catalogue, sinon celui de
+     * `retired_models`, sinon son identifiant.
+     */
+    public static function label(string $provider, string $model): string
+    {
+        $label = self::model($provider, $model)['label']
+            ?? self::retiredModel($provider, $model)['label']
+            ?? '';
+        return is_string($label) && $label !== '' ? $label : $model;
+    }
+
+    /**
      * Modèle par défaut d'un provider : celui marqué `default:true` en priorité,
      * sinon `default_model` déclaré au niveau provider, sinon le premier listé.
+     *
+     * À sa date d'arrêt (bloc `retirement`), le défaut cède la place à son
+     * remplaçant désigné, s'il est au catalogue : c'est vers lui que partent
+     * les appels sans modèle choisi (ApiKey::getModel() rend null pour un
+     * modèle arrêté), au lieu d'un identifiant que l'éditeur a coupé.
      */
     public static function defaultModel(string $provider): string
+    {
+        $id = self::declaredDefault($provider);
+        for ($hops = 0; $hops < 3 && $id !== '' && self::isRetired($provider, $id); $hops++) {
+            $next = self::retirement($provider, $id)['replacement'] ?? null;
+            if (!is_string($next) || $next === '' || self::model($provider, $next) === null) {
+                break;
+            }
+            $id = $next;
+        }
+        return $id;
+    }
+
+    /** Défaut ÉCRIT au catalogue, arrêt ignoré (cf. defaultModel). */
+    private static function declaredDefault(string $provider): string
     {
         foreach (self::models($provider) as $id => $info) {
             if (!empty($info['default'])) {
@@ -211,10 +260,19 @@ class LlmCatalog
     }
 
     /**
-     * Arrêt d'un modèle ANNONCÉ par son éditeur (bloc `retirement` du
-     * catalogue) — SOURCE UNIQUE, pendant de `ToolCatalog::retirement()` pour
-     * les modèles d'outils. Null tant qu'aucun arrêt n'est annoncé (ou modèle
-     * inconnu au catalogue).
+     * Arrêt d'un modèle ANNONCÉ par son éditeur — SOURCE UNIQUE, pendant de
+     * `ToolCatalog::retirement()` pour les modèles d'outils. Null tant
+     * qu'aucun arrêt n'est connu.
+     *
+     * Deux sources, dans cet ordre :
+     *   1. le bloc `retirement` du catalogue (`models`, puis `retired_models`)
+     *      — `source` = `catalog`. Il PRIME : il porte le remplaçant désigné ;
+     *   2. à défaut, la date relevée chaque jour chez l'éditeur
+     *      (`LlmShutdownWatch`, `GET /v1/models` d'OpenAI) — `source` = `api`,
+     *      remplaçant vide (l'API ne le donne pas). C'est ce qui couvre un
+     *      courriel d'arrêt pas encore reporté au catalogue.
+     * `reported` = la date relevée chez l'éditeur (null si aucune) : différente
+     * de `date` quand le catalogue n'est plus à jour (points à régler).
      *
      * `retired` = la date est atteinte (jour du serveur, `today()`) : le modèle
      * a quitté le chat (`LLMFactory::available`). Avant, l'arrêt n'est
@@ -222,15 +280,25 @@ class LlmCatalog
      * écrit en base : tout se lit à la date, et une date repoussée par
      * l'éditeur se corrige ici seulement.
      *
-     * @return array{date:string, replacement:string, replacement_label:string, source_url:string, retired:bool}|null
+     * @return array{date:string, replacement:string, replacement_label:string, source_url:string, retired:bool, source:string, reported:?string}|null
      */
     public static function retirement(string $provider, string $model): ?array
     {
-        $bloc = self::model($provider, $model)['retirement'] ?? null;
-        if (!is_array($bloc)) {
-            return null;
+        // Modèle du catalogue, sinon modèle que MIA ne propose pas mais qu'une
+        // instance peut encore porter (`retired_models`).
+        $bloc = self::model($provider, $model)['retirement']
+            ?? self::retiredModel($provider, $model)['retirement']
+            ?? null;
+        $releve = self::reportedShutdown($provider, $model);
+        $arret  = is_array($bloc) ? self::retirementFrom($bloc, self::today()) : null;
+        $source = 'catalog';
+        if ($arret === null && $releve !== null) {
+            $arret = self::retirementFrom([
+                'date'       => $releve,
+                'source_url' => LlmShutdownWatch::sourceUrl($provider),
+            ], self::today());
+            $source = 'api';
         }
-        $arret = self::retirementFrom($bloc, self::today());
         if ($arret === null) {
             return null;
         }
@@ -240,7 +308,25 @@ class LlmCatalog
         $arret['replacement_label'] = $remplacant !== ''
             ? (string)(self::model($provider, $remplacant)['label'] ?? $remplacant)
             : '';
+        $arret['source']   = $source;
+        $arret['reported'] = $releve;
         return $arret;
+    }
+
+    /**
+     * Date d'arrêt relevée chez l'éditeur (LlmShutdownWatch), null sinon. Ne
+     * lève jamais ; classe absente (script qui ne charge pas tout) = rien.
+     */
+    public static function reportedShutdown(string $provider, string $model): ?string
+    {
+        if (!class_exists('LlmShutdownWatch', false)) {
+            return null;
+        }
+        try {
+            return LlmShutdownWatch::dateFor($provider, $model);
+        } catch (\Throwable) {
+            return null;
+        }
     }
 
     /**

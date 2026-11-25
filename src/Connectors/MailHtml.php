@@ -20,11 +20,23 @@ declare(strict_types=1);
  *
  * Aucune dépendance : le dépôt n'embarque pas de bibliothèque Markdown, et en
  * ajouter une pour six règles d'inline serait payer cher un besoin étroit.
+ *
+ * TABLEAUX (retour d'un client, 2026-11-25) : un tableau Markdown arrivait en
+ * lignes de barres verticales collées par des <br>. Il devient un vrai
+ * <table>, lu par la même règle que les documents (MarkdownDocument :
+ * ligne à barres suivie d'une ligne de tirets, alignement par les deux-points)
+ * et stylé EN LIGNE — Gmail et Outlook ignorent souvent une feuille de style.
+ * Un tableau fourni en HTML garde sa structure, avec NOS styles seulement.
  */
 final class MailHtml
 {
     /** Balises tolérées dans un corps d'email fourni en HTML. */
-    private const TAGS_AUTORISES = '<p><br><b><strong><i><em><u><a><ul><ol><li><blockquote><h1><h2><h3><h4><span><div>';
+    private const TAGS_AUTORISES = '<p><br><b><strong><i><em><u><a><ul><ol><li><blockquote><h1><h2><h3><h4><span><div><table><thead><tbody><tr><th><td>';
+
+    /** Styles en ligne d'un tableau : seuls ceux-ci sont jamais posés (aucun ne vient du modèle). */
+    private const TABLE_STYLE = 'border-collapse:collapse;border:1px solid #d0d7de;margin:8px 0 12px;font-size:14px';
+    private const CELL_STYLE  = 'border:1px solid #d0d7de;padding:6px 10px;vertical-align:top;text-align:%s';
+    private const HEAD_STYLE  = 'background-color:#f3f4f6;font-weight:bold';
 
     /** Schémas d'URL acceptés dans un lien — `javascript:` n'en fait pas partie. */
     private const SCHEMAS = ['http://', 'https://', 'mailto:'];
@@ -148,7 +160,9 @@ final class MailHtml
     public static function htmlVersTexte(string $html): string
     {
         $t = preg_replace('#<\s*br\s*/?>#i', "\n", $html) ?? $html;
-        $t = preg_replace('#</\s*(?:p|div|li|h[1-6]|tr)\s*>#i', "\n", $t) ?? $t;
+        // Cellules d'un tableau séparées par une barre, une ligne par rangée.
+        $t = preg_replace('#</\s*t[dh]\s*>\s*(?=<\s*t[dh]\b)#i', ' | ', $t) ?? $t;
+        $t = preg_replace('#</\s*(?:p|div|li|h[1-6]|tr|table)\s*>#i', "\n", $t) ?? $t;
         $t = preg_replace('#<\s*li\b[^>]*>#i', '- ', $t) ?? $t;
         $t = strip_tags($t);
         $t = html_entity_decode($t, ENT_QUOTES | ENT_HTML5, 'UTF-8');
@@ -204,13 +218,23 @@ final class MailHtml
             }
         };
 
-        foreach ($lignes as $ligne) {
-            $brut = rtrim($ligne);
+        $nb = count($lignes);
+        for ($i = 0; $i < $nb; $i++) {
+            $brut = rtrim($lignes[$i]);
             $nu   = trim($brut);
 
             if ($nu === '') {
                 $viderParagraphe();
                 $fermerListe();
+                continue;
+            }
+
+            // Tableau : ligne à barres suivie d'une ligne de tirets — la règle
+            // des documents (MarkdownDocument), même collé au paragraphe d'avant.
+            if (str_contains($nu, '|') && $i + 1 < $nb && MarkdownDocument::isTableSeparator($lignes[$i + 1])) {
+                $viderParagraphe();
+                $fermerListe();
+                [$html[], $i] = self::tableau($lignes, $i);
                 continue;
             }
 
@@ -255,6 +279,59 @@ final class MailHtml
         $fermerListe();
 
         return implode("\n", $html);
+    }
+
+    /**
+     * Tableau Markdown → <table> stylé en ligne. Rend le HTML et l'indice de
+     * la DERNIÈRE ligne lue (la boucle de depuisMarkdown reprend après).
+     * Une rangée trop courte est complétée, une rangée trop longue coupée à
+     * la largeur de l'en-tête.
+     *
+     * @param list<string> $lignes
+     * @return array{0: string, 1: int}
+     */
+    private static function tableau(array $lignes, int $i): array
+    {
+        $entete = MarkdownDocument::splitTableRow($lignes[$i]);
+        $largeur = count($entete);
+        $align = [];
+        foreach (MarkdownDocument::splitTableRow($lignes[$i + 1]) as $cell) {
+            $cell = trim($cell);
+            $gauche = str_starts_with($cell, ':');
+            $droite = str_ends_with($cell, ':');
+            $align[] = $gauche && $droite ? 'center' : ($droite ? 'right' : 'left');
+        }
+        $align = array_pad(array_slice($align, 0, $largeur), $largeur, 'left');
+
+        $rangees = [];
+        $nb = count($lignes);
+        $j = $i + 2;
+        while ($j < $nb && trim($lignes[$j]) !== '' && str_contains($lignes[$j], '|')) {
+            $rangees[] = array_pad(array_slice(MarkdownDocument::splitTableRow($lignes[$j]), 0, $largeur), $largeur, '');
+            $j++;
+        }
+
+        $cellule = static function (string $tag, string $texte, string $sens): string {
+            $style = sprintf(self::CELL_STYLE, $sens) . ($tag === 'th' ? ';' . self::HEAD_STYLE : '');
+            return '<' . $tag . ' style="' . $style . '">' . self::inline($texte) . '</' . $tag . '>';
+        };
+        $out = '<table style="' . self::TABLE_STYLE . '"><thead><tr>';
+        foreach ($entete as $k => $texte) {
+            // L'en-tête suit l'alignement de sa colonne : un intitulé de
+            // nombres reste au-dessus de ses nombres.
+            $out .= $cellule('th', $texte, $align[$k]);
+        }
+        $out .= '</tr></thead><tbody>';
+        foreach ($rangees as $rangee) {
+            $out .= '<tr>';
+            foreach ($rangee as $k => $texte) {
+                $out .= $cellule('td', $texte, $align[$k]);
+            }
+            $out .= '</tr>';
+        }
+        $out .= '</tbody></table>';
+
+        return [$out, $j - 1];
     }
 
     /** Enrichissements de ligne, sur du texte DÉJÀ échappé. */
@@ -320,6 +397,14 @@ final class MailHtml
             '#<\s*([a-zA-Z0-9]+)\b([^>]*)>#',
             static function (array $m): string {
                 $tag = strtolower($m[1]);
+                // Tableau : NOS styles en ligne (sinon un tableau sans bordure
+                // ni marge, illisible) ; aucun attribut du modèle ne passe.
+                if ($tag === 'table') {
+                    return '<table style="' . self::TABLE_STYLE . '">';
+                }
+                if ($tag === 'th' || $tag === 'td') {
+                    return '<' . $tag . ' style="' . sprintf(self::CELL_STYLE, 'left') . ($tag === 'th' ? ';' . self::HEAD_STYLE : '') . '">';
+                }
                 if ($tag !== 'a') {
                     return '<' . $tag . '>';
                 }

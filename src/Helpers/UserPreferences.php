@@ -48,14 +48,14 @@ final class UserPreferences
         $ctx = trim((string)($user['ai_user_context'] ?? ''));
         if ($ctx !== '') {
             // Le bloc est NOMMÉ « Votre contexte » — le titre exact de la carte
-            // de Réglages → Préférences IA : quand l'utilisateur demande ce que
-            // MIA sait de lui, la réponse reprend le vocabulaire de l'interface,
-            // et il sait où aller le corriger.
+            // de Réglages → Mémoire : quand l'utilisateur demande ce que MIA
+            // sait de lui, la réponse reprend le vocabulaire de l'interface, et
+            // il sait où aller le corriger.
             // Traduit (lot 3) : le bloc NOMME un écran (« Votre contexte »,
-            // Réglages → Préférences IA). En anglais, ces libellés doivent
-            // être ceux que l'utilisateur lit, sans quoi on l'envoie chercher
-            // un titre qui n'existe pas.
-            $parts[] = t("Votre contexte — ce que l'utilisateur a renseigné sur lui (Réglages → Préférences IA → « Votre contexte ») :")
+            // Réglages → Mémoire). En anglais, ces libellés doivent être ceux
+            // que l'utilisateur lit, sans quoi on l'envoie chercher un titre
+            // qui n'existe pas.
+            $parts[] = t("Votre contexte — ce que l'utilisateur a renseigné sur lui (Réglages → Mémoire → « Votre contexte ») :")
                 . "\n" . $ctx . "\n"
                 . t("Sers-t'en comme arrière-plan sans le citer à chaque réponse ; mais si l'utilisateur demande ce que tu sais ou retiens de lui, restitue ce texte intégralement sous le titre « Votre contexte » et indique où le modifier.");
         }
@@ -71,6 +71,40 @@ final class UserPreferences
     public static function hasContext(?array $user): bool
     {
         return trim((string)($user['ai_user_context'] ?? '')) !== '';
+    }
+
+    /**
+     * Ce que dit la pastille d'INFO tant que « Votre contexte » est vide :
+     * à quoi il sert, et — sur le chemin qui y mène (bouton Réglages, entrée
+     * Mémoire du menu) — où le remplir. Traduit. PURE.
+     */
+    public static function contextHint(bool $where = false): string
+    {
+        $text = t('Votre contexte est vide. Présentez-vous en une ou deux phrases (votre métier, vos outils, votre public) : MIA le relit au début de chaque conversation pour adapter ses réponses à votre situation.');
+        return $where ? $text . "\n" . t('À remplir dans Réglages → Mémoire, « Votre contexte ».') : $text;
+    }
+
+    /**
+     * Pastille d'INFO (bleue, discrète, sans pulsation) tant que « Votre
+     * contexte » est vide — posée sur le bouton Réglages, l'entrée Mémoire du
+     * menu Mon compte et la carte elle-même (jusqu'à l'élément concerné). Son
+     * texte vient en bulle (nav-signals.js : survol, clavier, toucher), jamais
+     * affiché en permanence. Vide dès que le contexte est renseigné ; sur la
+     * page Mémoire, memory.js les masque toutes dès la première lettre
+     * (`data-context-dot`).
+     *
+     * `$focusable` : seulement hors d'un lien (la carte) — dans un lien, le
+     * lien porte le focus.
+     */
+    public static function contextDot(?array $user, bool $where = false, bool $focusable = false, string $extraClass = ''): string
+    {
+        if ($user === null || self::hasContext($user)) {
+            return '';
+        }
+        $text = self::contextHint($where);
+        return '<span class="info-dot' . ($extraClass !== '' ? ' ' . $extraClass : '') . '" data-context-dot role="img"'
+            . ' aria-label="' . htmlspecialchars($text, ENT_QUOTES) . '" data-tip="' . htmlspecialchars($text, ENT_QUOTES) . '"'
+            . ' data-tip-tone="info"' . ($focusable ? ' tabindex="0"' : '') . '></span>';
     }
 
     /**
@@ -106,12 +140,32 @@ final class UserPreferences
         return $clean;
     }
 
-    /** Met à jour les préférences IA d'un utilisateur. */
-    public static function save(int $userId, string $style, string $context): void
+    /**
+     * Met à jour le style et/ou le contexte. N'écrit QUE ce qui est fourni
+     * (null = inchangé) : le style se règle dans Préférences IA, le contexte
+     * dans Mémoire — deux formulaires, et chacun ne poste que ses champs. Un
+     * handler qui écrirait l'autre colonne la viderait à chaque enregistrement
+     * (le piège maison « champ absent = vide »).
+     */
+    public static function save(int $userId, ?string $style, ?string $context): void
     {
+        $sets = [];
+        $vals = [];
+        if ($style !== null) {
+            $sets[] = 'ai_style = ?';
+            $vals[] = $style;
+        }
+        if ($context !== null) {
+            $sets[] = 'ai_user_context = ?';
+            $vals[] = $context;
+        }
+        if ($sets === []) {
+            return;
+        }
+        $vals[] = $userId;
         Database::getInstance()
-            ->prepare('UPDATE users SET ai_style = ?, ai_user_context = ? WHERE id = ?')
-            ->execute([$style, $context, $userId]);
+            ->prepare('UPDATE users SET ' . implode(', ', $sets) . ' WHERE id = ?')
+            ->execute($vals);
     }
 
     /**

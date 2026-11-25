@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 class MistralAdapter implements LLMInterface
 {
+    /** Borne haute de `completion_args.temperature` (Conversations API). */
+    private const CONVERSATIONS_TEMPERATURE_MAX = 1.0;
+
     use ChatCompletionsToolLoopTrait;
 
     /** Endpoints et tools web_search lus depuis `config/llm_catalog.php`. */
@@ -347,9 +350,13 @@ class MistralAdapter implements LLMInterface
         if ($systemPrompt !== '') {
             $payload['instructions'] = $systemPrompt;
         }
+        // La Conversations API borne `completion_args.temperature` à 1,0
+        // (schéma CompletionArgs de l'OpenAPI, relu le 2026-11-10), quand Chat
+        // Completions accepte 1,5 : un assistant réglé entre les deux recevait
+        // un refus dès qu'Internet était coché.
         $sendTemperature = LlmCatalog::temperatureFor('mistral', $this->model, $temperature);
         if ($sendTemperature !== null) {
-            $payload['completion_args'] = ['temperature' => $sendTemperature];
+            $payload['completion_args'] = ['temperature' => min(self::CONVERSATIONS_TEMPERATURE_MAX, $sendTemperature)];
         }
 
         $body = LlmAdapterHelpers::encodeBody($payload);

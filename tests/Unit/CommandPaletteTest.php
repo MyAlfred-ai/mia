@@ -107,12 +107,13 @@ final class CommandPaletteTest extends TestCase
         }
         $this->assertStringContainsString("require ROOT . '/templates/partials/command-palette.php';", self::lire('templates/chat/index.php'));
         $this->assertStringContainsString("require ROOT . '/templates/partials/command-palette.php';", self::lire('templates/partials/admin-nav.php'));
-        $this->assertStringContainsString('data-palette-open', self::lire('templates/partials/sidebar-shortcuts.php'), 'La tuile « Tout » ouvre la palette.');
+        // Plus de tuile « Tout » (volet repliable, piste A) : la recherche du bloc de départ suffit.
+        $this->assertStringNotContainsString('space-tile-all', self::lire('templates/partials/sidebar-shortcuts.php'));
 
         $chat = self::lire('public/assets/js/chat.js');
         $this->assertStringNotContainsString('initConvSearch', $chat, 'Une seule recherche : la palette.');
         $this->assertStringNotContainsString('convSearchResults', $chat);
-        $this->assertStringNotContainsString('convSearchInput', self::lire('public/assets/js/chat-shell.js'));
+        $this->assertStringNotContainsString('convSearchInput', self::lire('public/assets/js/sidebar-sections.js'));
 
         // Correctif : l'épingle des résultats était lue sans être renvoyée.
         $search = self::lire('src/Controllers/ChatController.php');

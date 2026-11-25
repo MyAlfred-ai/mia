@@ -67,7 +67,10 @@ final class LoopRunner
                 return ['elements' => self::listElements($over, $content, (string)$loop['over_field']), 'header' => [], 'notes' => []];
 
             case LoopSources::ROWS:
-                $grid = self::rowsGrid($source, $over, $content, $fill, $userId);
+                // Une table permanente : relue au moment T, avec les droits de la personne.
+                $grid = ($source['from'] ?? '') === LoopSources::FROM_TABLE
+                    ? WorkflowTables::loopGrid((int)($source['table_id'] ?? 0), $user)
+                    : self::rowsGrid($source, $over, $content, $fill, $userId);
                 return self::rowElements($loop, $grid);
 
             case LoopSources::SLIDES:
@@ -197,6 +200,14 @@ final class LoopRunner
             } else {
                 $index[$c['key']] = $i;
             }
+        }
+        if ($missing !== [] && $grid['rows'] !== [] && isset($grid['table'])) {
+            // Table permanente : une colonne renommée ou supprimée depuis la publication.
+            throw new \RuntimeException(t('Colonne absente de la table « {table} » : {manquantes}. Colonnes trouvées : {trouvees}. Corrigez les colonnes de la boucle dans l’éditeur, publiez, puis reprenez.', [
+                'table'      => (string)$grid['table'],
+                'manquantes' => I18n::listeCitee($missing),
+                'trouvees'   => $header !== [] ? implode(', ', $header) : t('aucune'),
+            ]));
         }
         if ($missing !== [] && $grid['rows'] !== []) {
             throw new \RuntimeException(t('Colonne absente du fichier : {manquantes}. Colonnes trouvées : {trouvees}. Corrigez les colonnes de la boucle dans l’éditeur, publiez, puis reprenez.', [
@@ -491,9 +502,13 @@ final class LoopRunner
      * par l'étape, gardé tant que l'exécution le cite) ; son texte extrait
      * pour un modèle qui ne lit pas le format.
      *
+     * `$textMax` : texte extrait gardé (null = en entier, comme un fichier
+     * joint dans le chat — WorkflowEventFiles s'en sert pour un classeur qui
+     * doit être lu ligne à ligne).
+     *
      * @return array{name: string, type: string, size: int, path: string, text: string}
      */
-    public static function storeFile(string $name, string $bytes): array
+    public static function storeFile(string $name, string $bytes, ?int $textMax = ArtifactContract::PROMPT_CHARS): array
     {
         if ($bytes === '') {
             throw new \RuntimeException(t('Le fichier « {nom} » est vide.', ['nom' => $name]));
@@ -506,14 +521,15 @@ final class LoopRunner
         $mime = FileExtractor::detectMime($path, $name);
         $native = str_starts_with($mime, 'image/') || $mime === 'application/pdf';
         $text = $native ? '' : (string)(FileExtractor::extract($path, $mime) ?? '');
-        return ['name' => mb_substr($name, 0, 200), 'type' => $mime, 'size' => strlen($bytes), 'path' => $path, 'text' => mb_substr($text, 0, ArtifactContract::PROMPT_CHARS)];
+        return ['name' => mb_substr($name, 0, 200), 'type' => $mime, 'size' => strlen($bytes), 'path' => $path, 'text' => $textMax === null ? $text : mb_substr($text, 0, $textMax)];
     }
 
     // ==================================================================
     // Services
     // ==================================================================
 
-    private static function mailService(string $service, int $userId): object
+    /** Le service de messagerie de la personne (Gmail ou Outlook), prêt à lire ; lève sinon. Partagé avec WorkflowEventFiles. */
+    public static function mailService(string $service, int $userId): object
     {
         if (self::$services !== null) {
             return (self::$services)($service, $userId);

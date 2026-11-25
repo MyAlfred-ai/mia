@@ -103,6 +103,18 @@ final class ToolRegistry
         return $this->providers[$key] ?? null;
     }
 
+    /**
+     * Handler BRUT d'un outil, sans le passage unique de `dispatch` (garde
+     * anti-répétition, trace, mémoire de conversation, statistiques) : pour
+     * un outil qui en décline un autre — `agir_sur_table` appelle le handler
+     * d'une écriture une fois par ligne, et c'est SON appel qui est tracé.
+     * Null si l'outil n'est pas exposé pour ce message.
+     */
+    public function handler(string $name): ?callable
+    {
+        return $this->handlers[$name] ?? null;
+    }
+
     /** Au moins un outil à exposer : le tour passe par la boucle function-calling. */
     public function hasTools(): bool
     {

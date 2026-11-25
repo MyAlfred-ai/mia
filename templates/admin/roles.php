@@ -153,11 +153,12 @@ $appName    = Settings::get('app_name', 'MIA');
 <body class="admin-page">
 <?php $page = 'roles'; require ROOT . '/templates/partials/admin-nav.php'; ?>
 <div class="admin-content roles-content">
+    <?php require ROOT . '/templates/partials/admin-topbar.php'; ?>
 
-    <div class="roles-head">
-        <div class="roles-head-text">
+    <div class="roles-head page-head">
+        <div class="roles-head-text page-head-text">
             <h1><?= te('Rôles') ?></h1>
-            <p class="roles-lead">
+            <p class="roles-lead page-head-sub">
                 <?= strtr(teb('Ce que chaque rôle permet de {b}voir{/b}, d’{b}utiliser{/b}, de {b}créer{/b}, de {b}modifier{/b}, de {b}supprimer{/b} et de {b}gérer{/b} dans {app}. Chaque compte porte un rôle ({comptes}) ; ses {groupes} décident en plus des assistants, outils et modèles qui lui sont ouverts.', ['app' => $appName]), [
                     '{comptes}' => '<a href="/admin/users">' . te('Personnes → Comptes') . '</a>',
                     '{groupes}' => '<a href="/admin/user-groups">' . te('groupes') . '</a>',

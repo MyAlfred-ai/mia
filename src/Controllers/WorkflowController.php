@@ -63,6 +63,8 @@ class WorkflowController
         Session::remove('workflows_error');
         $catalog = ['icons' => WorkflowCatalog::icons(), 'hues' => WorkflowCatalog::HUES, 'labels' => WorkflowCatalog::labels()];
         $coverProfiles = $view === 'mes' && $workflows !== [] ? $this->coverProfiles($user) : [];
+        // Bouton Supprimer des vignettes : ce que sa fenêtre de confirmation dit.
+        $deletionFacts = $view === 'mes' && $workflows !== [] && Workflow::allows($user, 'delete') ? WorkflowRun::deletionFacts($userId) : [];
         require ROOT . '/templates/workflows/index.php';
     }
 
@@ -177,7 +179,9 @@ class WorkflowController
             'workflow' => $this->workflowPayload($workflow),
             'definition' => $workflow['draft'],
             'issues' => WorkflowSpec::issues($workflow['draft'], $choices),
-            'estimate' => WorkflowCatalog::estimate($workflow['draft'], $choices),
+            // Ce qu'une exécution coûtera, brique par brique, et ce qu'ont
+            // coûté les dernières : le repère qui dit si l'estimation tient.
+            'estimate' => WorkflowCatalog::estimate($workflow['draft'], $choices, [], WorkflowRun::recentCredits($workflow['id'])),
             'catalog' => WorkflowCatalog::forEditor($choices) + [
                 // « Ensuite : … » — les workflows qui démarrent quand celui-ci se termine.
                 'followers' => array_map(static fn(array $w): string => (string)$w['name'], Workflow::followersOf($workflow['id'], (int)$user['id'])),
@@ -190,6 +194,9 @@ class WorkflowController
                 'delete' => Workflow::allows($user, 'delete'),
                 'use'    => Workflow::allows($user, 'use'),
             ],
+            // Ce que la fenêtre de confirmation dit avant de supprimer : les
+            // lancements (leur historique part avec lui) et ceux qu'elle arrête.
+            'deletion' => WorkflowRun::deletionFacts((int)$user['id'], $workflow['id'])[$workflow['id']] ?? ['runs' => 0, 'live' => 0],
             // Ouvert depuis la carte d'une conversation (« Approuver ») : le
             // retour à cette conversation, et les points à régler montrés d'office.
             'origin' => $this->originConversation((int)($_GET['conv'] ?? 0), (int)$user['id']),
@@ -225,7 +232,7 @@ class WorkflowController
         AjaxResponse::ok([
             'definition' => $fresh['draft'],
             'issues' => WorkflowSpec::issues($fresh['draft'], $choices),
-            'estimate' => WorkflowCatalog::estimate($fresh['draft'], $choices),
+            'estimate' => WorkflowCatalog::estimate($fresh['draft'], $choices, [], WorkflowRun::recentCredits($workflow['id'])),
             'workflow' => $this->workflowPayload($fresh),
         ]);
     }
@@ -240,6 +247,8 @@ class WorkflowController
             return;
         }
         $version = Workflow::publish($workflow['id'], (int)$user['id'], $this->now());
+        // Une boîte mail à suivre (ou plus) : ses notifications instantanées suivent.
+        MailPush::syncSoon((int)$user['id']);
         $fresh = Workflow::findById($workflow['id']);
         if (AjaxResponse::wanted()) {
             AjaxResponse::ok(['version' => $version, 'workflow' => $this->workflowPayload($fresh)]);
@@ -250,12 +259,121 @@ class WorkflowController
         exit;
     }
 
+    /**
+     * Dépose le DOCUMENT DE RÉFÉRENCE d'un champ Fichier (retour du
+     * 2026-11-04 : « affecter un fichier particulier à une brique et
+     * l'appeler dans les instructions »). Mêmes contrôles qu'un fichier du
+     * lancement ; rangé dans UPLOAD_DIR sous un nom `wfref_…` que la
+     * définition cite (WorkflowSpec::referenceFile) — jamais un chemin.
+     * L'éditeur l'écrit dans le champ, le brouillon l'enregistre.
+     */
+    public function uploadReference(string $id): void
+    {
+        $user = $this->requireUser('edit');
+        $this->ownWorkflow((int)$id, $user, true);
+        $file = $_FILES['file'] ?? null;
+        if (!is_array($file) || ($file['error'] ?? UPLOAD_ERR_NO_FILE) === UPLOAD_ERR_NO_FILE) {
+            AjaxResponse::fail(t('Aucun fichier reçu.'), 422);
+            return;
+        }
+        if (in_array($file['error'], [UPLOAD_ERR_INI_SIZE, UPLOAD_ERR_FORM_SIZE], true)) {
+            AjaxResponse::fail(FileExtractor::tooLargeMessage((string)$file['name'], '', null), 422);
+            return;
+        }
+        if ($file['error'] !== UPLOAD_ERR_OK) {
+            AjaxResponse::fail(t('Le fichier « {nom} » n’a pas pu être reçu.', ['nom' => (string)$file['name']]), 422);
+            return;
+        }
+        $mime = FileExtractor::detectMime((string)$file['tmp_name'], (string)$file['name']);
+        if ((int)$file['size'] > FileExtractor::uploadLimit($mime)) {
+            AjaxResponse::fail(FileExtractor::tooLargeMessage((string)$file['name'], $mime, (int)$file['size']), 422);
+            return;
+        }
+        [$mime, $name, $convertError] = ImageConvert::forUpload((string)$file['tmp_name'], (string)$file['name'], $mime);
+        if ($convertError !== null) {
+            AjaxResponse::fail($convertError, 422);
+            return;
+        }
+        if (!in_array($mime, UPLOAD_ALLOWED_TYPES, true)) {
+            AjaxResponse::fail(FileExtractor::unsupportedMessage((string)$name, $mime), 422);
+            return;
+        }
+        $ext = preg_replace('/[^a-z0-9]/', '', strtolower(pathinfo((string)$name, PATHINFO_EXTENSION)));
+        $ref = 'wfref_' . bin2hex(random_bytes(16)) . ($ext !== '' ? '.' . substr($ext, 0, 8) : '');
+        if (!is_uploaded_file((string)$file['tmp_name']) || !move_uploaded_file((string)$file['tmp_name'], UPLOAD_DIR . $ref)) {
+            AjaxResponse::fail(t('Le fichier « {nom} » n’a pas pu être enregistré.', ['nom' => (string)$name]), 500);
+            return;
+        }
+        AjaxResponse::ok(['reference' => WorkflowSpec::referenceFile(['ref' => $ref, 'name' => (string)$name, 'type' => $mime, 'size' => (int)$file['size']])]);
+    }
+
+    /**
+     * Historique des versions publiées (retour du 2026-11-04) : la liste, de
+     * la plus récente à la plus ancienne. Lecture seule.
+     */
+    public function versions(string $id): void
+    {
+        $user = $this->requireUser('view');
+        $workflow = $this->ownWorkflow((int)$id, $user, true);
+        session_write_close();
+        // Fuseau du NAVIGATEUR d'abord (`?tz=`, validé) : un workflow sans
+        // programmation n'en porte aucun, et l'heure tombait en UTC (« publiée
+        // à 18 h 32 » quand la page de l'exécution dit « lancé à 19 h 32 »).
+        $asked = is_string($_GET['tz'] ?? null) ? ScheduledTask::normalizeTimezone($_GET['tz']) : '';
+        $tz = Recurrence::zone($asked !== '' ? $asked : ScheduledTask::normalizeTimezone((string)($workflow['published']['start']['schedule']['timezone'] ?? $workflow['draft']['start']['schedule']['timezone'] ?? '')));
+        $list = array_map(function (array $v) use ($tz, $workflow): array {
+            $at = $v['published_at'] !== null ? ScheduledTask::fromSqlUtc($v['published_at']) : null;
+            return $v + [
+                'date'    => $at !== null ? Format::shortDateTime($at->setTimezone($tz)) : '',
+                'current' => $v['version'] === (int)$workflow['published_version'],
+            ];
+        }, Workflow::versions($workflow['id'], (int)$user['id']));
+        AjaxResponse::ok(['versions' => $list, 'draft_changed' => (bool)$workflow['draft_changed']]);
+    }
+
+    /** Une version publiée : son déroulé, pour la revoir avant d'en repartir. */
+    public function versionShow(string $id, string $version): void
+    {
+        $user = $this->requireUser('view');
+        $workflow = $this->ownWorkflow((int)$id, $user, true);
+        $v = Workflow::version($workflow['id'], (int)$user['id'], (int)$version);
+        if ($v === null) {
+            AjaxResponse::fail(t('Version introuvable.'), 404);
+            return;
+        }
+        $choices = $this->choicesFor($user, $workflow['id']);
+        AjaxResponse::ok(['version' => [
+            'version' => $v['version'],
+            'objective' => (string)$v['definition']['objective'],
+            'lines' => WorkflowDraft::railLines($v['definition'], $choices),
+            'same_as_draft' => Workflow::encode($v['definition']) === Workflow::encode($workflow['draft']),
+        ]]);
+    }
+
+    /**
+     * Repartir d'une version : elle devient le BROUILLON (rien n'est publié,
+     * la version en service ne change pas tant qu'on ne republie pas).
+     */
+    public function versionRestore(string $id, string $version): void
+    {
+        $user = $this->requireUser('edit');
+        $workflow = $this->ownWorkflow((int)$id, $user, true);
+        $v = Workflow::version($workflow['id'], (int)$user['id'], (int)$version);
+        if ($v === null) {
+            AjaxResponse::fail(t('Version introuvable.'), 404);
+            return;
+        }
+        Workflow::saveDraft($workflow['id'], (int)$user['id'], (string)$workflow['name'], (string)$workflow['color'], $v['definition']);
+        AjaxResponse::ok(['message' => t('Le brouillon repart de la version {v}. Publiez pour la remettre en service.', ['v' => $v['version']])]);
+    }
+
     public function toggle(string $id): void
     {
         $user = $this->requireUser('edit');
         $workflow = $this->ownWorkflow((int)$id, $user, true);
         $active = !$workflow['is_active'];
         Workflow::setActive($workflow['id'], (int)$user['id'], $active, $this->now());
+        MailPush::syncSoon((int)$user['id']);
         if (AjaxResponse::wanted()) {
             AjaxResponse::ok(['active' => $active]);
             return;
@@ -268,12 +386,41 @@ class WorkflowController
     {
         $user = $this->requireUser('delete');
         $workflow = $this->ownWorkflow((int)$id, $user, true);
+        // Une suppression ne part jamais sans la fenêtre de confirmation
+        // (workflows.js : liste, en-tête et Réglages de l'éditeur) : elle seule
+        // pose `confirm`. Un envoi sans elle — formulaire de la liste soumis
+        // sans script, page restée d'une version précédente — ne supprime rien.
+        if ((string)($_POST['confirm'] ?? '') !== '1') {
+            $this->failOr('/workflows', t('La suppression d’un workflow doit être confirmée. Réessayez depuis la liste.'));
+            return;
+        }
+        // Ses exécutions en cours s'arrêtent AVANT : supprimé, le workflow
+        // emporte leurs lignes (CASCADE), mais un job encore en file tournerait,
+        // et les cartes de validation resteraient ouvertes dans les conversations,
+        // menant nulle part. Une panne ici n'empêche pas la suppression.
+        foreach (WorkflowRun::unfinishedFor($workflow['id'], (int)$user['id']) as $run) {
+            try {
+                WorkflowEngine::cancel($run, false, true);
+            } catch (\Throwable $e) {
+                error_log('[Workflows] Arrêt avant suppression impossible (exécution #' . $run['id'] . ') : ' . $e->getMessage());
+            }
+        }
         Workflow::delete($workflow['id'], (int)$user['id']);
+        // Le message attend la liste, où mène aussi la fenêtre de confirmation.
+        // AVANT syncSoon : JobQueue::dispatch() referme la session, un message
+        // posé après elle n'était jamais enregistré (il ne s'affichait pas).
+        // Arrêter une exécution qui en appelait une autre peut déjà avoir lancé
+        // un job (la brique d'appel reprend) : la session est alors refermée,
+        // on la rouvre le temps du message.
+        if (session_status() !== PHP_SESSION_ACTIVE && !headers_sent()) {
+            Session::start();
+        }
+        $this->flash('workflows_success', t('« {nom} » est supprimé. Les conversations de ses lancements restent dans votre historique.', ['nom' => $workflow['name']]));
+        MailPush::syncSoon((int)$user['id']);
         if (AjaxResponse::wanted()) {
             AjaxResponse::ok(['url' => '/workflows']);
             return;
         }
-        $this->flash('workflows_success', t('Workflow supprimé. Ses conversations restent dans votre historique.'));
         header('Location: /workflows');
         exit;
     }
@@ -330,8 +477,18 @@ class WorkflowController
             // Workflow à évènement lancé à la main (un essai) : ce que la
             // personne a collé ou joint tient lieu de l'évènement.
             $eventFile = $this->collectFiles(['start' => ['fields' => [['key' => '__event', 'type' => 'file', 'label' => t('Fichier reçu')]]]])['__event'] ?? null;
-            $event = WorkflowTriggers::manualEvent($workflow['published'], (string)($_POST['event_text'] ?? ''), $eventFile);
+            // Un email choisi parmi les derniers de la boîte : la pièce
+            // complète, comme à l'arrivée d'un vrai email (de quoi répondre
+            // dans le fil). Sinon, le texte collé ou le fichier joint.
+            $chosen = trim((string)($_POST['event_message'] ?? ''));
+            $event = $chosen !== ''
+                ? WorkflowTriggers::chosenEmailEvent($workflow['published'], (int)$user['id'], $chosen)
+                : WorkflowTriggers::manualEvent($workflow['published'], (string)($_POST['event_text'] ?? ''), $eventFile);
+            WorkflowEngine::assertReady($workflow, $user);
             $res = WorkflowEngine::launch($workflow, $user, $values, $files, ($_POST['trigger'] ?? '') === 'chat' ? 'chat' : 'manual', null, (string)($_POST['tz'] ?? ''), $event);
+        } catch (WorkflowPreflightException $e) {
+            AjaxResponse::send(['ok' => false, 'error' => $e->getMessage(), 'preflight' => $e->items()], 422);
+            return;
         } catch (\InvalidArgumentException $e) {
             AjaxResponse::fail($e->getMessage(), 422);
             return;
@@ -340,7 +497,10 @@ class WorkflowController
             AjaxResponse::fail(t('Requête invalide.'), 409);
             return;
         }
-        $payload = ['ok' => true, 'url' => '/workflows/runs/' . $res['run_id'], 'run_id' => $res['run_id'], 'conversation_id' => $res['conversation_id']];
+        // La discussion d'abord : on suit l'exécution dans SA conversation,
+        // l'avancement sur le côté ; la page détaillée reste à un clic (`url`).
+        $payload = ['ok' => true, 'url' => '/workflows/runs/' . $res['run_id'], 'run_id' => $res['run_id'], 'conversation_id' => $res['conversation_id'],
+            'conversation_url' => '/chat/' . $res['conversation_id']];
         $jobs = $res['job_ids'];
         if ($jobs === []) {
             AjaxResponse::send($payload);
@@ -388,6 +548,29 @@ class WorkflowController
         $run = $this->ownRun((int)$id, $user);
         session_write_close();
         AjaxResponse::ok(['state' => $this->runState($run)]);
+    }
+
+    /**
+     * Le volet « Avancement » de la conversation d'une exécution : son HTML,
+     * rendu ici (traduit), et quand le relire (la discussion d'abord, cf.
+     * WorkflowProgress).
+     */
+    public function progress(string $id): void
+    {
+        $user = $this->requireUser('view');
+        $run = $this->ownRun((int)$id, $user);
+        session_write_close();
+        $workflow = Workflow::findById($run['workflow_id']);
+        $state = $this->runState($run);
+        $p = WorkflowProgress::view($run['definition'], $state, [
+            'run_id' => $run['id'], 'name' => $workflow['name'] ?? t('Workflow supprimé'),
+            'color' => $workflow['color'] ?? Workflow::DEFAULT_COLOR, 'version' => $run['version'],
+        ]);
+        AjaxResponse::ok([
+            'html' => $this->partial('run-progress', ['p' => $p, 'icons' => WorkflowCatalog::icons()]),
+            'terminal' => $p['terminal'], 'poll' => $p['poll'], 'signature' => $p['signature'],
+            'conversation_id' => (int)$run['conversation_id'],
+        ]);
     }
 
     public function gate(string $id): void
@@ -554,6 +737,75 @@ class WorkflowController
     }
 
     /**
+     * Essai des filtres « email reçu », dans l'éditeur : les derniers emails
+     * de la boîte de la personne, jugés par les filtres EN COURS DE SAISIE
+     * (corps JSON : event) — avec la même règle que la surveillance. Rien
+     * n'est lancé ni gardé.
+     */
+    public function testEmailFilters(string $id): void
+    {
+        $user = $this->requireUser('edit');
+        $this->ownWorkflow((int)$id, $user, true);
+        $body = json_decode((string)file_get_contents('php://input'), true);
+        $def = WorkflowSpec::normalize(['start' => ['event' => is_array($body) ? ($body['event'] ?? null) : null]]);
+        $event = $def['start']['event'];
+        if (($event['kind'] ?? '') !== 'email') {
+            AjaxResponse::fail(t('Requête invalide.'), 400);
+            return;
+        }
+        $service = $event['source'] === 'outlook' ? 'Outlook' : 'Gmail';
+        $svc = MailPush::service((string)$event['source'], (int)$user['id']);
+        if ($svc === null) {
+            AjaxResponse::fail(t('Reliez d’abord « {nom} » dans Réglages → Comptes connectés.', ['nom' => $service]), 422);
+            return;
+        }
+        session_write_close();
+        $tz = ScheduledTask::normalizeTimezone((string)(is_array($body) ? ($body['timezone'] ?? '') : ''));
+        try {
+            $res = WorkflowTriggers::testEmailFilters($event, $svc);
+        } catch (\RuntimeException $e) {
+            AjaxResponse::fail($e->getMessage(), 502);
+            return;
+        }
+        AjaxResponse::ok(['html' => WorkflowTriggers::filterTestHtml($res, $service, $tz), 'matched' => $res['matched'], 'total' => count($res['items'])]);
+    }
+
+    /**
+     * Les derniers emails de la boîte surveillée, à choisir dans la fenêtre
+     * de lancement d'un workflow déclenché par un email (un essai à la main) :
+     * la liste rendue côté serveur, chaque email disant s'il lancerait le
+     * workflow. Rien n'est lancé, rien n'est gardé.
+     */
+    public function recentEmails(string $id): void
+    {
+        $user = $this->requireUser('use');
+        $workflow = $this->ownWorkflow((int)$id, $user, true);
+        $event = $workflow['published']['start']['event'] ?? null;
+        if (!is_array($event) || ($event['kind'] ?? '') !== 'email') {
+            AjaxResponse::fail(t('Requête invalide.'), 400);
+            return;
+        }
+        $service = $event['source'] === 'outlook' ? 'Outlook' : 'Gmail';
+        $svc = MailPush::service((string)$event['source'], (int)$user['id']);
+        if ($svc === null) {
+            AjaxResponse::fail(t('Reliez d’abord « {nom} » dans Réglages → Comptes connectés.', ['nom' => $service]), 422);
+            return;
+        }
+        session_write_close();
+        $tz = ScheduledTask::normalizeTimezone((string)($_GET['tz'] ?? ''));
+        if ($tz === '') {
+            $tz = WorkflowTriggers::timezoneOf($workflow['published']);
+        }
+        try {
+            $res = WorkflowTriggers::testEmailFilters($event, $svc, WorkflowTriggers::RECENT_EMAILS_MAX);
+        } catch (\RuntimeException $e) {
+            AjaxResponse::fail($e->getMessage(), 502);
+            return;
+        }
+        AjaxResponse::ok(['html' => WorkflowTriggers::recentEmailsHtml($res, $service, $tz), 'total' => count($res['items'])]);
+    }
+
+    /**
      * Fichier EXEMPLE d'une boucle, dans l'éditeur : ses onglets, ses
      * colonnes (avec un type deviné), son nombre de lignes et les premières ;
      * ou le nombre de slides, de pages, de sections. Rien n'est gardé : le
@@ -674,7 +926,7 @@ class WorkflowController
                 }
             }
             $file = $_FILES['file_' . $n['over']] ?? null;
-            if ($path === null && is_array($file) && ($file['error'] ?? UPLOAD_ERR_NO_FILE) === UPLOAD_ERR_OK && (int)$file['size'] <= UPLOAD_MAX_SIZE) {
+            if ($path === null && is_array($file) && ($file['error'] ?? UPLOAD_ERR_NO_FILE) === UPLOAD_ERR_OK && (int)$file['size'] <= FileExtractor::largestUploadLimit()) {
                 $path = (string)$file['tmp_name'];
                 $name = (string)$file['name'];
             }
@@ -704,7 +956,7 @@ class WorkflowController
         }
         AjaxResponse::ok([
             'loops' => $loops,
-            'estimate' => WorkflowCatalog::estimate($def, $this->choicesFor($user, (int)$workflow['id']), $counts),
+            'estimate' => WorkflowCatalog::estimate($def, $this->choicesFor($user, (int)$workflow['id']), $counts, WorkflowRun::recentCredits((int)$workflow['id'])),
             'confirm_over' => WorkflowSpec::LOOP_CONFIRM_OVER,
         ]);
     }
@@ -981,6 +1233,9 @@ class WorkflowController
             'profiles'  => array_filter($profiles, static fn(string $n): bool => $n !== ''),
             'llms'      => LLMFactory::available(),
             'image'     => static fn(array $c): ?string => WorkflowCreations::imagePath('image', $c) !== null ? (string)$c['url'] : null,
+            // Appels en cours : l'état du workflow appelé (il travaille, il attend, il s'est arrêté).
+            'calls'     => WorkflowRun::calledBySteps(array_column(
+                array_filter($steps, static fn(array $s): bool => ($s['detail']['kind'] ?? '') === 'call' && $s['status'] === WorkflowRun::STEP_RUNNING), 'id')),
         ];
         $now = $this->now();
         $event = $artifacts[WorkflowSpec::EVENT_PIECE]['content'] ?? null;
@@ -1003,7 +1258,7 @@ class WorkflowController
             }
         }
         return [
-            'head'     => WorkflowJournal::head($run, $steps, WorkflowRun::ordinal($run), $latest, WorkflowRun::credits($run['conversation_id']), $now, is_array($event) ? $event : null),
+            'head'     => WorkflowJournal::head($run, $steps, WorkflowRun::ordinal($run), $latest, (WorkflowRun::credits($run['conversation_id']) + WorkflowRun::calledCredits((int)$run['id'])), $now, is_array($event) ? $event : null),
             'entries'  => WorkflowJournal::entries($run, $steps, $ctx, $now),
             'wfInfo'   => $wfInfo,
             'relaunch' => $relaunch,
@@ -1091,12 +1346,16 @@ class WorkflowController
                 break;
             case 'fiche':
                 $posted = is_array($_POST['fields'] ?? null) ? $_POST['fields'] : [];
+                $fields = [];
                 foreach ($piece['fields'] as $f) {
                     if (array_key_exists($f['key'], $posted)) {
                         $raw = trim((string)$posted[$f['key']]);
-                        $content['fields'][$f['key']] = $raw === '' ? null : WorkflowValues::coerce($f['type'] === 'list' ? implode("\n", array_map('trim', explode("\n", $raw))) : $raw, $f['type']);
+                        $fields[$f['key']] = $raw === '' ? null : WorkflowValues::coerce($f['type'] === 'list' ? implode("\n", array_map('trim', explode("\n", $raw))) : $raw, $f['type']);
                     }
                 }
+                // Un résumé écrit avec les anciennes valeurs ne survit pas à
+                // leur correction (ArtifactContract::withCorrectedFields).
+                $content = ArtifactContract::withCorrectedFields($piece, $content, $fields);
                 break;
             case 'document':
                 $content['source'] = (string)($_POST['source'] ?? '');
@@ -1177,6 +1436,10 @@ class WorkflowController
                 'error' => (string)($watch['error'] ?? ''),
                 'launched' => (int)($watch['launched'] ?? 0),
                 'active' => $w['is_active'] && ($w['published']['start']['event'] ?? null) !== null,
+                // Boîte mail : prévenue dès qu'un email arrive, ou vérifiée toutes les 5 minutes (et pourquoi).
+                'push' => ($w['published']['start']['event']['kind'] ?? '') === 'email'
+                    ? MailPush::statusFor((int)$w['user_id'], ($w['published']['start']['event']['source'] ?? '') === 'outlook' ? 'outlook' : 'gmail')
+                    : null,
             ] : null,
             'has_hook' => !empty($w['hook_token_hash']),
         ];
@@ -1208,15 +1471,22 @@ class WorkflowController
                 'kind' => $event['kind'],
                 'name' => (string)$event['piece_name'],
                 'sentence' => WorkflowCatalog::eventSentence($event),
+                // Email : la fenêtre propose les derniers emails de la boîte
+                // (`recent_url`) ; coller un texte reste possible.
+                'recent_url' => $event['kind'] === 'email' ? '/workflows/' . $workflow['id'] . '/recent-emails' : null,
                 'help' => match ($event['kind']) {
-                    'email'   => t('Pour un essai : collez le texte d’un email. Sinon, le workflow démarre sans « {piece} ».', ['piece' => $event['piece_name']]),
+                    'email'   => t('Pour un essai : choisissez un de vos derniers emails, comme s’il venait d’arriver. Sans email, le workflow démarre sans « {piece} ».', ['piece' => $event['piece_name']]),
                     'file'    => t('Pour un essai : joignez un fichier. Sinon, le workflow démarre sans « {piece} ».', ['piece' => $event['piece_name']]),
                     'webhook' => t('Pour un essai : collez les données (JSON ou texte). Sinon, le workflow démarre sans « {piece} ».', ['piece' => $event['piece_name']]),
                     default   => t('Pour un essai : collez le texte attendu. Sinon, le workflow démarre sans « {piece} ».', ['piece' => $event['piece_name']]),
                 },
             ],
             'lines' => WorkflowDraft::railLines($def, $choices),
-            'estimate' => WorkflowCatalog::estimate($def, $choices),
+            // Ce qu'il faut régler avant de lancer (compte à relier, outil
+            // retiré) : la fenêtre le montre et ne lance rien tant qu'il en reste.
+            'preflight' => WorkflowEngine::preflight($workflow, $user, $choices),
+            'form_url' => '/workflows/' . $workflow['id'] . '/form',
+            'estimate' => WorkflowCatalog::estimate($def, $choices, [], WorkflowRun::recentCredits((int)$workflow['id'])),
             'notify' => $def['notify'],
             'launch_url' => '/workflows/' . $workflow['id'] . '/launch',
             // Champs « fichier » qu'une boucle parcourt : la fenêtre les compte dès le dépôt.
@@ -1248,6 +1518,11 @@ class WorkflowController
         }
         $nodes = [];
         $steps = WorkflowRun::steps($run['id']);
+        // Briques « Appeler un workflow » : l'exécution appelée par chaque passage.
+        $called = WorkflowRun::calledBySteps(array_map(
+            static fn(array $s): int => (int)$s['id'],
+            array_filter($steps, static fn(array $s): bool => ($s['detail']['kind'] ?? '') === 'call')
+        ));
         foreach ($steps as $s) {
             $entry = [
                 'status' => $s['status'],
@@ -1280,6 +1555,9 @@ class WorkflowController
             $reply = (int)($s['detail']['reply_id'] ?? 0) ?: ($s['status'] !== WorkflowRun::STEP_RUNNING ? (int)($s['message_id'] ?? 0) : 0);
             if ($reply > 0 && isset($byMessage[$reply]) && $s['node_key'] !== WorkflowSpec::END_KEY) {
                 $entry['cards'] = array_map(static fn(array $c): array => WorkflowJournal::cardLine($c, $names, $images), $byMessage[$reply]);
+            }
+            if (($s['detail']['kind'] ?? '') === 'call') {
+                $entry['child'] = self::calledState($s, $called[(int)$s['id']] ?? null);
             }
             $nodes[$s['node_key']] = $entry;
             // Une brique de boucle : sa clé simple porte le dernier tour.
@@ -1440,7 +1718,9 @@ class WorkflowController
             'loops' => $loops,
             'timer' => $timer,
             'trigger' => WorkflowCatalog::triggerLabel((string)$run['trigger_kind']),
-            'credits' => WorkflowRun::credits($run['conversation_id']),
+            // Appelée par un autre workflow : d'où elle vient (lien vers l'exécution appelante).
+            'caller' => self::callerOf($run),
+            'credits' => (WorkflowRun::credits($run['conversation_id']) + WorkflowRun::calledCredits((int)$run['id'])),
             // Le mot de la fin cite le dossier : rendu ici, comme dans la conversation.
             'end_note' => WorkflowDeliveries::fill((string)($def['end']['note'] ?? ''), $pieces, WorkflowLoop::view($all, [], 0), false),
             'conversation_url' => $run['conversation_id'] ? '/chat/' . $run['conversation_id'] : null,
@@ -1481,11 +1761,59 @@ class WorkflowController
             'waiting_cards' => $run['status'] === WorkflowRun::WAITING && $gateStep === null && $timer === null,
             'resumable' => $resumable,
             'can_skip' => $resumable && ($curBase === WorkflowSpec::END_KEY
-                || in_array($curNode['type'] ?? '', [WorkflowSpec::TYPE_STEP, WorkflowSpec::TYPE_ACTION, WorkflowSpec::TYPE_CREATE, WorkflowSpec::TYPE_WAIT, WorkflowSpec::TYPE_NOTIFY], true)),
+                || in_array($curNode['type'] ?? '', [WorkflowSpec::TYPE_STEP, WorkflowSpec::TYPE_ACTION, WorkflowSpec::TYPE_CREATE, WorkflowSpec::TYPE_WAIT, WorkflowSpec::TYPE_NOTIFY, WorkflowSpec::TYPE_CALL], true)),
             'latest_version' => $latest,
             'version' => (int)$run['version'],
             'restart' => $restart,
             'terminal' => in_array($run['status'], WorkflowRun::TERMINAL, true),
+        ];
+    }
+
+    /**
+     * Ce que la page montre d'un appel de workflow : le workflow appelé, où
+     * en est son exécution (elle attend la personne ? elle s'est arrêtée ?),
+     * le lien pour l'ouvrir, ce qui lui a été donné.
+     */
+    private static function calledState(array $step, ?array $child): array
+    {
+        $out = [
+            'name' => (string)($child['name'] ?? $step['detail']['workflow'] ?? ''),
+            'color' => (string)($child['color'] ?? ''),
+            'params' => array_values(array_filter((array)($step['detail']['params'] ?? []), 'is_array')),
+            'run_id' => null, 'url' => null, 'status' => '', 'status_label' => '', 'tone' => '', 'waiting' => false, 'blocked' => false, 'error' => '',
+        ];
+        if ($child === null) {
+            return $out;
+        }
+        $status = (string)$child['status'];
+        $timer = $status === WorkflowRun::WAITING && WorkflowRun::timerAt((int)$child['id']) !== null;
+        [$label, $tone] = WorkflowCatalog::statusLabel($status, $timer);
+        return [
+            'run_id' => (int)$child['id'], 'url' => '/workflows/runs/' . (int)$child['id'],
+            'status' => $status, 'status_label' => $label, 'tone' => $tone,
+            // Une validation, une carte à approuver dans l'appelé : c'est là que la personne agit.
+            'waiting' => $status === WorkflowRun::WAITING && !$timer,
+            'blocked' => in_array($status, [WorkflowRun::FAILED, WorkflowRun::PAUSED, WorkflowRun::CANCELLED], true),
+            'error' => trim((string)($child['error']['title'] ?? '')) !== '' ? (string)$child['error']['title'] : (string)($child['error']['message'] ?? ''),
+        ] + $out;
+    }
+
+    /** L'exécution qui a appelé celle-ci (brique « Appeler un workflow »), ou null. */
+    private static function callerOf(array $run): ?array
+    {
+        if (empty($run['caller_step_id']) || empty($run['parent_run_id'])) {
+            return null;
+        }
+        $parent = WorkflowRun::find((int)$run['parent_run_id']);
+        if ($parent === null || $parent['user_id'] !== $run['user_id']) {
+            return null;
+        }
+        $wf = Workflow::findById($parent['workflow_id']);
+        $step = WorkflowRun::step((int)$run['caller_step_id']);
+        $node = $step !== null ? WorkflowEngine::nodeFor($parent['definition'], (string)$step['node_key']) : null;
+        return [
+            'run_id' => $parent['id'], 'url' => '/workflows/runs/' . $parent['id'],
+            'name' => (string)($wf['name'] ?? ''), 'brick' => (string)($node['title'] ?? ''),
         ];
     }
 
@@ -1660,15 +1988,23 @@ class WorkflowController
             if (!is_array($file) || ($file['error'] ?? UPLOAD_ERR_NO_FILE) === UPLOAD_ERR_NO_FILE) {
                 continue;
             }
+            if (in_array($file['error'], [UPLOAD_ERR_INI_SIZE, UPLOAD_ERR_FORM_SIZE], true)) {
+                throw new \InvalidArgumentException(FileExtractor::tooLargeMessage((string)$file['name'], '', null));
+            }
             if ($file['error'] !== UPLOAD_ERR_OK) {
                 throw new \InvalidArgumentException(t('Le fichier « {nom} » n’a pas pu être reçu.', ['nom' => $f['label']]));
             }
-            if ((int)$file['size'] > UPLOAD_MAX_SIZE) {
-                throw new \InvalidArgumentException(t('Le fichier « {nom} » est trop lourd.', ['nom' => $f['label']]));
-            }
             $mime = FileExtractor::detectMime((string)$file['tmp_name'], (string)$file['name']);
+            if ((int)$file['size'] > FileExtractor::uploadLimit($mime)) {
+                throw new \InvalidArgumentException(FileExtractor::tooLargeMessage((string)$file['name'], $mime, (int)$file['size']));
+            }
+            // HEIC, AVIF, TIFF, BMP : convertis en JPEG avant tout (sur place).
+            [$mime, $file['name'], $convertError] = ImageConvert::forUpload((string)$file['tmp_name'], (string)$file['name'], $mime);
+            if ($convertError !== null) {
+                throw new \InvalidArgumentException($convertError);
+            }
             if (!in_array($mime, UPLOAD_ALLOWED_TYPES, true)) {
-                throw new \InvalidArgumentException(t('Type de fichier non pris en charge pour « {nom} ».', ['nom' => $f['label']]));
+                throw new \InvalidArgumentException(FileExtractor::unsupportedMessage((string)$file['name'], $mime));
             }
             $ext = preg_replace('/[^a-z0-9]/', '', strtolower(pathinfo((string)$file['name'], PATHINFO_EXTENSION)));
             $dest = UPLOAD_DIR . bin2hex(random_bytes(16)) . ($ext !== '' ? '.' . $ext : '');

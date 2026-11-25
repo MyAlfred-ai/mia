@@ -59,14 +59,19 @@ final class NavShellTest extends TestCase
         }
         $this->assertStringContainsString('<a href="/" class="sidebar-new-btn"', $shell, 'Nouvelle conversation = la page de discussion.');
         $this->assertStringContainsString('$sbNavActive        = NavShell::SHORTCUT_OF[$page] ?? \'\';', $shell);
-        $this->assertStringContainsString('chat-shell.js', $shell);
+        // Rangement de l'historique et sections repliables : le MÊME script que
+        // la page de discussion (plus de réplique chat-shell.js).
+        $this->assertStringContainsString('/assets/js/sidebar-sections.js', $shell);
+        $this->assertStringContainsString('/assets/js/sidebar-sections.js', $chat);
+        $this->assertFileDoesNotExist(dirname(__DIR__, 2) . '/public/assets/js/chat-shell.js');
+        $this->assertStringContainsString("require ROOT . '/templates/partials/sidebar-fold-all.php'", $shell);
+        $this->assertStringContainsString("require ROOT . '/templates/partials/sidebar-fold-all.php'", $chat);
 
         $raccourcis = self::lire('templates/partials/sidebar-shortcuts.php');
         $this->assertStringContainsString('$sbNavActive === $sbKey', $raccourcis, 'Chaque tuile peut être allumée.');
 
-        $js = self::lire('public/assets/js/chat-shell.js');
+        $js = self::lire('public/assets/js/sidebar-sections.js');
         $this->assertStringNotContainsString("/chat/search?q=", $js, 'La recherche vit dans la palette (command-palette.js).');
-        $this->assertStringContainsString("list.closest('.admin-sidebar--chat')", $js);
 
         $css = self::lire('public/assets/css/main.css');
         $this->assertStringContainsString('.admin-sidebar.admin-sidebar--chat {', $css);

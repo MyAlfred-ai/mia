@@ -35,9 +35,9 @@ final class AutosaveContractTest extends TestCase
         // Entreprise : sa page depuis qu'elle a quitté Marque & apparence.
         'templates/admin/company.php',
         'templates/admin/credits.php',
-        // Comportement par défaut : carte #defaut de la page Modèles.
-        'templates/admin/llms/models.php',
-        'templates/admin/llms/keys.php',
+        // Fournisseurs et modèles : défaut et secours (#defaut), clé de
+        // chaque fournisseur, LLM local.
+        'templates/admin/llms/index.php',
         'templates/admin/tools.php',
         // Fiche d'une base : une page, plus une modale — armée en
         // modification seulement (testLaFicheDUneBaseNArmeQueLaModification).
@@ -53,6 +53,9 @@ final class AutosaveContractTest extends TestCase
         'templates/admin/pruning.php',
         'templates/settings/profile.php',
         'templates/settings/ai.php',
+        // Mémoire : « Votre contexte » (les souvenirs, eux, s'enregistrent un
+        // par un en JSON : ce sont des gestes, pas un formulaire).
+        'templates/settings/memory.php',
         // Thème et taille d'affichage : appliqués à la page dès le clic.
         'templates/settings/display.php',
         // Préférences du connecteur Google Tasks (liste par défaut, horizon,
@@ -193,6 +196,10 @@ final class AutosaveContractTest extends TestCase
             );
         }
 
+        $memoire = $this->corpsDeMethode(self::lire('src/Controllers/MemoryController.php'), 'savePrefs');
+        $this->assertStringContainsString('respondPrefs', $memoire, 'MemoryController::savePrefs() doit passer par le helper à double sortie.');
+        $this->assertStringContainsString('AjaxResponse::', $this->corpsDeMethode(self::lire('src/Controllers/MemoryController.php'), 'respondPrefs'));
+
         $settings = self::lire('src/Controllers/UserSettingsController.php');
         foreach (['updateProfile', 'updateAiPreferences', 'saveTasksPrefs'] as $methode) {
             $corps = $this->corpsDeMethode($settings, $methode);
@@ -267,6 +274,12 @@ final class AutosaveContractTest extends TestCase
             'Les identifiants d\'authentification vivent sur /admin/sso : les écrire ici les '
                 . 'effacerait à chaque enregistrement de « Marque & apparence ».'
         );
+
+        // « Votre contexte » vit sur Réglages → Mémoire : Préférences IA
+        // n'écrit plus que le style (le contexte passe à null, inchangé).
+        $prefs = $this->corpsDeMethode(self::lire('src/Controllers/UserSettingsController.php'), 'updateAiPreferences');
+        $this->assertStringNotContainsString('ai_user_context', $prefs);
+        $this->assertStringContainsString('UserPreferences::save($id, $style, null);', $prefs);
     }
 
     /**
@@ -279,6 +292,8 @@ final class AutosaveContractTest extends TestCase
         $routes = self::lire('public/index.php');
         $cas = [
             "post('/admin/users/access-rules'" => "post('/admin/users/{id}'",
+            "post('/settings/memory/prefs'"    => "post('/settings/memory/{id}'",
+            "post('/settings/memory/clear'"    => "post('/settings/memory/{id}'",
         ];
         foreach ($cas as $litterale => $parametree) {
             $a = strpos($routes, $litterale);
@@ -464,7 +479,7 @@ final class AutosaveContractTest extends TestCase
                 'sharepoint_client_secret', 'remove_sharepoint_credentials',
                 'google_calendar_api_key', 'remove_google_calendar_api_key',
             ],
-            'templates/admin/llms/keys.php' => ['key'],
+            'templates/admin/llms/index.php' => ['key'],
         ];
         foreach ($cas as $gabarit => $champs) {
             $contenu = self::lire($gabarit);
@@ -503,16 +518,15 @@ final class AutosaveContractTest extends TestCase
     }
 
     /**
-     * Le sélecteur de fournisseur des clés API désigne la CIBLE de la fiche,
-     * pas une valeur : en changer ne doit rien enregistrer, sinon la clé
-     * affichée partirait chez le fournisseur suivant.
+     * Le fournisseur d'un formulaire de clé est FIXÉ (champ caché, un
+     * formulaire par fournisseur) : un sélecteur qui changerait de cible
+     * enverrait la clé affichée chez le fournisseur suivant.
      */
-    public function testLeSelecteurDeFournisseurEstSilencieux(): void
+    public function testLeFournisseurDUnFormulaireDeCleEstFixe(): void
     {
-        $this->assertStringContainsString(
-            'data-autosave-silent',
-            self::lire('templates/admin/llms/keys.php')
-        );
+        $page = self::lire('templates/admin/llms/index.php');
+        $this->assertStringNotContainsString('<select name="provider"', $page);
+        $this->assertMatchesRegularExpression('#class="llm-key-form">\s*<\?= Csrf::field\(\) \?>.*?<input type="hidden" name="provider"#s', $page);
     }
 
     /**

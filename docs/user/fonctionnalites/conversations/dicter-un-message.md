@@ -21,8 +21,13 @@ Pour parler avec MIA et l'écouter répondre, sans clavier, voir
 
 1. Cliquez le bouton **micro** — « Dicter le message ».
 2. Autorisez l'accès au micro dans votre navigateur.
-3. Parlez : votre voix se transcrit dans le champ en direct.
+3. Parlez : votre voix se transcrit dans le champ.
 4. Re-cliquez pour arrêter — « Arrêter la dictée ».
+
+Selon le service choisi par votre administrateur, le texte s'écrit au fil de la parole, ou phrase par
+phrase : chaque phrase arrive une à deux secondes après une pause. Dans ce second cas, après l'arrêt,
+le micro clignote doucement tant que la dernière phrase est en route ; envoyer le message abandonne ce
+qui n'est pas encore écrit.
 
 Pendant l'établissement de la liaison, le bouton tourne et indique « Connexion du micro… ». Si la
 liaison se coupe en cours de dictée, elle se rétablit toute seule : continuez à parler.
@@ -36,4 +41,4 @@ liaison se coupe en cours de dictée, elle se rétablit toute seule : continuez 
 | Pas de bouton micro | La dictée est masquée ou non configurée sur votre instance. Voir avec votre administrateur. |
 | La fenêtre **Quota mensuel atteint** s'ouvre au clic sur le micro, ou la dictée s'arrête d'elle-même | Votre quota du mois est épuisé : attendre le 1er du mois, ou demander une augmentation à un administrateur. |
 | « La dictée vocale est désactivée par l'administrateur. » | Le micro a été masqué pendant que votre page était ouverte : rechargez-la. |
-| « Dictée impossible — Crédit épuisé chez OpenAI » (ou **Accès au service refusé**) | Le service qui transcrit la voix ne répond plus pour votre organisation : ce n'est ni votre micro ni votre compte. Prévenez un administrateur ; en attendant, tapez votre message. |
+| « Dictée impossible — Crédit épuisé chez OpenAI » (ou chez Mistral, ou **Accès au service refusé**) | Le service qui transcrit la voix ne répond plus pour votre organisation : ce n'est ni votre micro ni votre compte. Prévenez un administrateur ; en attendant, tapez votre message. |

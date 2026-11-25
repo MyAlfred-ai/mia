@@ -47,17 +47,13 @@ class AnthropicAdapter implements LLMInterface
     public const INTERRUPTED_NOTE = 'This part of the response was interrupted before it finished.';
 
     /**
-     * Lecture du flux par tranches : au-delà de ce silence (s), un signe de vie
-     * part (battement du job, commentaire SSE au navigateur) — cf. readSseLine().
+     * Lecture du flux par tranches de silence surveillé : cf.
+     * LlmAdapterHelpers::readSseLine(), partagée avec Gemini. Un raisonnement
+     * de plusieurs minutes est normal sur Fable : c'est le silence qui est
+     * borné, pas la durée de la réponse.
      */
-    private const SILENCE_TICK_SEC = 10;
-
-    /**
-     * Silence CONTINU (s) au-delà duquel le flux est abandonné. Large à dessein :
-     * un raisonnement de plusieurs minutes est normal sur Fable, et c'est le
-     * silence qui est borné, pas la durée de la réponse.
-     */
-    public const SILENCE_MAX_SEC = 900;
+    private const SILENCE_TICK_SEC = LlmAdapterHelpers::SILENCE_TICK_SEC;
+    public const SILENCE_MAX_SEC = LlmAdapterHelpers::SILENCE_MAX_SEC;
 
     /**
      * Barreaux de l'échelle de dégradation de la recherche web, du plus récent
@@ -686,13 +682,39 @@ class AnthropicAdapter implements LLMInterface
         ];
     }
 
-    /** Ajoute une consommation au cumul par modèle d'un appel. */
+    /** Compteurs de jetons cumulés par modèle (cf. addUsage). */
+    private const USAGE_KEYS = ['input', 'output', 'input_cached', 'input_cache_write'];
+
+    /**
+     * Ajoute la consommation d'UNE requête au cumul par modèle d'un appel, et
+     * la garde à part dans `rounds` : un palier « contexte long » (Claude
+     * Haiku 5.5 : au-delà de 100 000 jetons d'entrée) se juge requête par
+     * requête — CreditService::longContextPart ne retient que les allers
+     * au-delà du seuil. Sommer les allers d'une boucle d'outils ferait
+     * franchir le seuil à des requêtes qui ne l'ont jamais franchi.
+     */
     private static function addUsage(array &$byModel, string $model, array $t): void
     {
-        $byModel[$model] ??= ['input' => 0, 'output' => 0, 'input_cached' => 0, 'input_cache_write' => 0];
-        foreach (['input', 'output', 'input_cached', 'input_cache_write'] as $k) {
-            $byModel[$model][$k] += (int)($t[$k] ?? 0);
+        $byModel[$model] ??= array_fill_keys(self::USAGE_KEYS, 0) + ['rounds' => []];
+        $round = [];
+        foreach (self::USAGE_KEYS as $k) {
+            $round[$k] = (int)($t[$k] ?? 0);
+            $byModel[$model][$k] += $round[$k];
         }
+        $byModel[$model]['rounds'][] = $round;
+    }
+
+    /**
+     * Usage requête par requête à joindre aux jetons d'un modèle : seulement
+     * s'il y en a eu plusieurs — une seule requête, c'est le cumul lui-même
+     * (CreditService::longContextPart le lit ainsi faute de `rounds`).
+     *
+     * @return array{rounds?: list<array<string,int>>}
+     */
+    private static function roundsOf(array $usage): array
+    {
+        $rounds = $usage['rounds'] ?? [];
+        return is_array($rounds) && count($rounds) > 1 ? ['rounds' => $rounds] : [];
     }
 
     /**
@@ -703,6 +725,8 @@ class AnthropicAdapter implements LLMInterface
      * facturés (tentative déclinée en cours de réponse, tour servi par un
      * autre modèle) partent dans `additional` : une ligne du grand livre
      * chacun, à leur propre tarif. `relay` alimente la trace du message.
+     * `rounds` (dès deux requêtes) : usage de chaque requête, pour le palier
+     * « contexte long » (cf. addUsage).
      *
      * Recherches exécutées par l'outil serveur (`usage.server_tool_use
      * .web_search_requests`, envoyé dans le dernier `message_delta`) :
@@ -710,7 +734,7 @@ class AnthropicAdapter implements LLMInterface
      */
     private function finalizeTokens(array $byModel, int $searches, string $finalModel, ?array $relay): array
     {
-        $main = $byModel[$finalModel] ?? ['input' => 0, 'output' => 0, 'input_cached' => 0, 'input_cache_write' => 0];
+        $main = $byModel[$finalModel] ?? array_fill_keys(self::USAGE_KEYS, 0);
         unset($byModel[$finalModel]);
 
         $tokens = [
@@ -720,7 +744,7 @@ class AnthropicAdapter implements LLMInterface
             'input_cache_write' => (int)$main['input_cache_write'],
             'output_reasoning'  => 0,
             'web_searches'      => $searches,
-        ];
+        ] + self::roundsOf($main);
         if ($finalModel !== $this->model) {
             $tokens['model'] = $finalModel;
         }
@@ -728,7 +752,8 @@ class AnthropicAdapter implements LLMInterface
         $additional = [];
         foreach ($byModel as $model => $t) {
             if ($t['input'] + $t['output'] > 0) {
-                $additional[] = ['model' => (string)$model] + $t;
+                $sums = array_intersect_key($t, array_flip(self::USAGE_KEYS));
+                $additional[] = ['model' => (string)$model] + $sums + self::roundsOf($t);
             }
         }
         if ($additional !== []) {
@@ -747,60 +772,6 @@ class AnthropicAdapter implements LLMInterface
         }
 
         return $tokens;
-    }
-
-    /**
-     * Prochaine ligne COMPLÈTE du flux SSE, ou null en fin de flux.
-     *
-     * Pendant un raisonnement long, Claude peut rester muet plusieurs minutes
-     * (affichage `omitted` : aucun delta avant la fin du raisonnement). Le flux
-     * est lu par tranches de SILENCE_TICK_SEC secondes : à chaque tranche vide,
-     * LlmAdapterHelpers::keepAlive() bat le cœur du job — muet 120 s, le
-     * reaper le déclarerait mort — et rassure le watchdog du navigateur.
-     * `$stopped` : arrêt demandé pendant le silence ; `$stalled` :
-     * SILENCE_MAX_SEC de silence continu, flux abandonné. Une ligne coupée par
-     * une tranche est recollée (`$pending`) : un JSON à moitié lu serait pris
-     * pour une erreur.
-     *
-     * @param resource $stream
-     */
-    private static function readSseLine($stream, string &$pending, bool &$stalled, bool &$stopped): ?string
-    {
-        $silentSince = null;
-        while (true) {
-            $line = fgets($stream);
-            if ($line !== false) {
-                if (!str_ends_with($line, "\n") && !feof($stream)) {
-                    $pending .= $line; // tranche écoulée en pleine ligne
-                    continue;
-                }
-                $full    = $pending . $line;
-                $pending = '';
-                return $full;
-            }
-            if (feof($stream)) {
-                if ($pending !== '') {
-                    $full    = $pending;
-                    $pending = '';
-                    return $full;
-                }
-                return null;
-            }
-
-            // Silence : ni ligne ni fin de flux.
-            $silentSince ??= microtime(true);
-            if (LlmAdapterHelpers::keepAlive()) {
-                $stopped = true;
-                return null;
-            }
-            if (microtime(true) - $silentSince >= self::SILENCE_MAX_SEC) {
-                $stalled = true;
-                return null;
-            }
-            if (empty(stream_get_meta_data($stream)['timed_out'])) {
-                usleep(200000); // lecture vide sans délai écoulé : pas de boucle à vide
-            }
-        }
     }
 
     /**
@@ -912,7 +883,7 @@ class AnthropicAdapter implements LLMInterface
         $stalled = false;
         $stopped = false;
 
-        while (($line = self::readSseLine($stream, $pending, $stalled, $stopped)) !== null) {
+        while (($line = LlmAdapterHelpers::readSseLine($stream, $pending, $stalled, $stopped)) !== null) {
             if (!str_starts_with($line, 'data: ')) {
                 if (LlmAdapterHelpers::isSseNoise($line)) {
                     continue;
@@ -1211,20 +1182,10 @@ class AnthropicAdapter implements LLMInterface
      */
     private function emitCitationLinks(callable $onChunk, array $sources): void
     {
-        if ($sources === []) {
-            return;
+        $block = LlmAdapterHelpers::sourcesMarkdown($sources);
+        if ($block !== '') {
+            $onChunk($block);
         }
-
-        $lines = [];
-        $max = min(count($sources), 20);
-        for ($i = 0; $i < $max; $i++) {
-            $url = $sources[$i]['url'];
-            $title = $sources[$i]['title'] !== '' ? $sources[$i]['title'] : $url;
-            $title = str_replace(['[', ']'], ['(', ')'], $title);
-            $lines[] = ($i + 1) . '. [' . $title . '](' . $url . ')';
-        }
-
-        $onChunk("\n\nSources:\n" . implode("\n", $lines) . "\n");
     }
 
     /**
@@ -1926,7 +1887,7 @@ class AnthropicAdapter implements LLMInterface
         $stalled = false;
         $stopped = false;
 
-        while (($line = self::readSseLine($stream, $pending, $stalled, $stopped)) !== null) {
+        while (($line = LlmAdapterHelpers::readSseLine($stream, $pending, $stalled, $stopped)) !== null) {
             if (!str_starts_with($line, 'data: ')) {
                 if (LlmAdapterHelpers::isSseNoise($line)) continue;
                 $rawBuffer .= $line;

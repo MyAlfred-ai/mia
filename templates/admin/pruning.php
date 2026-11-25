@@ -8,11 +8,16 @@
 <body class="admin-page">
 <?php $page = 'pruning'; require ROOT . '/templates/partials/admin-nav.php'; ?>
 <div class="admin-content">
+    <?php require ROOT . '/templates/partials/admin-topbar.php'; ?>
     <?php $ongletsGroupe = AdminTabs::DONNEES; require ROOT . '/templates/partials/admin-tabs.php'; ?>
-    <h1 style="margin-bottom:4px"><?= te('Élagage') ?></h1>
-    <p style="font-size:13px;color:var(--text-muted);margin-bottom:24px">
+    <header class="page-head">
+    <div class="page-head-text">
+        <h1 style="margin-bottom:4px"><?= te('Élagage') ?></h1>
+        <p class="page-head-sub">
         <?= te("Supprimez les conversations et les créations trop anciennes, et récupérez l'espace disque qu'elles occupent. Rien ne s'exécute automatiquement : chaque élagage demande un clic.") ?>
     </p>
+    </div>
+    </header>
 
     <?php if (!empty($success)): ?><div class="alert alert-success" style="margin-bottom:16px"><?= htmlspecialchars($success) ?></div><?php endif; ?>
     <?php if (!empty($error)): ?><div class="alert alert-error" style="margin-bottom:16px"><?= htmlspecialchars($error) ?></div><?php endif; ?>

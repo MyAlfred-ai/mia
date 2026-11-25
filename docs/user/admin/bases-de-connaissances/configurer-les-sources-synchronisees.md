@@ -68,4 +68,4 @@ les synchronisations Google Drive en mode clé. Les documents déjà indexés re
 | Des bases affichent « Synchronisation en retard » | Les cycles automatiques ne tournent plus : vérifier que le service de tâches de fond du serveur est démarré. |
 | Une base reste « Synchronisation en attente » | Le service de tâches de fond est occupé ou arrêté : même vérification. |
 | Un créateur ne voit pas **Dossier OneDrive** | Aucune application Microsoft n'est utilisable (lire l'encadré en tête de la section OneDrive), ou il n'a pas relié son OneDrive dans **Réglages → Comptes connectés**. |
-| La section OneDrive dit **Inscription dédiée incomplète** | Un ID d'application dédié est saisi sans son secret : renseignez le secret, ou cochez **Supprimer l'inscription dédiée** pour revenir à l'application de la connexion. |
+| La section OneDrive dit **Inscription dédiée incomplète** | Un ID d'application dédié est saisi sans son secret. Renseignez-le, ou cochez **Supprimer l'inscription dédiée** pour revenir à l'application de la connexion. |

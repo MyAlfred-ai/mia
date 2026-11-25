@@ -61,6 +61,26 @@ if ($requestMethod === 'POST' && preg_match('#^/hooks/workflows/([A-Za-z0-9_-]{1
     WorkflowHookController::handle($hookMatch[1]);
     exit;
 }
+// Notifications des boîtes mail (déclencheur « email reçu » en push) :
+// Microsoft Graph et Google Pub/Sub les postent sans session ; elles ne font
+// que réveiller la vérification des workflows (MailPush).
+if ($requestMethod === 'POST' && $requestPath === '/hooks/mail/outlook') {
+    MailPushHookController::outlook();
+    exit;
+}
+if ($requestMethod === 'POST' && preg_match('#^/hooks/mail/gmail/([A-Za-z0-9_-]{1,80})$#', $requestPath, $hookMatch)) {
+    MailPushHookController::gmail($hookMatch[1]);
+    exit;
+}
+
+// ---- Claude dans Office : passerelle Anthropic (OfficeGatewayController) ----
+// L'add-in est une page de pivot.claude.ai : ni cookie ni jeton CSRF de MIA.
+// Son jeton Microsoft (signature vérifiée) ou son jeton personnel fait foi ;
+// CORS limité à l'origine de l'add-in. Ce préfixe exact seulement.
+if (str_starts_with($requestPath, OfficeAddin::PATH_PREFIX . '/')) {
+    OfficeGatewayController::handle($requestMethod, $requestPath);
+    exit;
+}
 
 Session::start();
 
@@ -177,10 +197,13 @@ $router->get('/assets/video/generated/{name}', static fn(string $name) => (new M
 // Chat
 $router->get('/',                         [ChatController::class, 'index']);
 $router->get('/a-propos',                 [AboutController::class, 'index']);
+// Captures de la documentation (docs/user/images), recopiées par l'assistant d'aide.
+$router->get('/aide/images/{nom}',        [HelpImageController::class, 'show']);
 
 // Paramètres utilisateur
 $router->get('/settings',                 [UserSettingsController::class, 'profile']);
 $router->get('/settings/ai',              [UserSettingsController::class, 'aiPreferences']);
+$router->get('/settings/memory',          [MemoryController::class, 'index']);
 $router->get('/settings/usage',           [UserSettingsController::class, 'usage']);
 $router->get('/settings/connections',     [UserSettingsController::class, 'connections']);
 $router->get('/settings/creations',       [UserSettingsController::class, 'creations']);
@@ -209,6 +232,7 @@ $router->get('/workflows/history',                 [WorkflowController::class, '
 $router->post('/workflows/loop/sample',            [WorkflowController::class, 'loopSample']);
 $router->get('/workflows/runs/{id}',               [WorkflowController::class, 'run']);
 $router->get('/workflows/runs/{id}/state',         [WorkflowController::class, 'state']);
+$router->get('/workflows/runs/{id}/progress',      [WorkflowController::class, 'progress']);
 $router->get('/workflows/runs/{id}/journal',       [WorkflowController::class, 'journal']);
 $router->post('/workflows/runs/{id}/gate',         [WorkflowController::class, 'gate']);
 $router->post('/workflows/runs/{id}/retry',        [WorkflowController::class, 'retry']);
@@ -223,12 +247,18 @@ $router->get('/workflows/{id}/edit',               [WorkflowController::class, '
 $router->get('/workflows/{id}/form',               [WorkflowController::class, 'form']);
 $router->post('/workflows/{id}/draft',             [WorkflowController::class, 'saveDraft']);
 $router->post('/workflows/{id}/publish',           [WorkflowController::class, 'publish']);
+$router->post('/workflows/{id}/reference',          [WorkflowController::class, 'uploadReference']);
+$router->get('/workflows/{id}/versions',            [WorkflowController::class, 'versions']);
+$router->get('/workflows/{id}/versions/{version}',  [WorkflowController::class, 'versionShow']);
+$router->post('/workflows/{id}/versions/{version}/restore', [WorkflowController::class, 'versionRestore']);
 $router->post('/workflows/{id}/toggle',            [WorkflowController::class, 'toggle']);
 $router->post('/workflows/{id}/delete',            [WorkflowController::class, 'delete']);
 $router->post('/workflows/{id}/duplicate',         [WorkflowController::class, 'duplicate']);
 $router->post('/workflows/{id}/launch',            [WorkflowController::class, 'launch']);
 $router->post('/workflows/{id}/preview',           [WorkflowController::class, 'preview']);
 $router->post('/workflows/{id}/hook',              [WorkflowController::class, 'hook']);
+$router->post('/workflows/{id}/email-test',        [WorkflowController::class, 'testEmailFilters']);
+$router->get('/workflows/{id}/recent-emails',      [WorkflowController::class, 'recentEmails']);
 // Notifications sur cet appareil (tâches programmées). Littérales AVANT
 // `/settings/push/{id}/delete`.
 $router->post('/settings/push/subscribe',   [PushController::class, 'subscribe']);
@@ -266,6 +296,9 @@ $router->post('/settings/teams/disconnect', [UserSettingsController::class, 'tea
 $router->get('/settings/slack/connect',    [UserSettingsController::class, 'slackConnect']);
 $router->get('/settings/slack/callback',   [UserSettingsController::class, 'slackCallback']);
 $router->post('/settings/slack/disconnect', [UserSettingsController::class, 'slackDisconnect']);
+// Claude dans Office : jeton personnel (carte de Réglages → Comptes connectés).
+$router->post('/settings/office/token',        [OfficeAddinController::class, 'issueToken']);
+$router->post('/settings/office/token/delete', [OfficeAddinController::class, 'revokeToken']);
 $router->post('/settings/profile',        [UserSettingsController::class, 'updateProfile']);
 $router->post('/settings/ai',             [UserSettingsController::class, 'updateAiPreferences']);
 $router->post('/settings/display',        [UserSettingsController::class, 'updateDisplayPrefs']);
@@ -273,19 +306,34 @@ $router->post('/settings/display',        [UserSettingsController::class, 'updat
 // paramétrée ne peut l'attraper. Volontairement HORS auth — la page de
 // connexion s'en sert aussi (cf. updateLang).
 $router->post('/settings/lang',           [UserSettingsController::class, 'updateLang']);
+// Fenêtre « Quoi de neuf » : nouveautés majeures vues (MajorFeatures).
+$router->post('/news/seen',               [FeatureNewsController::class, 'seen']);
 // Réglages de voix (vitesse de lecture, longueur des réponses orales) : même
 // colonne que la carte des Préférences IA, appelée aussi depuis le bandeau de
 // la conversation vocale, dans le chat.
 $router->post('/settings/voice',          [UserSettingsController::class, 'updateVoicePrefs']);
-$router->post('/settings/memory',         [UserSettingsController::class, 'addMemory']);
-$router->post('/settings/memory/{id}',    [UserSettingsController::class, 'updateMemory']);
-$router->post('/settings/memory/{id}/delete', [UserSettingsController::class, 'deleteMemory']);
+// Sections repliées du volet (Espaces, Épinglées, Historique, compte),
+// gardées sur le compte à chaque geste (SidebarPreferences).
+$router->post('/settings/sidebar',        [UserSettingsController::class, 'updateSidebar']);
+// Étoile du sélecteur de modèle du chat : le modèle qui ouvre ses nouvelles conversations.
+$router->post('/settings/llm-default',    [UserSettingsController::class, 'updatePreferredLlm']);
+// Réglages → Mémoire : routes LITTÉRALES (prefs, clear, answer) AVANT `/settings/memory/{id}`,
+// dont `{id}` capturerait un segment.
+$router->post('/settings/memory',               [MemoryController::class, 'add']);
+$router->post('/settings/memory/prefs',         [MemoryController::class, 'savePrefs']);
+$router->post('/settings/memory/clear',         [MemoryController::class, 'clear']);
+$router->post('/settings/memory/answer',        [MemoryController::class, 'answer']);
+$router->post('/settings/memory/{id}',          [MemoryController::class, 'update']);
+$router->post('/settings/memory/{id}/delete',   [MemoryController::class, 'delete']);
+$router->post('/settings/memory/{id}/confirm',  [MemoryController::class, 'confirm']);
+$router->post('/settings/memory/{id}/reject',   [MemoryController::class, 'reject']);
 $router->post('/settings/password',       [UserSettingsController::class, 'updatePassword']);
 $router->get('/chat/search',              [ChatController::class, 'search']);
 // Conversation vocale : annonce d'une action (audio MP3 mis en cache). Deux
 // segments après /chat, hors de portée de /chat/{id} — déclarée avant lui
 // par prudence, comme /chat/search.
 $router->get('/chat/voice/cue',           [ChatController::class, 'voiceCue']);
+$router->post('/chat/{id}/voice/card',    [ChatController::class, 'voiceCard']);
 $router->get('/chat/{id}',                [ChatController::class, 'show']);
 $router->post('/chat/new',                [ChatController::class, 'create']);
 $router->post('/chat/{id}/send',          [ChatController::class, 'send']);
@@ -309,6 +357,16 @@ $router->post('/chat/{id}/native-deck',   [ChatController::class, 'nativeDeckFro
 // « Modifier les slides » : la présentation de la carte devient éditable (volet).
 $router->post('/chat/{id}/deck-from-file', [ChatController::class, 'deckFromFile']);
 $router->get('/chat/{id}/presentation/{token}', [ChatController::class, 'downloadNativeDeck']);
+// Tables de travail d'une conversation : le volet (liste, lignes, filtre),
+// renommer, supprimer — et la table remise en fichier (outil `exporter_table`,
+// boutons du volet), fabriquée au téléchargement depuis les lignes en base.
+// Formes distinctes (méthode, nombre de segments) : aucune ne recouvre l'autre.
+$router->get('/chat/{id}/tables', [WorkTableController::class, 'index']);
+$router->post('/chat/{id}/tables/{table}/rename', [WorkTableController::class, 'rename']);
+$router->post('/chat/{id}/tables/{table}/delete', [WorkTableController::class, 'delete']);
+$router->post('/chat/{id}/tables/{table}/keep', [WorkTableController::class, 'keep']);
+$router->post('/chat/{id}/tables/{table}/update-source', [WorkTableController::class, 'updateSource']);
+$router->get('/chat/{id}/tables/{table}/{file}', [WorkTableController::class, 'download']);
 // Relecture d'un brouillon d'email en attente d'approbation (carte mail) :
 // modification à la main ou réécriture par le modèle, l'action reste en
 // attente — c'est /drive-action qui la crée. Deux segments après {id}.
@@ -316,6 +374,7 @@ $router->post('/chat/{id}/mail-draft/revise', [ChatController::class, 'reviseMai
 $router->post('/chat/{id}/upload',        [ChatController::class, 'upload']);
 $router->post('/chat/realtime-transcription', [ChatController::class, 'realtimeTranscriptionToken']);
 $router->post('/chat/realtime-transcription/usage', [ChatController::class, 'realtimeTranscriptionUsage']); // minutes dictées (fin de session)
+$router->post('/chat/dictation/transcribe', [ChatController::class, 'dictationTranscribe']); // dictée Voxtral : une phrase → son texte
 // Conversation vocale : lecture à voix haute d'une réponse (audio MP3 par partie).
 $router->post('/chat/message/{id}/speak', [ChatController::class, 'speakMessage']);
 $router->post('/chat/{id}/imagine',          [ChatController::class, 'imagine']);
@@ -377,6 +436,9 @@ $router->post('/admin/users/{id}',                 [AdminController::class, 'upd
 $router->post('/admin/users/{id}/delete',          [AdminController::class, 'deleteUser']);
 $router->get('/admin/users/{id}/delete-impact',    [AdminController::class, 'userDeletionImpact']);
 $router->post('/admin/users/{id}/password',        [AdminController::class, 'resetPassword']);
+// Comptes de démonstration : passer en démo, convertir en compte normal.
+$router->post('/admin/users/{id}/demo',            [AdminController::class, 'startDemo']);
+$router->post('/admin/users/{id}/demo/convert',    [AdminController::class, 'convertDemo']);
 // Utilisateurs → Rôles (administrateurs seuls). Routes littérales avant {slug}.
 $router->get('/admin/roles',                       [RoleController::class, 'index']);
 $router->post('/admin/roles',                      [RoleController::class, 'create']);
@@ -391,6 +453,7 @@ $router->post('/admin/user-groups/{id}/delete',    [AdminController::class, 'del
 $router->get('/admin/profiles',           [AdminController::class, 'profiles']);
 $router->get('/admin/profiles/new',       [AdminController::class, 'newProfile']);
 $router->get('/admin/profiles/{id}/edit', [AdminController::class, 'editProfile']);
+$router->get('/admin/profiles/{id}',      [AdminController::class, 'showProfile']);
 $router->post('/admin/profiles',          [AdminController::class, 'createProfile']);
 // Littérale à DEUX segments après /profiles : `{id}` n'en capture qu'un, mais
 // elle reste déclarée avant les routes paramétrées, par lisibilité (testé).
@@ -414,6 +477,23 @@ $router->get('/admin/knowledge-bases/status',           [AdminController::class,
 $router->get('/admin/knowledge-bases/new',              [AdminController::class, 'newKnowledgeBase']);
 $router->get('/admin/knowledge-bases/{id}/edit',        [AdminController::class, 'editKnowledgeBase']);
 $router->get('/admin/knowledge-bases/{id}/chunks',      [AdminController::class, 'knowledgeBaseChunks']);
+// Tables permanentes (bases de nature « table », KbTableController). La
+// création est une route LITTÉRALE : déclarée avant POST /admin/knowledge-bases/{id},
+// qui avalerait « table ». Les gestes sur les lignes ont trois segments après
+// l'identifiant : aucune collision avec les routes d'une base.
+$router->post('/admin/knowledge-bases/table',                    [KbTableController::class, 'create']);
+$router->get('/admin/knowledge-bases/{id}/table/rows',           [KbTableController::class, 'rows']);
+$router->post('/admin/knowledge-bases/{id}/table/cell',          [KbTableController::class, 'cell']);
+$router->post('/admin/knowledge-bases/{id}/table/row',           [KbTableController::class, 'addRow']);
+$router->post('/admin/knowledge-bases/{id}/table/row-delete',    [KbTableController::class, 'deleteRow']);
+$router->post('/admin/knowledge-bases/{id}/table/column',        [KbTableController::class, 'addColumn']);
+$router->post('/admin/knowledge-bases/{id}/table/column-update', [KbTableController::class, 'updateColumn']);
+$router->post('/admin/knowledge-bases/{id}/table/column-delete', [KbTableController::class, 'deleteColumn']);
+$router->post('/admin/knowledge-bases/{id}/table/import',        [KbTableController::class, 'import']);
+$router->get('/admin/knowledge-bases/{id}/table/history',          [KbTableController::class, 'history']);
+$router->post('/admin/knowledge-bases/{id}/table/history/restore', [KbTableController::class, 'historyRestore']);
+$router->post('/admin/knowledge-bases/{id}/table/history/undo',    [KbTableController::class, 'historyUndo']);
+$router->get('/admin/knowledge-bases/{id}/table/export/{file}',  [KbTableController::class, 'export']);
 $router->post('/admin/knowledge-bases',                 [AdminController::class, 'createKnowledgeBase']);
 $router->post('/admin/knowledge-bases/{id}',            [AdminController::class, 'updateKnowledgeBase']);
 $router->post('/admin/knowledge-bases/{id}/delete',     [AdminController::class, 'deleteKnowledgeBase']);
@@ -421,6 +501,11 @@ $router->post('/admin/knowledge-bases/{id}/reindex',    [AdminController::class,
 $router->post('/admin/knowledge-bases/{id}/documents',  [AdminController::class, 'uploadKnowledgeBaseDocument']);
 $router->post('/admin/knowledge-bases/{id}/documents/{docId}/delete', [AdminController::class, 'deleteKnowledgeBaseDocument']);
 $router->get('/admin/knowledge-bases/{id}/documents/{docId}/status',  [AdminController::class, 'knowledgeBaseDocumentStatus']);
+// Fiche d'un document (volet) et ses gestes : nouvel essai, exclusion, rétablir.
+$router->get('/admin/knowledge-bases/{id}/documents/{docId}',          [AdminController::class, 'knowledgeBaseDocument']);
+$router->post('/admin/knowledge-bases/{id}/documents/{docId}/retry',   [AdminController::class, 'retryKnowledgeBaseDocument']);
+$router->post('/admin/knowledge-bases/{id}/documents/{docId}/exclude', [AdminController::class, 'excludeKnowledgeBaseDocument']);
+$router->post('/admin/knowledge-bases/{id}/documents/{docId}/restore', [AdminController::class, 'restoreKnowledgeBaseDocument']);
 // Base vectorielle (santé Qdrant) — admins seuls
 $router->get('/admin/knowledge-bases/vector',           [AdminController::class, 'vectorDatabase']);
 $router->get('/admin/knowledge-bases/qdrant/status',    [AdminController::class, 'qdrantStatus']);
@@ -443,9 +528,17 @@ $router->post('/admin/knowledge-bases/sync/browse',     [AdminController::class,
 $router->post('/admin/knowledge-bases/mybrain/test',    [AdminController::class, 'testMyBrainConnection']);
 $router->post('/admin/knowledge-bases/{id}/sync',       [AdminController::class, 'runKnowledgeBaseSync']);
 $router->get('/admin/knowledge-bases/{id}/sync-status', [AdminController::class, 'knowledgeBaseSyncStatus']);
+// « Que sait-elle ? » : les extraits d'une base qui répondent à une question
+// (page de consultation, lecture seule).
+$router->get('/admin/knowledge-bases/{id}/search',      [AdminController::class, 'searchKnowledgeBase']);
+// Page de CONSULTATION d'une base ou d'une table : déclarée APRÈS toutes les
+// routes littérales à un segment (/status, /new, /vector, /sync…) — `{id}`
+// capturerait sinon « vector » ou « sync ».
+$router->get('/admin/knowledge-bases/{id}',             [AdminController::class, 'showKnowledgeBase']);
 // Gestion LLMs — Clés API, Modèles (activés + comportement par défaut), Tests
-$router->get('/admin/llms',               [AdminController::class, 'llmsKeys']);
-$router->get('/admin/llms/models',        [AdminController::class, 'llmsModels']);
+$router->get('/admin/llms',               [AdminController::class, 'llms']);
+// « Clés API » et « Modèles » ne font plus qu'une page (Fournisseurs et modèles).
+$router->get('/admin/llms/models', function (): void { header('Location: /admin/llms', true, 301); exit; });
 $router->get('/admin/llms/tests',         [AdminController::class, 'llmsTests']);
 $router->post('/admin/llms/defaults',     [AdminController::class, 'saveLlmDefaults']);
 $router->post('/admin/api-keys',          [AdminController::class, 'saveApiKey']);
@@ -458,7 +551,7 @@ $router->post('/admin/tests/run',         [AdminController::class, 'runTest']);
 $router->get('/admin/api-keys', function (): void { header('Location: /admin/llms', true, 301); exit; });
 $router->get('/admin/tests',    function (): void { header('Location: /admin/llms/tests', true, 301); exit; });
 // « Comportement par défaut » fusionné dans la page Modèles (carte #defaut) ; le POST reste.
-$router->get('/admin/llms/defaults', function (): void { header('Location: /admin/llms/models#defaut', true, 301); exit; });
+$router->get('/admin/llms/defaults', function (): void { header('Location: /admin/llms#defaut', true, 301); exit; });
 // Coûts IA → Budget : plafond mensuel en euros (enregistrement manuel, cf. BudgetController).
 $router->get('/admin/budget',               [BudgetController::class, 'index']);
 $router->post('/admin/budget/settings',     [BudgetController::class, 'saveSettings']);
@@ -493,6 +586,12 @@ $router->post('/admin/connectors',        [AdminController::class, 'saveConnecto
 $router->get('/admin/connectors/slack',          [AdminController::class, 'slackApp']);
 $router->post('/admin/connectors/slack/settings', [AdminController::class, 'saveSlackApp']);
 $router->post('/admin/connectors/slack/test',     [AdminController::class, 'testSlackApp']);
+// Claude dans Office (passerelle /office pour l'add-in Office d'Anthropic) :
+// réglages, manifeste à déposer dans Microsoft 365, test. Chemins littéraux.
+$router->get('/admin/connectors/office',           [OfficeAddinController::class, 'admin']);
+$router->post('/admin/connectors/office/settings', [OfficeAddinController::class, 'saveAdmin']);
+$router->get('/admin/connectors/office/manifest',  [OfficeAddinController::class, 'manifest']);
+$router->post('/admin/connectors/office/test',     [OfficeAddinController::class, 'testAdmin']);
 // Authentification (SSO + mot de passe). Chemins à DEUX segments après « sso » :
 // aucune route paramétrée ne les capte.
 $router->get('/admin/sso',                   [AdminController::class, 'sso']);
@@ -513,6 +612,8 @@ $router->get('/admin/tools/tests/latest', [AdminController::class, 'latestToolsT
 $router->get('/admin/tools/tests/{id}',   [AdminController::class, 'toolsTestRunStatus']);
 $router->post('/admin/tools/tests/start', [AdminController::class, 'startToolsTestRun']);
 $router->post('/admin/tools/builtin',     [AdminController::class, 'saveBuiltinTools']);
+// AVANT /admin/tools/{id} : notifications instantanées des emails (topic Pub/Sub de Gmail).
+$router->post('/admin/tools/mail-push',   [AdminController::class, 'saveMailPush']);
 // AVANT /admin/tools/{id} : le segment « triggers » serait sinon avalé par {id}.
 $router->post('/admin/tools/triggers',    [AdminController::class, 'saveToolTriggers']);
 $router->post('/admin/tools',             [AdminController::class, 'createTool']);

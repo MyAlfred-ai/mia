@@ -45,7 +45,8 @@ Depuis un ordinateur, la page affiche des QR codes à scanner.
   l'application — voir [Les connecteurs](connecteurs/index.md).
 
 L'application affiche la même interface que le site : **toutes les évolutions de MIA y apparaissent
-automatiquement**, sans mise à jour. Votre session y reste ouverte **7 jours**.
+automatiquement**, sans mise à jour. Vous y restez connecté tant que vous y revenez au moins une fois
+tous les **30 jours** ; une mise à jour de MIA ne vous déconnecte pas.
 
 ## En cas de problème
 

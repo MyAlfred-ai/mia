@@ -25,7 +25,13 @@ declare(strict_types=1);
  *     (`DEFAULT_CHAT_TOKENS` : la consigne système de MIA pèse à elle seule
  *     environ 2 000 jetons) ;
  *   - outil : crédits MOYENS réellement débités par cet outil, sinon son
- *     tarif appliqué à une génération type.
+ *     tarif appliqué à une génération type ;
+ *   - étape de workflow : jetons MOYENS des étapes de workflow menées par ce
+ *     modèle (pièces lues comprises — elles pèsent plus qu'une question de
+ *     chat), sinon une réponse de chat de ce modèle. Une étape s'écrit au
+ *     grand livre comme un tour de chat (source `chat`) : elle n'en est
+ *     distinguée que par sa conversation, celle d'une exécution
+ *     (`conversations.workflow_run_id`), et retirée des moyennes de chat.
  *
  * Lectures du grand livre groupées (deux requêtes au plus par processus,
  * mémorisées `MEMO_TTL` secondes) ; ne lève jamais — une estimation
@@ -45,12 +51,25 @@ final class CreditEstimate
     /** Réponse type tant que le grand livre est vide. */
     public const DEFAULT_CHAT_TOKENS = ['input' => 5000, 'output' => 600];
 
+    /**
+     * Pseudo-source des moyennes : un tour de chat mené dans la conversation
+     * d'une exécution de workflow. N'existe pas au grand livre (la ligne y
+     * porte `chat`) ; seulement dans les regroupements de `tokenRows()`.
+     */
+    public const WORKFLOW_STEP = 'workflow_step';
+
     /** Rédaction type d'une création par un modèle de langage, par source du grand livre. */
     public const DEFAULT_TOOL_TOKENS = [
         UsageSource::HTML_TOOL         => ['input' => 4000, 'output' => 9000],
         UsageSource::MAP_TOOL          => ['input' => 3000, 'output' => 2500],
         UsageSource::PRESENTATION_TOOL => ['input' => 6000, 'output' => 9000],
         UsageSource::WORKFLOW_JUDGE    => ['input' => 2500, 'output' => 120],
+        // Préparation de la demande d'une image (prompt visuel rédigé par un
+        // modèle) : quelques centaines de jetons dans chaque sens.
+        UsageSource::IMAGE_PROMPT      => ['input' => 700, 'output' => 350],
+        // Apprentissage de la mémoire : une transcription bornée (≈ 8 000
+        // caractères), quelques opérations en réponse.
+        UsageSource::MEMORY_LEARN      => ['input' => 3000, 'output' => 300],
     ];
 
     /**
@@ -107,15 +126,45 @@ final class CreditEstimate
      */
     public static function chatReply(string $llmKey): ?array
     {
+        $llmKey  = self::modelKey($llmKey);
         $profile = self::profileFrom(self::tokenRows(), UsageSource::CHAT, $llmKey, self::DEFAULT_CHAT_TOKENS);
         $credits = self::llmCredits($llmKey, $profile);
 
         return $credits === null ? null : ['credits' => $credits, 'basis' => $profile['basis'], 'samples' => $profile['samples']];
     }
 
+    /**
+     * Crédits d'UNE étape de workflow menée par ce modèle (hors recherche
+     * Internet) : la moyenne des étapes réelles de ce modèle s'il y en a
+     * assez, sinon une réponse de chat du même modèle.
+     *
+     * @return array{credits:int, basis:string, samples:int}|null basis : workflow | model | instance | default
+     */
+    public static function workflowStep(string $llmKey): ?array
+    {
+        $llmKey = self::modelKey($llmKey);
+        $own = null;
+        foreach (self::tokenRows() as $row) {
+            if ((string)($row['source'] ?? '') === self::WORKFLOW_STEP && (string)($row['k'] ?? '') === $llmKey) {
+                $own = $row;
+                break;
+            }
+        }
+        if ($own !== null && (int)$own['n'] >= self::MIN_SAMPLES) {
+            $profile = self::profileFrom([$own], self::WORKFLOW_STEP, $llmKey, self::DEFAULT_CHAT_TOKENS);
+            $credits = self::llmCredits($llmKey, $profile);
+            if ($credits !== null) {
+                return ['credits' => $credits, 'basis' => 'workflow', 'samples' => (int)$own['n']];
+            }
+        }
+
+        return self::chatReply($llmKey);
+    }
+
     /** Crédits d'UNE recherche Internet faite par ce modèle ; null s'il n'en fait pas ou sans tarif. */
     public static function webSearch(string $llmKey): ?int
     {
+        $llmKey = self::modelKey($llmKey);
         [$provider, $model] = CreditService::splitLlmKey($llmKey);
         if (class_exists('LlmCatalog') && !LlmCatalog::supportsWebSearch($provider, $model)) {
             return null;
@@ -151,6 +200,7 @@ final class CreditEstimate
     /** Crédits d'un appel auxiliaire de cette source (question d'une condition de workflow…). */
     public static function helperCall(string $source, string $llmKey): ?int
     {
+        $llmKey  = self::modelKey($llmKey);
         $default = self::DEFAULT_TOOL_TOKENS[$source] ?? self::DEFAULT_CHAT_TOKENS;
 
         return self::llmCredits($llmKey, self::profileFrom(self::tokenRows(), $source, $llmKey, $default));
@@ -334,6 +384,26 @@ final class CreditEstimate
     // ------------------------------------------------------------------
 
     /** Crédits d'un appel à la consommation donnée, comptés comme ils le seront ; null sans tarif. */
+    /**
+     * Clé « fournisseur::modèle » réellement appelée. Un fournisseur seul
+     * (« openai » : aucun modèle activé, le chat prend celui de la clé, sinon
+     * le défaut du catalogue) n'a aucun tarif : sans cette résolution, toute
+     * estimation d'une telle instance tombait à « aucun tarif connu ».
+     */
+    public static function modelKey(string $llmKey): string
+    {
+        $llmKey = trim($llmKey);
+        if ($llmKey === '' || str_contains($llmKey, '::')) {
+            return $llmKey;
+        }
+        try {
+            $model = (string)(ApiKey::getModel($llmKey) ?: LlmCatalog::defaultModel($llmKey));
+        } catch (\Throwable) {
+            $model = class_exists('LlmCatalog') ? LlmCatalog::defaultModel($llmKey) : '';
+        }
+        return $model !== '' ? $llmKey . '::' . $model : $llmKey;
+    }
+
     private static function llmCredits(string $llmKey, array $profile): ?int
     {
         if ($llmKey === '' || $llmKey === '::' || (int)$profile['input'] + (int)$profile['output'] <= 0) {
@@ -359,17 +429,22 @@ final class CreditEstimate
         }
         $rows = [];
         try {
-            // Régénération = une réponse comme une autre ; `llm_provider` porte
-            // la clé complète « fournisseur::modèle ».
+            // Régénération = une réponse comme une autre ; un tour mené dans la
+            // conversation d'une exécution de workflow = une étape (ses pièces
+            // lues la font plus lourde qu'une question de chat : la mêler aux
+            // réponses fausserait les deux moyennes). `llm_provider` porte la
+            // clé complète « fournisseur::modèle ».
+            $kind = "CASE WHEN u.source IN ('chat', 'regenerate') AND c.workflow_run_id IS NOT NULL THEN '" . self::WORKFLOW_STEP . "'
+                          WHEN u.source = 'regenerate' THEN 'chat' ELSE u.source END";
             $rows = Database::getInstance()->query(
-                "SELECT IF(source = 'regenerate', 'chat', source) AS source, llm_provider AS k, COUNT(*) AS n,
-                        AVG(tokens_input) AS i, AVG(tokens_input_cached) AS c, AVG(tokens_input_cache_write) AS w,
-                        AVG(tokens_output) AS o, AVG(tokens_output_reasoning) AS r
-                 FROM usage_logs
-                 WHERE created_at >= NOW() - INTERVAL " . self::WINDOW_DAYS . " DAY
-                   AND source IN ('chat', 'regenerate', 'html_tool', 'map_tool', 'presentation_tool', 'workflow_judge')
-                   AND tokens_input + tokens_output > 0
-                 GROUP BY IF(source = 'regenerate', 'chat', source), llm_provider"
+                "SELECT $kind AS source, u.llm_provider AS k, COUNT(*) AS n,
+                        AVG(u.tokens_input) AS i, AVG(u.tokens_input_cached) AS c, AVG(u.tokens_input_cache_write) AS w,
+                        AVG(u.tokens_output) AS o, AVG(u.tokens_output_reasoning) AS r
+                 FROM usage_logs u LEFT JOIN conversations c ON c.id = u.conversation_id
+                 WHERE u.created_at >= NOW() - INTERVAL " . self::WINDOW_DAYS . " DAY
+                   AND u.source IN ('chat', 'regenerate', 'html_tool', 'map_tool', 'presentation_tool', 'workflow_judge', 'image_prompt')
+                   AND u.tokens_input + u.tokens_output > 0
+                 GROUP BY $kind, u.llm_provider"
             )->fetchAll(PDO::FETCH_ASSOC);
         } catch (\Throwable $e) {
             error_log('[Estimation] consommation moyenne illisible : ' . $e->getMessage());

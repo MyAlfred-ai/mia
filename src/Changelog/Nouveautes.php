@@ -73,7 +73,15 @@ class Nouveautes
     ];
 
     /** Champs de la ligne de métadonnées, dans l'ordre attendu à l'écriture. */
-    private const META_CLES = ['id', 'genre', 'pour', 'date', 'version'];
+    private const META_CLES = ['id', 'genre', 'pour', 'majeure', 'date', 'version'];
+
+    /**
+     * `majeure: oui` — l'ARRIVÉE d'une fonctionnalité entière (les workflows,
+     * Claude dans Office), jamais une amélioration ni un correctif. Elle est
+     * alors aussi présentée, une seule fois, dans la fenêtre « Quoi de neuf »
+     * (MajorFeatures, qui porte sa présentation et doit la connaître).
+     */
+    public const MAJEURE = 'oui';
 
     // ===================== Analyse =====================
 
@@ -95,7 +103,7 @@ class Nouveautes
      * système, qui apparaissent toutes dans le même commit et seraient sinon
      * datées du même jour.
      *
-     * @return list<array{id:string,titre:string,genre:string,pour:string,date:string,version:string,corps:string}>
+     * @return list<array{id:string,titre:string,genre:string,pour:string,majeure:string,date:string,version:string,corps:string}>
      */
     public static function parse(string $markdown): array
     {
@@ -124,6 +132,7 @@ class Nouveautes
                     'titre'   => trim($m[1]),
                     'genre'   => 'nouveaute',
                     'pour'    => 'tous',
+                    'majeure' => '',
                     'date'    => '',
                     'version' => '',
                     'corps'   => '',
@@ -240,6 +249,13 @@ class Nouveautes
                     . implode(', ', array_keys(self::PUBLICS)) . ').';
             }
 
+            $majeure = (string) ($e['majeure'] ?? '');
+            if ($majeure !== '' && $majeure !== self::MAJEURE) {
+                $erreurs[] = "$ref : « majeure: $majeure » — seule la valeur « " . self::MAJEURE . ' » existe.';
+            } elseif ($majeure === self::MAJEURE && ($e['genre'] ?? '') !== 'nouveaute') {
+                $erreurs[] = "$ref : une nouveauté majeure est une fonctionnalité qui arrive (genre « nouveaute »).";
+            }
+
             $date = (string) ($e['date'] ?? '');
             if ($date !== '' && preg_match('/^\d{4}-\d{2}-\d{2}$/', $date) !== 1) {
                 $erreurs[] = "$ref : date « $date » hors format AAAA-MM-JJ.";
@@ -325,8 +341,34 @@ class Nouveautes
      */
     public static function publiables(array $entrees, int $max = self::MAX_PUBLIEES): array
     {
+        return self::forme(array_slice($entrees, 0, max(0, $max)));
+    }
+
+    /**
+     * L'historique : toutes les entrées AU-DELÀ des publiées, dans l'ordre du
+     * fichier. Publié dans la même charge (clé `anciennes`) et affiché à la
+     * demande par la modale (« Voir les nouveautés plus anciennes ») : sans
+     * lui, une fonctionnalité annoncée il y a trois mois devenait introuvable,
+     * alors que le fichier source la garde.
+     *
+     * @param list<array<string,string>> $entrees
+     * @return list<array<string,string>>
+     */
+    public static function archivees(array $entrees, int $publiees = self::MAX_PUBLIEES): array
+    {
+        return self::forme(array_slice($entrees, max(0, $publiees)));
+    }
+
+    /**
+     * Forme publiée d'une entrée (les sept clés lues par la modale).
+     *
+     * @param list<array<string,string>> $entrees
+     * @return list<array<string,string>>
+     */
+    private static function forme(array $entrees): array
+    {
         $out = [];
-        foreach (array_slice($entrees, 0, max(0, $max)) as $e) {
+        foreach ($entrees as $e) {
             $out[] = [
                 'id'      => (string) ($e['id'] ?? ''),
                 'titre'   => (string) ($e['titre'] ?? ''),
@@ -376,6 +418,14 @@ class Nouveautes
     /** Identifiant de la nouveauté la plus récente, '' s'il n'y en a aucune. */
     public static function dernierId(string $racine): string
     {
+        // Lu à CHAQUE page (pastille du bouton de version) : le fichier porte
+        // aussi tout l'historique (~150 Ko), inutile de le décoder pour un
+        // identifiant écrit dans ses premières lignes.
+        $chemin = rtrim($racine, '/') . '/' . self::PUBLIE;
+        $tete = is_file($chemin) ? (string) @file_get_contents($chemin, false, null, 0, 8192) : '';
+        if (preg_match('/"nouveautes"\s*:\s*\[\s*\{\s*"id"\s*:\s*"([a-z0-9-]*)"/', $tete, $m)) {
+            return $m[1];
+        }
         $charge = self::chargePubliee($racine);
         return (string) ($charge['nouveautes'][0]['id'] ?? '');
     }

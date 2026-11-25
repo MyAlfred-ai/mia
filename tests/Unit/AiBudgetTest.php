@@ -486,7 +486,7 @@ final class AiBudgetTest extends TestCase
     {
         $s = CreditQuota::compose(10, null, ['total_credits' => 12], true, '2026-10-01');
         $this->assertSame(
-            ['used', 'quota_k', 'quota_max', 'remaining', 'percent', 'total_credits', 'exempt_credits', 'requests', 'reason', 'budget_blocked', 'resets_on'],
+            ['used', 'quota_k', 'quota_max', 'remaining', 'percent', 'total_credits', 'exempt_credits', 'requests', 'reason', 'budget_blocked', 'resets_on', 'demo'],
             array_keys($s),
             'Liste FERMÉE : ce tableau part dans le navigateur de chaque utilisateur'
         );

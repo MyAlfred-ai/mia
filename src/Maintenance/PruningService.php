@@ -711,6 +711,27 @@ final class PruningService
             }
         }
 
+        // Quatrième source : les documents de référence des workflows
+        // (`wfref_…`, champ Fichier fourni d'office). Seule la DÉFINITION les
+        // cite tant que le workflow n'a pas été lancé — brouillon, version
+        // publiée, versions passées (on peut repartir d'une ancienne).
+        foreach ([
+            'SELECT CONCAT(draft_json, COALESCE(published_json, "")) FROM workflows WHERE draft_json LIKE "%wfref_%" OR published_json LIKE "%wfref_%"',
+            'SELECT definition_json FROM workflow_versions WHERE definition_json LIKE "%wfref_%"',
+        ] as $sql) {
+            try {
+                foreach ($db->query($sql)->fetchAll(PDO::FETCH_COLUMN) as $json) {
+                    if (preg_match_all('/\b(wfref_[a-f0-9]{32}(?:\.[a-z0-9]{1,8})?)\b/', (string)$json, $m)) {
+                        foreach ($m[1] as $nom) {
+                            $vus[$nom] = true;
+                        }
+                    }
+                }
+            } catch (\PDOException $e) {
+                // Table absente (migration pas encore appliquée) : rien à protéger.
+            }
+        }
+
         return $vus;
     }
 

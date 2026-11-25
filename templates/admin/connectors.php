@@ -12,14 +12,19 @@
 <body class="admin-page">
 <?php $page = 'connectors'; require ROOT . '/templates/partials/admin-nav.php'; ?>
 <div class="admin-content">
+    <?php require ROOT . '/templates/partials/admin-topbar.php'; ?>
     <div class="connector-page">
-        <h1 style="margin-bottom:6px"><?= te('Connecteurs') ?></h1>
-        <p class="connector-intro">
+        <header class="page-head">
+        <div class="page-head-text">
+            <h1 style="margin-bottom:6px"><?= te('Connecteurs') ?></h1>
+            <p class="connector-intro page-head-sub">
             <?= teb('Les services que vos utilisateurs peuvent relier à MIA : les sources consultables depuis le menu {b}+{/b} du chat, et OneDrive qui alimente les bases de connaissances.') ?>
             <?= teb('L\'interrupteur décide si le connecteur {b}apparaît ou non dans l\'interface{/b} : masqué, il disparaît du menu {b}+{/b} ET de la page {b}Réglages → Comptes connectés{/b} de tout le monde — plus aucun compte ne peut y être relié.') ?>
             <?= te('Les connexions déjà établies sont conservées (leur propriétaire garde de quoi se déconnecter) et reviennent telles quelles dès la réactivation.') ?>
             <?= teb('Chaque carte du chat porte aussi les {b}expressions{/b} qui font suggérer le connecteur pendant la frappe d\'un message ; elles sont modifiables.') ?>
         </p>
+        </div>
+        </header>
         <p style="margin-bottom:18px">
             <?php require ROOT . '/templates/partials/autosave-hint.php'; ?>
         </p>
@@ -54,6 +59,26 @@
                     <?= te('Seul un outil léger part au modèle ; les outils d\'un connecteur ne sont chargés qu\'une fois activés, et les écritures restent soumises à l\'approbation de l\'utilisateur.') ?>
                 </p>
             </div>
+            <?php /* Claude dans Office : pas un connecteur de la conversation, mais
+                     un autre chemin vers les modèles de MIA (passerelle de l'add-in
+                     Office d'Anthropic). Ses réglages vivent sur leur propre écran. */ ?>
+            <?php $officeOn = OfficeAddin::isEnabled(); ?>
+            <a class="connector-card connector-auto-card<?= $officeOn ? '' : ' is-off' ?>" href="/admin/connectors/office" id="connector-office" style="display:block;text-decoration:none;color:inherit">
+                <div class="connector-top">
+                    <div class="connector-icon office-connector-icon"><?= OfficeAddin::appIcons(OfficeAddin::apps(), 22) ?></div>
+                    <div class="connector-title">
+                        <h3><?= te('Claude dans Office') ?></h3>
+                        <div class="connector-caps"><span class="badge badge-gray"><?= te('Add-in Office') ?></span></div>
+                    </div>
+                    <div class="connector-switch">
+                        <span class="connector-state"><?= $officeOn ? te('Activé') : te('Désactivé') ?></span>
+                        <span aria-hidden="true">›</span>
+                    </div>
+                </div>
+                <p class="connector-summary">
+                    <?= teb('L\'add-in {b}Claude{/b} de {apps} passe par MIA : aucun compte Claude par personne, réponses comptées dans les crédits MIA, déploiement unique par la DSI.', ['apps' => OfficeAddin::appsSentence(OfficeAddin::apps())]) ?>
+                </p>
+            </a>
             <div class="connector-grid">
                 <?php foreach ($connectors as $c):
                     $on         = !empty($c['enabled']);
@@ -67,7 +92,7 @@
                     <div class="connector-top">
                         <div class="connector-icon"><?= $c['icon'] ?></div>
                         <div class="connector-title">
-                            <h3><?= htmlspecialchars((string)$c['label']) ?></h3>
+                            <h3><?= htmlspecialchars((string)$c['label']) ?><?= AdminAttention::itemDot('connector:' . $key) ?></h3>
                             <div class="connector-caps">
                                 <?php foreach ($c['capabilities'] as $cap): ?>
                                     <span class="badge badge-gray"><?= htmlspecialchars($cap) ?></span>

@@ -21,7 +21,7 @@ aperçoive. Ces réglages évitent le second cas.
 
 **Ce qu'il faut pour créer une base.** Un moteur d'**embedding** — le calcul de l'empreinte de sens
 des extraits —, fourni par une clé **OpenAI**, **Mistral** ou **Gemini** enregistrée dans **Modèles IA
-→ Clés API**. Sans l'une de ces clés, le bouton **+ Nouvelle base** est grisé pour les créateurs ;
+→ Fournisseurs et modèles**. Sans l'une de ces clés, la carte **Nouvelle base** est grisée pour les créateurs ;
 un administrateur peut toujours brancher un cerveau MyBrain, qui n'a rien à indexer.
 Le moteur est choisi base par base, à la création ; il se change ensuite par **Réindexer**, dans la
 section **Avancé** de la fiche de la base, qui recalcule toutes les empreintes avec le nouveau modèle.
@@ -64,16 +64,16 @@ badge **Système** : on ne peut que la réindexer.
 
 | Réglage | Où | Effet | Page |
 |---|---|---|---|
-| Clé OpenAI, Mistral ou Gemini | Modèles IA → Clés API | Rend la création de bases possible | [Enregistrer les clés API](../modeles/enregistrer-les-cles-api.md) |
+| Clé OpenAI, Mistral ou Gemini | Modèles IA → Fournisseurs et modèles | Rend la création de bases possible | [Enregistrer les clés API](../modeles/enregistrer-les-cles-api.md) |
 | Toutes les bases : désactiver, reprendre, supprimer | Tuile **Bases** de la barre latérale | La maîtrise du contenu | [Administrer les bases](administrer-les-bases.md) |
 | Clé Google, application Microsoft, rythme de synchronisation | Capacités → **Sources synchronisées** | Les dossiers en ligne | [Configurer les sources synchronisées](configurer-les-sources-synchronisees.md) |
 | État du moteur d'indexation | Maintenance → Diagnostic → **Moteur vectoriel** | Le diagnostic | [Vérifier la base vectorielle](verifier-la-base-vectorielle.md) |
-| Cerveau MyBrain : adresse, clé, groupes, coché par défaut, peut nourrir | Tuile **Bases** → **+ Nouvelle base** → carte **Cerveau MyBrain** | Le wiki d'équipe interrogé en direct | [Brancher un cerveau MyBrain](brancher-un-cerveau-mybrain.md) |
+| Cerveau MyBrain : adresse, clé, groupes, coché par défaut, peut nourrir | Tuile **Bases** → carte **Nouvelle base** → source **Cerveau MyBrain** | Le wiki d'équipe interrogé en direct | [Brancher un cerveau MyBrain](brancher-un-cerveau-mybrain.md) |
 | Rôle **Créateur** | Personnes → Comptes | Qui peut créer des bases | [Gérer les utilisateurs](../utilisateurs/gerer-les-utilisateurs.md) |
 
 ## Exemples de configuration
 
-**Démarrer.** Une clé Mistral dans **Clés API** : le bouton **+ Nouvelle base** s'active pour les
+**Démarrer.** Une clé Mistral dans **Fournisseurs et modèles** : la carte **Nouvelle base** s'active pour les
 créateurs, avec Mistral comme moteur proposé.
 
 **Une base pour toute l'entreprise.** Le créateur de *Procédures RH* la partage au groupe

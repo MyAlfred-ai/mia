@@ -127,7 +127,9 @@ final class AssistantTools extends AbstractToolProvider
             $lines = [];
             foreach (array_slice($this->choices['kbs'], 0, self::DESCRIBED_MAX, true) as $id => $kb) {
                 $desc = $kb['description'] !== '' ? ' — ' . self::shorten($kb['description'], 90) : '';
-                $state = !$kb['active'] ? ' [désactivée]' : ($kb['live'] ? ' [cerveau MyBrain en direct]' : ' [' . $kb['docs'] . ' doc.]');
+                $state = !$kb['active'] ? ' [désactivée]' : (!empty($kb['table'])
+                    ? ' [table de ' . (int)($kb['rows'] ?? 0) . ' lignes]'
+                    : ($kb['live'] ? ' [cerveau MyBrain en direct]' : ' [' . $kb['docs'] . ' doc.]'));
                 $lines[] = $id . ' = « ' . $kb['name'] . ' »' . $desc . $state;
             }
             $properties['bases'] = [

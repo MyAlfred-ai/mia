@@ -2,7 +2,7 @@
 title: Régler l'affichage
 description: Choisir un thème clair, sombre ou automatique, renforcer le contraste, agrandir ou réduire l'interface, et choisir la touche qui envoie vos messages.
 sidebar:
-  order: 3
+  order: 4
 ---
 
 ## Étapes

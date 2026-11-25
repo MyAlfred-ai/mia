@@ -68,11 +68,11 @@ besoin que des identifiants.
 |---|---|---|---|
 | `openid`, `profile`, `email` | Continuer avec Microsoft | Identifier la personne | La connecter — aucune donnée lue |
 | `offline_access` | Outlook, calendrier, To Do, Teams | Garder l'accès entre deux connexions | Renouveler l'accès sans redemander |
-| `User.Read` | Outlook, calendrier, To Do, Teams | Lire le profil de la personne | Afficher l'adresse du compte relié |
+| `User.Read` | Outlook, calendrier, To Do, Teams | Lire le profil de la personne | Afficher l'adresse du compte relié ; pour le calendrier, trouver les salles de réunion de l'organisation |
 | `Mail.Read` | Outlook | Lire toute la boîte | Rechercher et lire les mails |
 | `Mail.ReadWrite` | Outlook | Lire, créer, modifier et supprimer des mails | Créer des brouillons, après approbation — ni modification, ni suppression, ni envoi |
 | `Calendars.Read` | Calendrier Outlook | Lire les agendas de la personne | Consulter ses évènements |
-| `Calendars.ReadWrite` | Calendrier Outlook | Créer, modifier et supprimer des évènements | Créer des évènements sans participant, après approbation |
+| `Calendars.ReadWrite` | Calendrier Outlook | Créer, modifier et supprimer des évènements | Créer et modifier des évènements après approbation, invités, salle de réunion et réunion Teams compris ; jamais de suppression |
 | `Tasks.Read` | Microsoft To Do | Lire les listes et les tâches de la personne | Consulter ses tâches |
 | `Tasks.ReadWrite` | Microsoft To Do | Créer, modifier et supprimer des tâches et des listes | Créer et modifier des tâches, après approbation — jamais de suppression |
 | `Chat.Read` | Microsoft Teams | Lire les conversations de la personne (privées, de groupe, de réunion) | Rechercher et lire ses conversations |
@@ -84,7 +84,18 @@ besoin que des identifiants.
 
 `Mail.ReadWrite`, `Calendars.ReadWrite` et `Tasks.ReadWrite` sont les droits les plus étroits qui permettent de créer un
 brouillon, un évènement ou une tâche : Microsoft n'en propose pas qui s'arrête à la création. Ce sont les
-garde-fous de MIA qui tiennent le reste.
+garde-fous de MIA qui tiennent le reste. Inviter des personnes à une réunion ou y ajouter une réunion
+Teams ne demande **aucune autorisation de plus** : ce sont des propriétés de l'évènement, et Exchange
+envoie lui-même les invitations.
+
+Réserver une **salle de réunion** non plus : la salle est invitée comme une ressource, et c'est
+Exchange qui accepte ou refuse selon son agenda et ses règles de réservation. Pour la trouver par son
+nom, MIA lit l'annuaire des salles avec `User.Read`, et vérifie qu'elle est libre avec
+`Calendars.Read`. MIA ne demande **pas** `Place.Read.All` : cette autorisation exige le consentement
+d'un administrateur, et l'ajouter ferait refuser la liaison du calendrier partout où il n'a pas été
+donné. Les salles doivent être déclarées comme **boîtes de salle** dans Exchange (celles que propose
+la **Recherche de salle** d'Outlook) ; MIA en voit les 100 premières — au-delà, une salle se réserve par
+son adresse.
 
 Pour Teams, MIA ne demande **jamais** `Chat.ReadWrite`, qui ouvrirait la modification et la
 suppression de messages : les deux droits d'envoi ne font qu'envoyer, et chaque publication attend

@@ -159,38 +159,44 @@ class User
         return (int)$stmt->fetchColumn() > 0;
     }
 
+    /**
+     * Quota mensuel effectif (k crédits/mois) : le PLUS GÉNÉREUX entre le
+     * quota individuel du compte et celui de ses groupes actifs (déjà le plus
+     * généreux des groupes qui en définissent un). Null = aucun quota nulle
+     * part = illimité.
+     *
+     * Avant, un quota individuel l'emportait toujours, même plus bas : une
+     * personne ajoutée à un groupe à 50 000 crédits gardait son ancien quota
+     * individuel (constaté chez un client, groupe « Power User »). Règle des
+     * groupes, étendue au compte : on prend le meilleur, jamais le plus
+     * restrictif. Pour limiter quelqu'un, on le retire du groupe généreux.
+     */
     public static function effectiveCreditQuotaK(array $user): ?int
     {
-        $userQuota = isset($user['credit_quota_k']) && $user['credit_quota_k'] !== null
-            ? (int)$user['credit_quota_k']
-            : null;
-        if ($userQuota === null && isset($user['token_quota']) && $user['token_quota'] !== null) {
-            $userQuota = (int)$user['token_quota'];
-        }
-        if ($userQuota !== null) {
-            return $userQuota;
-        }
-
+        $groupQuota = null;
         if (isset($user['effective_group_credit_quota_k']) && $user['effective_group_credit_quota_k'] !== null) {
-            return (int)$user['effective_group_credit_quota_k'];
-        }
-        if (isset($user['effective_group_quota']) && $user['effective_group_quota'] !== null) {
-            return (int)$user['effective_group_quota'];
-        }
-
-        if (!isset($user['id'])) {
-            return null;
+            $groupQuota = (int)$user['effective_group_credit_quota_k'];
+        } elseif (isset($user['effective_group_quota']) && $user['effective_group_quota'] !== null) {
+            $groupQuota = (int)$user['effective_group_quota'];
+        } elseif (isset($user['id'])) {
+            $groupQuota = UserGroup::effectiveQuotaForUserId((int)$user['id']);
         }
 
-        return UserGroup::effectiveQuotaForUserId((int)$user['id']);
+        return self::bestQuotaK(self::individualQuotaK($user), $groupQuota);
     }
 
     /**
-     * Même cascade que effectiveCreditQuotaK() (individuel → hérité → groupes)
-     * quand le quota des groupes est déjà connu (UserGroup::effectiveQuotasByUserIds) :
-     * pure, sans requête par ligne pour les listes.
+     * Même règle que effectiveCreditQuotaK() quand le quota des groupes est
+     * déjà connu (UserGroup::effectiveQuotasByUserIds) : pure, sans requête
+     * par ligne pour les listes.
      */
     public static function effectiveCreditQuotaKFrom(array $user, ?int $groupQuotaK): ?int
+    {
+        return self::bestQuotaK(self::individualQuotaK($user), $groupQuotaK);
+    }
+
+    /** Quota individuel du compte (k crédits/mois), null s'il n'en a pas. */
+    public static function individualQuotaK(array $user): ?int
     {
         if (isset($user['credit_quota_k']) && $user['credit_quota_k'] !== null) {
             return (int)$user['credit_quota_k'];
@@ -198,7 +204,33 @@ class User
         if (isset($user['token_quota']) && $user['token_quota'] !== null) {
             return (int)$user['token_quota'];
         }
-        return $groupQuotaK;
+        return null;
+    }
+
+    /**
+     * Le plus généreux des quotas DÉFINIS (null ignoré : « pas de quota ici »,
+     * jamais « illimité »). Null seulement si aucun n'est défini. Pure.
+     */
+    public static function bestQuotaK(?int ...$quotasK): ?int
+    {
+        $defined = array_values(array_filter($quotasK, static fn(?int $q): bool => $q !== null));
+        return $defined === [] ? null : max($defined);
+    }
+
+    /**
+     * D'où vient le quota appliqué : 'user' (individuel, strictement plus
+     * généreux que les groupes ou seul défini), 'groups', ou 'none' (illimité).
+     * À égalité, ce sont les groupes : retirer l'individuel n'y changerait rien.
+     */
+    public static function quotaOrigin(?int $userQuotaK, ?int $groupQuotaK): string
+    {
+        if ($userQuotaK === null && $groupQuotaK === null) {
+            return 'none';
+        }
+        if ($groupQuotaK === null || ($userQuotaK !== null && $userQuotaK > $groupQuotaK)) {
+            return 'user';
+        }
+        return 'groups';
     }
 
     public static function effectiveCreditQuota(array $user): ?int

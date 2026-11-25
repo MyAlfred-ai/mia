@@ -48,25 +48,31 @@ crédits**.
 | **Vue d'ensemble** *(par défaut)* | Que fait MIA, qui s'en sert, avec quelle qualité ? |
 | **Vue mensuelle** | Comment évolue la consommation, mois par mois et par famille ? |
 | **Par utilisateur** | Qui consomme quoi, et combien cela coûte-t-il réellement ? Un clic ouvre le détail d'une personne |
-| **Par catégorie** | Qu'est-ce qui consomme — conversations, créations, recherches, bases ? Avec le **Coût par base de connaissances** |
+| **Par catégorie** | Qu'est-ce qui consomme — conversations, Claude dans Office, créations, recherches, bases ? Avec le **Coût par base de connaissances** |
 | **Répartition** | Quels fournisseurs, quels assistants, quels outils ? |
 
 ## La vue d'ensemble
 
 - **Répartition de l'usage** : la part des crédits de chaque catégorie, en tuiles proportionnelles.
-  Une tuile ouvre **Par catégorie**.
+  Une tuile ouvre **Par catégorie**. Une catégorie trop petite pour porter son nom dans sa tuile
+  est nommée dessous, sous **Plus petites parts**, avec sa part.
 - **Adoption des fonctionnalités** : pour chaque fonctionnalité, combien de personnes s'en servent,
   combien d'usages, et l'évolution par rapport à la période de comparaison. Celles qui
-  n'ont pas servi sont nommées dessous.
+  n'ont pas servi sont nommées dessous. **Claude dans Office** y compte une demande de l'add-in
+  pour un usage.
 - **Modèles** : la part des réponses de chacun, son temps de réponse et la part de ses réponses
   relancées. Un modèle souvent relancé répond moins bien aux attentes.
 - **Assistants** : conversations, personnes, réponses relancées, et les assistants que personne
   n'a utilisés sur la période.
 - **Bases de connaissances** : les réponses que chaque base a nourries depuis sa création, et celles
   qui n'ont rien nourri depuis 30 jours.
+- **Workflows** : ce que les exécutions de chaque workflow ont coûté sur la période — qui l'a créé,
+  combien d'exécutions, combien de crédits, la moyenne par exécution. Ces crédits sont **déjà
+  comptés** dans les catégories (surtout *Conversations* : une étape de workflow est une réponse),
+  pas en plus.
 
 Un usage est une opération IA, une action menée pendant une réponse (consultation d'une base,
-lecture d'un email…) ou une exécution de tâche programmée.
+lecture d'un email…) ou une exécution de tâche programmée ou de workflow.
 
 ## Exporter
 

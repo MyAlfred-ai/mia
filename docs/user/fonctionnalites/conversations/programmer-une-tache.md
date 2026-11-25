@@ -55,7 +55,10 @@ ou outils.
      **Programmer** ; la carte se ferme d'elle-même ;
    - **Annuler** : rien n'est programmé.
 
-Rien n'est programmé avant votre clic. Sans heure précisée, MIA propose 8 h et le dit.
+Rien n'est programmé avant votre clic. Sans heure précisée, MIA propose 8 h et le dit. Un rythme que
+les tâches ne savent pas suivre — *« toutes les deux semaines »*, *« le dernier vendredi du mois »* —
+n'est jamais remplacé en silence : MIA vous propose le plus proche (chaque semaine, chaque mois) en
+disant ce qui change, ou vous pose la question.
 
 **Ce que MIA choisit pour vous, et dans quelles limites.** Sans précision, la tâche reprend
 l'assistant de la conversation, les sources cochées dans le menu **+** et les bases cochées pour la
@@ -253,6 +256,9 @@ présentations — sans carte à approuver.
   que la tâche a fait sans validation** liste chaque action avec son lien, et celles qui n'ont pas pu
   être faites. La liste des actions au-dessus de la réponse les montre aussi (« Exécution sans
   validation »), et la notification compte les actions effectuées.
+- **Une réunion Outlook avec invités** leur envoie l'invitation, et une modification les en
+  informe : c'est un message en votre nom. Elle n'est donc créée ou modifiée seule que si
+  **Envoyer les emails** est coché ; sinon, elle vous attend dans une carte.
 - **Dix actions au plus par exécution.** Au-delà, les suivantes arrivent en cartes d'approbation,
   comme en **Préparer des actions à approuver**.
 - **Les outils de l'assistant n'agissent pas seuls.** Une automatisation n8n ou une présentation Gamma

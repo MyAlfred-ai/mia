@@ -151,6 +151,8 @@ final class AdminAttentionPipelineTest extends DatabaseTestCase
         $this->assertStringContainsString('Nouvelle Venue', $s['comptes_en_attente']['text']);
         $this->assertStringNotContainsString('Ancienne Collègue', $s['comptes_en_attente']['text'], 'Désactivée après usage : pas « en attente »');
         $this->assertStringNotContainsString('User 43', $s['comptes_en_attente']['text']);
+        // La pastille va jusqu'à la ligne du compte (Personnes → Comptes).
+        $this->assertSame(['user:41'], array_keys($s['comptes_en_attente']['targets']));
     }
 
     public function testUnGroupeActifDontAucunModeleNestDisponible(): void
@@ -168,6 +170,9 @@ final class AdminAttentionPipelineTest extends DatabaseTestCase
         $this->assertStringContainsString('« Commerciaux »', $s['groupe_sans_modele']['text']);
         $this->assertStringNotContainsString('Veille', $s['groupe_sans_modele']['text'], 'Groupe désactivé : il n\'accorde rien, il ne retire rien');
         $this->assertStringNotContainsString('Direction', $s['groupe_sans_modele']['text']);
+        // La pastille va jusqu'à la carte du groupe (lue avec son identifiant).
+        $commerciaux = (int)$this->db()->query("SELECT id FROM user_groups WHERE name = 'Commerciaux'")->fetchColumn();
+        $this->assertSame(['group:' . $commerciaux], array_keys($s['groupe_sans_modele']['targets']));
     }
 
     public function testUneBaseSynchroniseeSansIdentifiantsEtUnOutilSansGroupe(): void
@@ -181,7 +186,7 @@ final class AdminAttentionPipelineTest extends DatabaseTestCase
         )->execute(['Contrats', 'openai', 'text-embedding-3-large', 1536, 'sharepoint', 'https://exemple.sharepoint.com/sites/x', 'ok']);
         $this->db()->prepare(
             'INSERT INTO chat_tools (name, type, provider, model, is_active) VALUES (?, ?, ?, ?, 1)'
-        )->execute(['Illustrateur', 'image', 'openai', 'gpt-image-2']);
+        )->execute(['Illustrateur', 'image', 'openai', 'gpt-image-2.6-flare']);
 
         $s = $this->constats();
         $this->assertSame('knowledge-bases-sync', $s['bases_source_sans_identifiants']['entry']);

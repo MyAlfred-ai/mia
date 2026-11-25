@@ -17,7 +17,7 @@ require ROOT . '/templates/admin/llms/_head.php';
     <?php if (empty($activeInstances)): ?>
     <div class="card" style="text-align:center;padding:40px">
         <p style="color:var(--text-muted);margin-bottom:12px"><?= te('Aucun LLM activé.') ?></p>
-        <a href="/admin/llms/models" class="btn-primary"><?= te('Activer des modèles') ?></a>
+        <a href="/admin/llms" class="btn-primary"><?= te('Activer des modèles') ?></a>
     </div>
     <?php endif; ?>
 

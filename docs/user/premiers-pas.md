@@ -43,20 +43,22 @@ sont affichés en bas de cette barre.
 C'est l'écran que vous retrouvez en ouvrant une conversation depuis la barre latérale. Chaque numéro
 renvoie au sujet qui explique la zone en détail.
 
-![L'écran de MIA, une conversation ouverte : la barre latérale des conversations à gauche, le bandeau du modèle en haut, la question et sa réponse au centre, le champ de saisie et ses boutons en bas. Des numéros de 1 à 10 repèrent chaque zone.](images/ecran-principal.png)
+![L'écran de MIA, une conversation ouverte : la barre latérale des conversations à gauche, le bandeau du modèle en haut, la question et sa réponse au centre, le champ de saisie et ses boutons en bas. Des numéros de 1 à 12 repèrent chaque zone.](images/ecran-principal.png)
 
 | | À l'écran | Le sujet |
 |---|---|---|
-| **1** | **Nouvelle conversation** ouvre un fil vierge ; son titre se génère après votre premier message. Juste dessous, dans le même bloc, **Rechercher ou aller à…** : une seule barre pour retrouver une page, une action ou une conversation (**⌘K**, ou **Ctrl+K** sur Windows et Linux, l'ouvre depuis n'importe où). Plus bas, la rangée **Espaces** : des tuiles qui ouvrent vos pages de travail — **Tâches** et **Créations** pour tous, et selon vos droits **Assistants**, **Bases** et **Workflows** —, et la tuile **Tout**, qui ouvre la même barre. | [Les conversations](fonctionnalites/conversations/index.md) |
-| **2** | Vos conversations, les **épinglées** en tête, puis par date ; une pastille de couleur rappelle l'assistant d'une conversation. Le bouton **⋯** d'une conversation la renomme, l'épingle ou la supprime. | [Les conversations](fonctionnalites/conversations/index.md) |
-| **3** | Le **bandeau** : le modèle choisi, ce qu'il sait faire — **Internet**, **Images**, **Fichiers**, **Connecteurs** —, son coût relatif et le nombre de messages d'historique envoyés. | [Les modèles de LLM](fonctionnalites/modeles/index.md) |
-| **4** | La **réponse**, mise en forme — titres, listes, tableaux. L'étiquette dessous nomme le modèle qui l'a rédigée ; au survol, **Copier**, **Regénérer** et l'export PDF ou Word. | [Les conversations](fonctionnalites/conversations/index.md) |
-| **5** | **+**, **Fichiers, outils et connecteurs** : joindre un document, créer une image ou une présentation, consulter vos services Google ou Microsoft. | [Les connecteurs](fonctionnalites/connecteurs/index.md), [Les outils](fonctionnalites/outils/index.md) |
-| **6** | **Démarrer une conversation avec un assistant** : une IA préconfigurée, qui impose son modèle, ses consignes et ses sources. | [Les assistants](fonctionnalites/assistants/index.md) |
-| **7** | Les **bases de connaissances** que MIA interroge pour cette conversation. | [Les bases de connaissances](fonctionnalites/bases-de-connaissances/index.md) |
-| **8** | **Choisir le modèle LLM** : le moteur qui rédige la prochaine réponse. | [Les modèles de LLM](fonctionnalites/modeles/index.md) |
-| **9** | Votre nom et vos **crédits restants** — ici **Illimité**. Dessous, le bouton **Réglages** mène à vos réglages personnels ; pour qui administre, le bouton **Admin** mène à l'**Administration**, avec une pastille qui compte les points à régler. | [La gestion des crédits](fonctionnalites/credits/index.md), [La personnalisation](fonctionnalites/personnalisation/index.md) |
-| **10** | La **langue** de l'interface : **🇫🇷 FR** ou **🇬🇧 EN**. | [Changer la langue](fonctionnalites/personnalisation/changer-la-langue.md) |
+| **1** | **Nouvelle conversation** ouvre un fil vierge ; son titre se génère après votre premier message. Juste dessous, dans le même bloc, **Rechercher ou aller à…** : une seule barre pour retrouver une page, une action ou une conversation (**⌘K**, ou **Ctrl+K** sur Windows et Linux, l'ouvre depuis n'importe où). | [Les conversations](fonctionnalites/conversations/index.md) |
+| **2** | Les tuiles **Espaces** ouvrent vos pages de travail. Pour tous : **Tâches**, les demandes que MIA refait seule à l'heure choisie, et **Créations**, la galerie de ce que les outils ont produit — images, pages web, présentations, vidéos. Selon vos droits : **Assistants**, **Bases** — les bases de connaissances — et **Workflows**, en bêta. La tuile **Tout** ouvre la barre **Rechercher ou aller à…**. Pour qui administre, **Assistants** et **Bases** portent une pastille qui compte les points à régler. | [Programmer une tâche](fonctionnalites/conversations/programmer-une-tache.md), [Retrouver et partager ses créations](fonctionnalites/outils/retrouver-et-partager-ses-creations.md), [Les assistants](fonctionnalites/assistants/index.md), [Les bases de connaissances](fonctionnalites/bases-de-connaissances/index.md), [Les workflows](fonctionnalites/workflows/index.md) |
+| **3** | Vos conversations, les **épinglées** en tête, puis par date ; une pastille de couleur rappelle l'assistant d'une conversation. Le bouton **⋯** d'une conversation la renomme, l'épingle ou la supprime. | [Les conversations](fonctionnalites/conversations/index.md) |
+| **4** | Le **bandeau**, déplié ici : le modèle choisi, ce qu'il sait faire — **Internet**, **Images**, **Fichiers**, **Connecteurs** —, son coût relatif et le nombre de messages d'historique envoyés. Il est replié par défaut et ne montre alors que le modèle : la flèche, en haut à droite, le déplie ou le replie. | [Les modèles de LLM](fonctionnalites/modeles/index.md) |
+| **5** | La **réponse**, mise en forme — titres, listes, tableaux. L'étiquette dessous nomme le modèle qui l'a rédigée, ce qu'elle a coûté en crédits et son temps de réponse ; au survol, **Copier**, **Regénérer** et l'export PDF ou Word. | [Les conversations](fonctionnalites/conversations/index.md) |
+| **6** | **+**, **Fichiers, outils et connecteurs** : joindre un document, créer une image ou une présentation, consulter vos services Google ou Microsoft. | [Les connecteurs](fonctionnalites/connecteurs/index.md), [Les outils](fonctionnalites/outils/index.md) |
+| **7** | **Démarrer une conversation avec un assistant** : une IA préconfigurée, qui impose son modèle, ses consignes et ses sources. | [Les assistants](fonctionnalites/assistants/index.md) |
+| **8** | Les **bases de connaissances** que MIA interroge pour cette conversation. | [Les bases de connaissances](fonctionnalites/bases-de-connaissances/index.md) |
+| **9** | **Choisir le modèle LLM** : le moteur qui rédige la prochaine réponse. | [Les modèles de LLM](fonctionnalites/modeles/index.md) |
+| **10** | **Dicter le message** (le micro) et **Converser à la voix** (les ondes), si votre organisation les a activés. | [Dicter un message](fonctionnalites/conversations/dicter-un-message.md), [Converser à la voix](fonctionnalites/conversations/converser-a-la-voix.md) |
+| **11** | Votre nom et vos **crédits restants** sur le quota du mois, avec leur jauge — ou **Illimité**. Dessous, le bouton **Réglages** mène à vos réglages personnels ; pour qui administre, le bouton **Admin** mène à l'**Administration**, avec une pastille qui compte les points à régler. | [La gestion des crédits](fonctionnalites/credits/index.md), [La personnalisation](fonctionnalites/personnalisation/index.md) |
+| **12** | La **langue** de l'interface : **🇫🇷 FR** ou **🇬🇧 EN**. | [Changer la langue](fonctionnalites/personnalisation/changer-la-langue.md) |
 
 ### Où trouver quoi
 
@@ -66,8 +68,8 @@ renvoie au sujet qui explique la zone en détail.
   une conversation.
 - **Vos réglages personnels** : le bouton **Réglages**, en bas de la barre latérale. Il mène
   directement à la page **Mon profil**, où se lit aussi votre **rôle**. Le menu de gauche réunit, sous
-  **Mon compte**, **Mon profil**, **Préférences IA**, **Affichage**, **Comptes connectés** et **Usage &
-  crédits**, puis, plus bas, **À propos de MIA** et **Se déconnecter**.
+  **Mon compte**, **Mon profil**, **Préférences IA**, **Mémoire**, **Affichage**, **Comptes connectés**
+  et **Usage & crédits**, puis, plus bas, **À propos de MIA** et **Se déconnecter**.
 - **L'administration**, si vous en avez la charge : le bouton **Admin**, à côté de **Réglages**. Il
   mène directement au **Tableau de bord** (ou à la première page que vos droits ouvrent) ; le menu de
   gauche porte les rubriques que vos droits vous ouvrent, chacune avec sa pastille de points à régler.

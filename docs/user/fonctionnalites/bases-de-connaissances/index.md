@@ -9,6 +9,8 @@ Une **base de connaissances** est une collection de documents — procédures, c
 fiches produits — que MIA consulte avant de répondre. Elle retrouve les passages utiles **par le
 sens**, pas seulement par les mots exacts, et fonde sa réponse dessus.
 
+![La liste des bases de connaissances : en tête, la recherche, les filtres Tout, Bases et Tables, et les icônes Privées, Communes et Publiques ; dessous, les cartes Nouvelle base et Nouvelle table ; puis les bases, chacune avec son état Prête, ses documents, sa dernière utilisation et l'icône de sa visibilité.](../../images/bases-de-connaissances.png)
+
 ## À quoi ça sert
 
 Un modèle d'IA ne connaît pas vos documents internes. Sans base, il répond de mémoire, en
@@ -49,12 +51,23 @@ flowchart LR
 
 - **liées à un assistant**, qui les consulte à chaque message, pour tous ses utilisateurs ;
 - ou **partagées** avec des personnes ou des groupes, qui peuvent les cocher dans leurs
-  conversations.
+  conversations — ou **publiques**, ouvertes à toute l'organisation.
+
+Chaque base a sa **page** : son état, ses documents, ce qu'elle sait, qui s'en sert et qui la voit,
+et son schéma tout en bas. Une icône dit qui la voit : cadenas (**Privée**, son créateur seul),
+groupe (**Commune**, son créateur, les administrateurs et ceux à qui elle est partagée), globe
+(**Publique**, toute l'organisation).
 
 **Une base en direct : le cerveau MyBrain.** Un administrateur peut aussi brancher le **cerveau
 MyBrain** de l'équipe, le wiki qui se tient à jour à partir des mails et des documents. Rien n'y est
 copié : MIA l'interroge en direct à chaque message, et la réponse cite ses fiches. Il ne sert qu'aux
 groupes choisis par l'administrateur — même à travers un assistant.
+
+**Une base de lignes : la table.** Un fichier clients, une grille de tarifs, un suivi ne sont pas
+des documents à fouiller par le sens, mais des **lignes** à compter. Une **table** les garde telles
+quelles : MIA la lit ligne par ligne, compte, filtre et croise sans en oublier, et n'y écrit qu'après
+votre accord. Chaque changement s'inscrit dans son historique : on peut toujours revenir en arrière. Elle se crée depuis un fichier Excel ou CSV, à la main, ou depuis une conversation, et
+se coche ou se lie à un assistant comme une base.
 
 **Trois façons de donner des documents à MIA, trois usages.**
 
@@ -66,7 +79,8 @@ groupes choisis par l'administrateur — même à travers un assistant.
 
 **Les limites.** Trois bases cochées au plus par conversation, en plus de celles de l'assistant.
 Une base contient 20 documents déposés à la main, ou jusqu'à 100 fichiers synchronisés depuis un
-dossier. Un PDF scanné n'apporte rien : il n'y a pas de reconnaissance de caractères.
+dossier. Un PDF scanné n'apporte rien : il n'y a pas de reconnaissance de caractères. Une table
+contient 20 000 lignes et 40 colonnes au plus ; au-delà, le fichier est refusé, jamais coupé.
 
 **Le coût.** Alimenter une base est décompté **hors quota**, à son créateur. Chaque question posée
 avec des bases coûte une petite recherche, comptée dans **votre** quota. Voir
@@ -77,19 +91,30 @@ avec des bases coûte une petite recherche, comptée dans **votre** quota. Voir
 | Vous voulez… | Page |
 |---|---|
 | Faire répondre MIA à partir d'une ou plusieurs bases | [Interroger ses bases de connaissances](interroger-ses-bases-de-connaissances.md) |
+| Retrouver une base, vérifier ce qu'elle sait, voir qui s'en sert | [Consulter une base](consulter-une-base.md) |
+| Voir les extraits d'un document, comprendre pourquoi il ne s'indexe pas, le relancer ou l'exclure *(créateur)* | [Corriger un document en échec](corriger-un-document-en-echec.md) |
 | Constituer une base et la donner à vos assistants *(créateur)* | [Créer une base de connaissances](creer-une-base-de-connaissances.md) |
 | Tenir une base à jour depuis un dossier Google Drive — Drive partagés compris —, OneDrive ou SharePoint *(créateur)* | [Synchroniser une base avec un dossier](synchroniser-une-base-avec-un-dossier.md) |
 | Faire répondre MIA à partir du wiki de l'équipe, en citant ses fiches | [Interroger le cerveau MyBrain](interroger-le-cerveau-mybrain.md) |
 | Faire entrer un compte rendu ou une décision dans le wiki de l'équipe, après validation | [Proposer un texte au cerveau MyBrain](nourrir-le-cerveau-mybrain.md) |
+| Garder une base pour vous seul, que même les administrateurs ne voient pas *(créateur)* | [Réserver une base à vous seul](reserver-une-base.md) |
+| Garder un fichier clients, une grille de tarifs ou un suivi que MIA compte et croise ligne par ligne *(créateur)* | [Créer et tenir une table](tenir-une-table.md) |
+| Savoir qui a modifié une table et quand, la remettre dans l'état d'un moment précédent | [Voir l'historique d'une table et revenir en arrière](revenir-en-arriere-dans-une-table.md) |
 
 ## Ce que vous pouvez régler
 
 - En conversation : les bases que vous cochez, trois au plus. Certaines peuvent être cochées d'office
   pour votre groupe dans chaque nouvelle conversation ; elles se décochent comme les autres.
-- En tant que créateur : tout, sur vos bases — contenu, assistants liés, partage, synchronisation.
+- Sur une table : ses lignes et ses colonnes, et ce que MIA peut y faire — **lire seulement**, ou
+  lire et écrire **après votre accord**.
+- En tant que créateur : tout, sur vos bases — contenu, assistants liés, synchronisation — et qui la
+  voit : **Privée** (vous seul : personne d'autre, pas même un administrateur, ne la voit ni ne s'en
+  sert, même à travers un assistant), **Commune** (vous, les administrateurs, et les groupes ou
+  personnes ajoutés) ou **Publique** (toute l'organisation la coche dans le chat ; seuls vous et les
+  administrateurs la modifiez).
 
-Les bases que vous voyez dépendent de ce qu'on vous a partagé. Un utilisateur sans rôle de créateur
-reçoit les bases **par ses groupes**.
+Les bases que vous voyez dépendent de ce qu'on vous a partagé, plus les bases publiques. Un
+utilisateur sans rôle de créateur reçoit les bases **par ses groupes**.
 
 ## Exemples
 
@@ -105,9 +130,16 @@ dossier Google Drive. Chaque fiche ajoutée au dossier est indexée dans les dix
 **Croiser deux sources.** Dans la même conversation, vous cochez *Catalogue produits* et
 *Conditions générales* : *« Quelles garanties sur la gamme Pro, et sous quelles conditions ? »*.
 
-**Des notes de frais scannées.** Déposées en PDF image, elles s'affichent **Sans texte** et la carte
-de la base signale des documents à vérifier ; dans le chat, la base reste grisée, **Aucun texte
-exploitable dans les documents**. Il faut des fichiers dont le texte est sélectionnable.
+**Compter dans un fichier clients.** Un créateur importe *Clients 2026* (240 lignes) comme table et
+la lie à l'assistant *Commercial*. *« Combien de clients à Lyon ont dépassé 10 000 € ? »* : MIA lit
+les 240 lignes et donne le chiffre exact. *« Note « à relancer » pour ceux qui n'ont pas écrit
+depuis septembre »* : une carte montre les lignes qui changent, avant et après ; rien n'est écrit
+sans **Approuver**.
+
+**Des notes de frais scannées.** Déposées en PDF image, elles s'affichent **Sans texte** et la ligne
+de la base dit « 3 documents sans texte » ; dans le chat, la base reste grisée, **Aucun texte
+exploitable dans les documents**. La fiche de chacune dit **Document numérisé** : il faut des
+fichiers dont le texte est sélectionnable — ou les exclure de la base.
 
 ## Voir aussi
 

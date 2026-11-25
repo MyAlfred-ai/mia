@@ -9,7 +9,8 @@ declare(strict_types=1);
  * agit, peut restreindre ce qu'elle voit et ce qu'elle touche :
  *
  *   {
- *     mail:  { from, subject, words, attachment, unread, days },   recherches d'emails
+ *     mail:  { from, subject, words, attachment, unread, days,     recherches d'emails
+ *              exclude, to },                                  (déclencheur : sauf de, adressé à)
  *     drive: { folder, name, kind, days },                          recherches de fichiers ; dossier des créations
  *     recipients: "paul@client.fr, @client.fr"                      destinataires permis (actions email)
  *   }
@@ -52,6 +53,10 @@ final class WorkflowFilters
                 'attachment' => self::bool($mail['attachment'] ?? false),
                 'unread'     => self::bool($mail['unread'] ?? false),
                 'days'       => self::days($mail['days'] ?? 0),
+                // Déclencheur « email reçu » : expéditeurs écartés, destinataire
+                // (l'adresse ou l'alias qui reçoit). Vides partout ailleurs.
+                'exclude'    => self::text($mail['exclude'] ?? ''),
+                'to'         => self::text($mail['to'] ?? ''),
             ],
             'drive' => [
                 'folder' => self::text($drive['folder'] ?? '', self::FOLDER_MAX),
@@ -67,6 +72,7 @@ final class WorkflowFilters
     {
         $m = $f['mail'] ?? [];
         return trim((string)($m['from'] ?? '')) === '' && trim((string)($m['subject'] ?? '')) === '' && trim((string)($m['words'] ?? '')) === ''
+            && trim((string)($m['exclude'] ?? '')) === '' && trim((string)($m['to'] ?? '')) === ''
             && empty($m['attachment']) && empty($m['unread']) && (int)($m['days'] ?? 0) === 0;
     }
 
@@ -113,6 +119,8 @@ final class WorkflowFilters
             'mail.from'    => (string)($f['mail']['from'] ?? ''),
             'mail.subject' => (string)($f['mail']['subject'] ?? ''),
             'mail.words'   => (string)($f['mail']['words'] ?? ''),
+            'mail.exclude' => (string)($f['mail']['exclude'] ?? ''),
+            'mail.to'      => (string)($f['mail']['to'] ?? ''),
             'drive.folder' => (string)($f['drive']['folder'] ?? ''),
             'drive.name'   => (string)($f['drive']['name'] ?? ''),
             'recipients'   => (string)($f['recipients'] ?? ''),
@@ -136,7 +144,7 @@ final class WorkflowFilters
             $v = (string)preg_replace('/[()"«»]+/u', ' ', $v);
             return mb_substr(trim((string)preg_replace('/\s+/u', ' ', $v)), 0, self::FOLDER_MAX);
         };
-        foreach (['from', 'subject', 'words'] as $k) {
+        foreach (['from', 'subject', 'words', 'exclude', 'to'] as $k) {
             $f['mail'][$k] = $put($f['mail'][$k]);
         }
         foreach (['folder', 'name'] as $k) {
@@ -207,8 +215,17 @@ final class WorkflowFilters
         if (trim((string)($m['from'] ?? '')) !== '') {
             $parts[] = t('de {qui}', ['qui' => $m['from']]);
         }
+        if (trim((string)($m['exclude'] ?? '')) !== '') {
+            $parts[] = t('sauf de {qui}', ['qui' => $m['exclude']]);
+        }
+        if (trim((string)($m['to'] ?? '')) !== '') {
+            $parts[] = t('adressés à {qui}', ['qui' => $m['to']]);
+        }
         if (trim((string)($m['subject'] ?? '')) !== '') {
             $parts[] = t('objet « {objet} »', ['objet' => $m['subject']]);
+        }
+        if (trim((string)($m['words'] ?? '')) !== '') {
+            $parts[] = t('contenant « {mots} »', ['mots' => $m['words']]);
         }
         if (!empty($m['attachment'])) {
             $parts[] = t('avec pièce jointe');
@@ -236,6 +253,181 @@ final class WorkflowFilters
             $parts[] = t('vers {qui} seulement', ['qui' => $f['recipients']]);
         }
         return implode(' · ', $parts);
+    }
+
+    // ==================================================================
+    // Un email correspond-il aux filtres du déclencheur ?
+    // ==================================================================
+
+    /**
+     * Règle UNIQUE du déclencheur « email reçu », la même pour Gmail et
+     * Outlook — appliquée par MIA sur le message lui-même, jamais confiée à
+     * la recherche du fournisseur (Gmail et la recherche KQL d'Outlook ne
+     * comprennent pas « objet contient » de la même façon). Pure.
+     *
+     * Chaque champ accepte plusieurs valeurs séparées par des virgules ou des
+     * points-virgules : il suffit que L'UNE corresponde. Casse et accents sont
+     * ignorés.
+     *  - De / Sauf de / Adressé à : une adresse (paul@client.fr, exacte), un
+     *    domaine (@client.fr ou client.fr : l'adresse en fait partie, sous-
+     *    domaines compris), sinon un morceau du nom ou de l'adresse (« Dupont »,
+     *    « noreply »).
+     *  - Objet contient / Contient les mots : tous les mots d'une valeur
+     *    figurent dans l'objet (pour « contient », dans l'objet ou le corps).
+     *  - Avec une pièce jointe : au moins un fichier joint (une image collée
+     *    dans le corps n'en est pas un).
+     *
+     * `$msg` = {de, a, cc, objet, contenu, pieces_jointes (liste) | pieces
+     * (booléen)}. `$complete` faux (en-têtes seulement) : ce que le message
+     * ne porte pas encore n'est pas jugé — il le sera une fois lu en entier.
+     */
+    public static function emailMatches(array $mail, array $msg, bool $complete = true): bool
+    {
+        return self::emailMismatch($mail, $msg, $complete) === null;
+    }
+
+    /**
+     * Le premier critère que l'email ne remplit pas — from | exclude | to |
+     * subject | words | attachment —, ou null s'il les remplit tous (règle
+     * d'emailMatches ; le test des filtres de l'éditeur dit ainsi POURQUOI).
+     */
+    public static function emailMismatch(array $mail, array $msg, bool $complete = true): ?string
+    {
+        $mail = self::normalize(['mail' => $mail])['mail'];
+        $has = static fn(string $k): bool => array_key_exists($k, $msg);
+        if ($mail['from'] !== '' && ($complete || $has('de')) && !self::anyPartyMatches($mail['from'], [(string)($msg['de'] ?? '')])) {
+            return 'from';
+        }
+        if ($mail['exclude'] !== '' && ($complete || $has('de')) && self::anyPartyMatches($mail['exclude'], [(string)($msg['de'] ?? '')])) {
+            return 'exclude';
+        }
+        if ($mail['to'] !== '' && ($complete || $has('a') || $has('cc'))) {
+            $parties = array_merge(self::splitParties((string)($msg['a'] ?? '')), self::splitParties((string)($msg['cc'] ?? '')));
+            if (!self::anyPartyMatches($mail['to'], $parties)) {
+                return 'to';
+            }
+        }
+        if ($mail['subject'] !== '' && ($complete || $has('objet')) && !self::anyTermIn($mail['subject'], (string)($msg['objet'] ?? ''))) {
+            return 'subject';
+        }
+        if ($mail['words'] !== '' && ($complete || $has('contenu'))
+            && !self::anyTermIn($mail['words'], (string)($msg['objet'] ?? '') . "\n" . (string)($msg['contenu'] ?? ''))) {
+            return 'words';
+        }
+        if ($mail['attachment']) {
+            if (array_key_exists('pieces_jointes', $msg) && is_array($msg['pieces_jointes'])) {
+                $files = array_filter($msg['pieces_jointes'], static fn($p): bool => is_array($p) ? empty($p['en_ligne']) : (string)$p !== '');
+                if ($files === []) {
+                    return 'attachment';
+                }
+            } elseif ($has('pieces')) {
+                if (empty($msg['pieces'])) {
+                    return 'attachment';
+                }
+            } elseif ($complete) {
+                return 'attachment';
+            }
+        }
+        return null;
+    }
+
+    /** Faut-il lire le message entier pour juger ces filtres (corps, pièces jointes) ? */
+    public static function needsFullMessage(array $mail, array $meta): bool
+    {
+        $mail = self::normalize(['mail' => $mail])['mail'];
+        return $mail['words'] !== '' || ($mail['attachment'] && !array_key_exists('pieces', $meta));
+    }
+
+    /** Pourquoi un email est écarté, pour l'écran. */
+    public static function mismatchLabel(string $criterion, array $mail): string
+    {
+        $mail = self::normalize(['mail' => $mail])['mail'];
+        return match ($criterion) {
+            'from'       => t('expéditeur hors de « {v} »', ['v' => $mail['from']]),
+            'exclude'    => t('expéditeur écarté par « {v} »', ['v' => $mail['exclude']]),
+            'to'         => t('pas adressé à « {v} »', ['v' => $mail['to']]),
+            'subject'    => t('objet sans « {v} »', ['v' => $mail['subject']]),
+            'words'      => t('sans les mots « {v} »', ['v' => $mail['words']]),
+            'attachment' => t('sans pièce jointe'),
+            default      => t('écarté'),
+        };
+    }
+
+    /** Valeurs d'un champ de filtre : séparées par des virgules ou des points-virgules. @return list<string> */
+    public static function terms(string $value): array
+    {
+        $out = [];
+        foreach (preg_split('/[,;]+/u', $value) ?: [] as $t) {
+            $t = trim($t);
+            if ($t !== '' && !in_array($t, $out, true)) {
+                $out[] = $t;
+            }
+        }
+        return $out;
+    }
+
+    /** « Paul <paul@x.fr>, Marie <m@y.fr> » → une entrée par personne. @return list<string> */
+    private static function splitParties(string $list): array
+    {
+        $out = [];
+        // Une virgule DANS un nom entre guillemets (« "Dupont, Paul" <p@x.fr> ») ne coupe pas.
+        foreach (preg_split('/,(?=(?:[^"]*"[^"]*")*[^"]*$)/u', $list) ?: [] as $p) {
+            $p = trim($p);
+            if ($p !== '') {
+                $out[] = $p;
+            }
+        }
+        return $out;
+    }
+
+    /** L'une des valeurs désigne-t-elle l'une des personnes (« Nom <adresse> ») ? */
+    private static function anyPartyMatches(string $value, array $parties): bool
+    {
+        foreach (self::terms($value) as $term) {
+            foreach ($parties as $party) {
+                if (self::partyMatches($term, (string)$party)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private static function partyMatches(string $term, string $party): bool
+    {
+        $term = WorkflowLoop::fold($term);
+        if (preg_match('/<([^>]+)>/', $term, $m)) {
+            $term = trim($m[1]); // « Paul <paul@client.fr> » collé tel quel
+        }
+        $party = WorkflowLoop::fold($party);
+        $address = preg_match('/<([^>]+)>/', $party, $m) ? trim($m[1]) : (str_contains($party, '@') && !str_contains($party, ' ') ? $party : '');
+        if ($term === '' || $party === '') {
+            return false;
+        }
+        if (filter_var($term, FILTER_VALIDATE_EMAIL)) {
+            return $address === $term;
+        }
+        $domain = ltrim($term, '@');
+        if ((str_starts_with($term, '@') || !str_contains($term, ' ')) && preg_match('/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,24}$/', $domain)) {
+            $at = strrpos($address, '@');
+            $host = $at === false ? '' : substr($address, $at + 1);
+            return $host !== '' && ($host === $domain || str_ends_with($host, '.' . $domain));
+        }
+        return str_contains($party, $term);
+    }
+
+    /** Tous les mots de l'une des valeurs figurent-ils dans le texte ? */
+    private static function anyTermIn(string $value, string $text): bool
+    {
+        $hay = WorkflowLoop::fold($text);
+        foreach (self::terms($value) as $term) {
+            $words = preg_split('/\s+/u', WorkflowLoop::fold($term)) ?: [];
+            $words = array_values(array_filter($words, static fn($w) => $w !== ''));
+            if ($words !== [] && array_reduce($words, static fn(bool $ok, string $w): bool => $ok && str_contains($hay, $w), true)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     public static function kindLabel(string $kind): string

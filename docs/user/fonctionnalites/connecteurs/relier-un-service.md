@@ -5,8 +5,9 @@ sidebar:
   order: 1
 ---
 
-Relier un service se fait une fois, depuis la page **Comptes connectés**. Ensuite, vous l'allumez dans les
-conversations où vous en avez besoin : [Utiliser un connecteur](utiliser-un-connecteur.md).
+Relier un service se fait une fois, depuis la page **Comptes connectés**. Il s'allume alors de lui-même
+dans le chat ; vous l'éteignez ou le rallumez ensuite selon vos besoins :
+[Utiliser un connecteur](utiliser-un-connecteur.md).
 
 ## Avant de commencer
 
@@ -37,16 +38,22 @@ accordé :
 | Service | Badges |
 |---|---|
 | Google Drive | **Lecture**, **Écriture Docs**, **Écriture Sheets**, **Renommer / déplacer**, **Dupliquer** |
-| Gmail | **Lecture**, **Brouillons**, **Signature** |
-| Google Agenda, Calendrier Outlook | **Lecture**, **Création d'évènements** |
+| Gmail | **Lecture**, **Brouillons**, **Envoi**, **Signature** |
+| Google Agenda | **Lecture**, **Création et modification d'évènements** |
+| Calendrier Outlook | **Lecture**, **Création et modification d'évènements** |
 | Google Tasks | **Lecture**, **Ajout / modification / suppression** |
-| Outlook | **Lecture**, **Brouillons** |
+| Outlook | **Lecture**, **Brouillons**, **Envoi** |
 | Microsoft To Do | **Lecture**, **Création et modification de tâches** |
 | Microsoft Teams | **Conversations**, **Canaux**, **Publication de messages** |
-| Slack | **Recherche**, **Lecture**, **Publication** |
+| Slack | **Recherche**, **Lecture**, **Publication**, **Message direct**, **Fichiers joints** |
 
 Un badge avec un tiret à la place du ✓ signale une autorisation manquante : **Reconnecter et
 autoriser** la réaccorde.
+
+De retour dans le chat, le service **s'allume tout seul** dans le volet **Connecteurs** du menu **+** :
+MIA peut s'en servir dès votre prochain message. Vous pouvez l'éteindre ; il reste alors éteint, et
+une nouvelle connexion le rallume. Si le modèle de la conversation ne sait pas se servir des
+connecteurs, il s'allume dès que vous revenez à un modèle qui le sait.
 
 **Outlook, le calendrier Outlook, Microsoft To Do et OneDrive** peuvent aussi l'exiger, selon les
 règles de votre organisation. Si Microsoft affiche « Approbation de l'administrateur requise »,
@@ -94,10 +101,13 @@ Un service relié peut cesser de l'être sans que vous ayez rien fait : mot de p
 par votre organisation, autorisation arrivée à échéance. MIA le signale par une **pastille ambre** :
 
 - sur votre **avatar**, en bas de la barre latérale (en haut à droite, sur mobile) ;
-- dans le menu de gauche de vos réglages, sur l'entrée **Comptes connectés** : son infobulle nomme le
-  ou les services, par exemple *« Connexion à reconnecter : Gmail »* ;
+- dans le menu de gauche de vos réglages, sur l'entrée **Comptes connectés** ;
 - dans le menu **+** d'une conversation : un point orange sur l'en-tête du volet **Connecteurs**,
-  et, une fois déplié, sur la ligne du connecteur : *« Connexion expirée — cliquer pour reconnecter »*.
+  et, une fois déplié, sur la ligne du connecteur ;
+- sur la carte du service, dans **Comptes connectés**.
+
+Chaque pastille porte son explication en **info-bulle** : survolez-la, ou touchez-la sur téléphone —
+par exemple *« Connexion à reconnecter : Gmail »*.
 
 Chaque rappel mène à la page **Comptes connectés** — celui du menu **+**, droit à la carte du service.
 Deux issues :

@@ -222,7 +222,16 @@ final class WorkflowRouteFiltersTest extends TestCase
         $this->assertNull($s->writeRefusal('creer_brouillon_gmail', ['destinataire' => 'paul@client.fr', 'cc' => 'jo@sub.client.fr']));
         $this->assertStringContainsString('eve@autre.fr', (string)$s->writeRefusal('creer_brouillon_outlook', ['destinataire' => 'paul@client.fr', 'cc' => 'eve@autre.fr']));
         $this->assertStringContainsString('destinataire', (string)$s->writeRefusal('creer_brouillon_gmail', ['repondre_a' => 'abc']), 'Une réponse doit nommer son destinataire.');
-        $this->assertNull($s->writeRefusal('creer_evenement_agenda', ['invites' => 'eve@autre.fr']), 'Seuls les emails sont filtrés.');
+        // Google aussi : il ajoute les invités à leur agenda et, par défaut, leur écrit.
+        $this->assertStringContainsString('eve@autre.fr', (string)$s->writeRefusal('creer_evenement_agenda', ['invites' => 'eve@autre.fr']));
+        $this->assertStringContainsString('eve@autre.fr', (string)$s->writeRefusal('modifier_evenement_agenda', ['ajouter_invites' => 'eve@autre.fr']));
+        $this->assertNull($s->writeRefusal('creer_evenement_agenda', ['invites' => 'paul@client.fr']));
+        $this->assertNull($s->writeRefusal('creer_tache', ['titre' => 'x']), 'Seuls les emails et les invités sont filtrés.');
+        // Outlook ÉCRIT aux invités d'une réunion (invitation, sans réglage) : même filtre qu'un destinataire.
+        $this->assertStringContainsString('eve@autre.fr', (string)$s->writeRefusal('creer_evenement_agenda_outlook', ['invites' => 'paul@client.fr', 'invites_optionnels' => 'eve@autre.fr']));
+        $this->assertStringContainsString('eve@autre.fr', (string)$s->writeRefusal('modifier_evenement_agenda_outlook', ['ajouter_invites' => ['eve@autre.fr']]));
+        $this->assertNull($s->writeRefusal('creer_evenement_agenda_outlook', ['invites' => 'paul@client.fr']));
+        $this->assertNull($s->writeRefusal('creer_evenement_agenda_outlook', ['titre' => 'Seul']), 'Sans invité, personne à qui écrire.');
         $this->assertSame('Clients/Acme', $s->applyToWrite('creer_google_doc', ['titre' => 'x'])[WorkflowDeliveries::FOLDER_KEY]);
         $this->assertArrayNotHasKey(WorkflowDeliveries::FOLDER_KEY, $s->applyToWrite('modifier_google_doc', []));
         $this->assertStringContainsString('PÉRIMÈTRE IMPOSÉ', $s->promptNote());

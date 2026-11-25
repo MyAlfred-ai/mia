@@ -42,7 +42,8 @@ final class SidebarNavTest extends TestCase
         $tpl = self::lire('templates/partials/sidebar-shortcuts.php');
         $this->assertStringContainsString('$sbNavItems  = NavRegistry::workspaceFor($sbNavUser);', $tpl);
         $this->assertStringContainsString('<nav class="sidebar-spaces" aria-label="<?= te(\'Espaces\') ?>">', $tpl);
-        $this->assertStringContainsString('class="space-tile<?= $sbNavActive === $sbKey ? \' active\' : \'\' ?>"', $tpl);
+        $this->assertStringContainsString('class="space-tile space-<?= SidebarSpaces::tone($sbKey) ?><?= $sbIsOpen ? \' active\' : \'\' ?>"', $tpl);
+        $this->assertStringContainsString('$sbIsOpen = $sbNavActive === $sbKey;', $tpl);
         $this->assertStringContainsString('NavRegistry::icon($sbItem[\'icon\'], 18)', $tpl);
         $this->assertStringContainsString('te($sbItem[\'short\'])', $tpl);
         $this->assertStringNotContainsString('href="/settings/schedules"', $tpl, 'Adresses lues à la source unique.');
@@ -232,21 +233,24 @@ final class SidebarNavTest extends TestCase
         $this->assertSame(3, substr_count($css, '--sb-rule:'), 'Filet : deux thèmes, plus le contraste renforcé.');
         $this->assertStringContainsString("html[data-contrast=\"high\"] .sidebar {\n    --sb-rule:          var(--border);", $css);
 
-        // chat.js : groupes rejouables, épinglage qui met à jour toutes les copies.
+        // Groupes rejouables : rangement à la SOURCE UNIQUE (sidebar-sections.js),
+        // chat.js y délègue ; épinglage qui met à jour toutes les copies.
         $js = self::lire('public/assets/js/chat.js');
-        $regroupe = substr($js, (int)strpos($js, 'function regroupConvList(list) {'), 3200);
+        $this->assertStringContainsString("function regroupConvList(list) {\n    if (list && window.MiaSidebarSections) window.MiaSidebarSections.regroup(list);\n}", $js);
+        $sections = self::lire('public/assets/js/sidebar-sections.js');
+        $regroupe = substr($sections, (int)strpos($sections, 'function regroup(list) {'), 6000);
         $this->assertStringContainsString("group.className = 'conv-group' + (key === 'pinned' ? ' conv-group--pinned' : '');", $regroupe);
-        $this->assertStringContainsString("list.querySelectorAll('.conv-group, .conv-group-label').forEach(g => g.remove());", $regroupe);
+        $this->assertStringContainsString("list.querySelectorAll('.conv-group, .conv-group-label, .conv-history-head')", $regroupe);
         $this->assertStringContainsString('Number(list.dataset.maxPinned)', $regroupe);
-        $this->assertStringContainsString("count.className = 'conv-group-count';", $regroupe);
+        $this->assertStringContainsString("c.className = 'conv-group-count';", $regroupe);
         $epingler = substr($js, (int)strpos($js, 'async function togglePinConv('), 2200);
         $this->assertStringNotContainsString('item.parentElement', $epingler, 'L’item vit dans son groupe, pas dans la liste.');
         $this->assertStringContainsString("regroupConvList(document.getElementById('convList'));", $epingler);
 
         // Libellés de période traduits (ils restaient en français), mois dans la langue de la page.
-        $this->assertStringContainsString("label: t('Aujourd’hui')", $js);
-        $this->assertStringContainsString("label: t('Hier')", $js);
-        $this->assertStringContainsString('toLocaleDateString(document.documentElement.lang', $js);
+        $this->assertStringContainsString("label: window.t('Aujourd’hui')", $sections);
+        $this->assertStringContainsString("label: window.t('Hier')", $sections);
+        $this->assertStringContainsString('toLocaleDateString(html.lang', $sections);
         $client = (array)(require dirname(__DIR__, 2) . '/lang/en.client.php');
         foreach (['Aujourd’hui', 'Hier', 'Épinglées', '7 derniers jours', '30 derniers jours'] as $cle) {
             $this->assertArrayHasKey($cle, $client, "Traduction client absente : $cle");
@@ -275,6 +279,52 @@ final class SidebarNavTest extends TestCase
         $this->assertStringContainsString("[data-theme=\"light\"] .admin-sidebar,\n[data-theme=\"light\"] .sidebar {", $css);
         $this->assertStringContainsString("html[data-contrast=\"high\"] .admin-sidebar,\nhtml[data-contrast=\"high\"] .sidebar {", $css);
         $this->assertStringContainsString(".admin-nav-back-panel {\n    margin: 0 0 8px;", $css);
+    }
+
+    /**
+     * Retour utilisateur (2026-11-04) : une conversation ordinaire n'avait rien à
+     * gauche de son titre — elle se perdait parmi les conversations de workflow
+     * (icône) et de tâche (horloge), et son titre ne s'alignait pas. Chaque ligne
+     * porte désormais UN marqueur dans une case de 13 px, l'anneau neutre en
+     * dernier recours, dans les trois rendus de l'historique.
+     */
+    public function testChaqueConversationPorteUnMarqueurAligne(): void
+    {
+        foreach (['templates/chat/index.php', 'templates/partials/chat-shell-sidebar.php'] as $gabarit) {
+            $src = self::lire($gabarit);
+            $horloge  = strpos($src, '<?php if ($isScheduled): ?>');
+            $workflow = strpos($src, '<?php elseif ($isWorkflow): ?>');
+            $couleur  = strpos($src, "<?php elseif (!empty(\$conv['profile_color'])): ?>");
+            $anneau   = strpos($src, '<span class="conv-plain-dot" aria-hidden="true"></span>');
+            $titre    = strpos($src, '<span class="conv-title">');
+            foreach (['horloge' => $horloge, 'workflow' => $workflow, 'couleur' => $couleur, 'anneau' => $anneau] as $nom => $pos) {
+                $this->assertIsInt($pos, "$gabarit : $nom absent");
+            }
+            // Une seule chaîne : horloge, puis workflow, puis couleur, puis anneau, avant le titre.
+            $this->assertTrue($horloge < $workflow && $workflow < $couleur && $couleur < $anneau && $anneau < $titre, $gabarit);
+            $this->assertSame(1, substr_count($src, '<span class="conv-color-bar"></span>'), "$gabarit : une seule pastille d'assistant, en alternative");
+        }
+        // Création d'une conversation sans rechargement : même règle.
+        $js = self::lire('public/assets/js/chat.js');
+        $ajout = substr($js, (int)strpos($js, 'function addConvToSidebar('), 1600);
+        $this->assertStringContainsString('<span class="conv-plain-dot" aria-hidden="true"></span>', $ajout);
+        $this->assertStringContainsString("marker = '<span class=\"conv-color-bar\"></span>';", $ajout);
+        $this->assertStringContainsString('/^#[0-9a-fA-F]{6}$/.test(color)', $ajout, 'La couleur part dans un style : validée.');
+        $this->assertStringContainsString("a.innerHTML = marker + `<span class=\"conv-title\">", $ajout);
+        // L'épingle se pose après le marqueur, quel qu'il soit.
+        $this->assertStringContainsString(".conv-scheduled-icon, .conv-workflow-icon, .conv-color-bar, .conv-plain-dot", $js);
+        // Case de 13 px pour tous : icônes de 13 px, pastille de 6 px et anneau de 8 px centrés.
+        $css = self::lire('public/assets/css/main.css');
+        $this->assertStringContainsString('.conv-workflow-icon { display: inline-flex; color: var(--text-muted); flex-shrink: 0; width: 13px; justify-content: center; }', $css);
+        $pastille = substr($css, (int)strpos($css, "\n.conv-color-bar {"), 260);
+        $this->assertStringContainsString('width: 6px;', $pastille);
+        $this->assertStringContainsString('margin: 0 3.5px;', $pastille);
+        $anneau = substr($css, (int)strpos($css, "\n.conv-plain-dot {"), 320);
+        $this->assertStringContainsString('width: 8px;', $anneau);
+        $this->assertStringContainsString('margin: 0 2.5px;', $anneau);
+        $this->assertStringContainsString('box-sizing: border-box;', $anneau);
+        $this->assertStringContainsString('border: 1.5px solid currentColor;', $anneau);
+        $this->assertStringContainsString('html[data-contrast="high"] .conv-plain-dot { opacity: .9; }', $css);
     }
 
     #[\PHPUnit\Framework\Attributes\Group('doc-interne')]

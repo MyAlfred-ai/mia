@@ -100,8 +100,8 @@ class LlmErrorPresenter
         'auth'        => ['url' => '/admin/llms', 'label' => 'Ouvrir les clés API'],
         'quota'       => ['url' => '/admin/llms', 'label' => 'Ouvrir les clés API'],
         'retention'   => ['url' => '/admin/llms', 'label' => 'Ouvrir les clés API'],
-        'permission'  => ['url' => '/admin/llms/models', 'label' => 'Ouvrir les modèles'],
-        'model'       => ['url' => '/admin/llms/models', 'label' => 'Ouvrir les modèles'],
+        'permission'  => ['url' => '/admin/llms', 'label' => 'Ouvrir les modèles'],
+        'model'       => ['url' => '/admin/llms', 'label' => 'Ouvrir les modèles'],
     ];
 
     /**

@@ -53,6 +53,7 @@ final class NavRegistry
     public const ACCOUNT = [
         'profile'     => ['label' => 'Mon profil',        'href' => '/settings',             'icon' => 'profile',    'page' => 'profile'],
         'ai'          => ['label' => 'Préférences IA',    'href' => '/settings/ai',          'icon' => 'ai',         'page' => 'ai'],
+        'memory'      => ['label' => 'Mémoire',           'href' => '/settings/memory',      'icon' => 'memory',     'page' => 'memory'],
         'display'     => ['label' => 'Affichage',         'href' => '/settings/display',     'icon' => 'display',    'page' => 'display'],
         'connections' => ['label' => 'Comptes connectés', 'href' => '/settings/connections', 'icon' => 'connectors', 'page' => 'connections'],
         'usage'       => ['label' => 'Usage & crédits',   'href' => '/settings/usage',       'icon' => 'usage',      'page' => 'usage'],
@@ -78,10 +79,11 @@ final class NavRegistry
      */
     private const KEYWORDS = [
         'profile'              => 'paramètres compte nom photo langue mot de passe',
-        'ai'                   => 'paramètres style contexte mémoire mia pour vous voix',
+        'ai'                   => 'paramètres style voix',
+        'memory'               => 'paramètres souvenirs contexte mia pour vous que sais-tu de moi oublier retenir questions',
         'display'              => 'paramètres thème sombre clair taille contraste',
         'connections'          => 'paramètres connexions gmail drive agenda outlook slack teams google microsoft',
-        'usage'                => 'paramètres usage consommation quota solde',
+        'usage'                => 'paramètres usage consommation quota solde historique',
         'profiles'             => 'assistant',
         'kb'                   => 'rag documents base',
         'schedules'            => 'routine planifier programmer',
@@ -91,8 +93,7 @@ final class NavRegistry
         'users'                => 'utilisateurs personnes',
         'user-groups'          => 'utilisateurs personnes quotas',
         'roles'                => 'droits permissions',
-        'llms-keys'            => 'gestion llms fournisseurs openai anthropic',
-        'llms-models'          => 'gestion llms défaut',
+        'llms-keys'            => 'gestion llms clés api modèles défaut secours fournisseurs openai anthropic mistral gemini',
         'llms-tests'           => 'gestion llms',
         'knowledge-bases-sync' => 'bases drive sharepoint onedrive',
         'usage-admin'          => 'usages',
@@ -205,8 +206,14 @@ final class NavRegistry
             $out[] = self::entry('action', 'work', t('Créer un workflow'), $espace . ' › ' . t('Workflows'), '/workflows/new', 'nouveau workflow', 'plus');
         }
 
-        foreach (self::accountFor($user) as $key => $a) {
+        $account = self::accountFor($user);
+        foreach ($account as $key => $a) {
             $out[] = self::entry('page', 'me', t($a['label']), t('Réglages') . ' › ' . $compte, $a['href'], self::KEYWORDS[$key] ?? '', $a['icon']);
+        }
+        if (isset($account['usage'])) {
+            // Onglet « Historique » de Usage & crédits : toutes les opérations, filtrables.
+            $out[] = self::entry('action', 'me', t('Historique de vos usages'), t('Réglages') . ' › ' . t('Usage & crédits'),
+                '/settings/usage?vue=historique', 'historique opérations rechercher filtrer exporter csv mois précédents', 'usage');
         }
         foreach ($reconnect as $key) {
             $out[] = self::entry('action', 'me', t('Reconnecter {service}', ['service' => ConnectorRegistry::label($key)]), t('Réglages') . ' › ' . t('Comptes connectés'), '/settings/connections#connector-' . $key, 'reconnecter connexion expirée', 'connectors');

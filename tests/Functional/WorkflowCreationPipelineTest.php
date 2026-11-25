@@ -150,7 +150,7 @@ final class WorkflowCreationPipelineTest extends DatabaseTestCase
         $this->assertSame($tool, $job['payload']['tool_id']);
         $this->assertStringContainsString('Une affiche pour Le salon du vélo', $job['payload']['prompt'], 'Un champ cité part avec sa valeur.');
         $this->assertStringContainsString('Format attendu : portrait', $job['payload']['prompt']);
-        $this->assertSame(['run_id', 'node_key', 'context', 'sources', 'base', 'format'], array_keys($job['payload']['workflow']));
+        $this->assertSame(['run_id', 'node_key', 'context', 'sources', 'base', 'format', 'background', 'output_format'], array_keys($job['payload']['workflow']));
         $this->assertSame('portrait', $job['payload']['workflow']['format']);
         $this->assertStringContainsString('« Informations de départ » : - Sujet : Le salon du vélo', $job['payload']['workflow']['context']);
         $step = WorkflowRun::lastStep($run['id'], 'vis');

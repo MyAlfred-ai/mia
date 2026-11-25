@@ -67,11 +67,19 @@ assistants) apparaît dans **À régler**.
 
 ## Régler le workflow dans l'éditeur
 
+![L'éditeur du workflow « Trier les demandes reçues par email », publié en version 1, avec Versions, Lancements, Réglages, Lancer et Publier en haut. Le rail descend du Départ (un email arrive) à « Comprendre la demande », qui remet la Fiche de la demande, puis à « Aiguiller la demande », où MIA choisit parmi quatre voies : Demande de devis, Réclamation, Prise de rendez-vous et Rien à traiter, chacune avec ses briques — étapes de MIA, actions dans Gmail ou Google Tasks à approuver, notification — et un bouton Ajouter.](../../images/workflow-editeur.png)
+
 - **Le départ** : les champs que vous remplissez au lancement (texte, date, nombre, choix, email,
   oui/non, fichier). Un fichier devient une pièce à lui seul ; les autres champs forment ensemble la
-  **Fiche de départ**. Cochez **Depuis le chat** pour le lancer avec « @ », ou **Programmé** pour qu'il
-  démarre seul (chaque jour, jours ouvrés, chaque semaine, chaque mois) avec les valeurs par défaut.
-  **Démarrer sur un évènement** le lance à l'arrivée d'un email, d'un fichier, d'un appel ou à la fin
+  **Fiche de départ**. Un champ **Choix** reçoit ses options en une ligne, séparées par des virgules
+  (au moins deux), et sa valeur par défaut se choisit parmi elles. Un champ **Fichier** peut porter un
+  **document de référence** (**Fournir un document de référence**) : un document toujours le même —
+  un modèle de réponse, un texte de loi, vos références — joint d'office à chaque lancement, que les
+  étapes citent avec @ comme toute pièce ; au lancement, on peut le remplacer pour une fois. **Quand démarre-t-il ?**, en tête
+  du volet, réunit les façons de le lancer, chacune avec son interrupteur : toujours **Quand vous le
+  lancez** ; **Depuis le chat** pour le lancer avec « @ » ; **À heure fixe** pour qu'il démarre seul
+  (chaque jour, jours ouvrés, chaque semaine, chaque mois) avec les valeurs par défaut ; **Quand
+  quelque chose arrive** pour le lancer à l'arrivée d'un email, d'un fichier, d'un appel ou à la fin
   d'un autre workflow — voir [Démarrer sur un évènement](demarrer-sur-un-evenement.md).
 - **Ajouter une brique** : le bouton **+** entre deux briques du rail ouvre la liste des briques,
   rangées par ce qu'elles font — **Intelligence** (étape, décision de MIA), **Logique** (condition,
@@ -86,10 +94,17 @@ assistants) apparaît dans **À régler**.
   la nature de la pièce. Une citation soulignée en rouge ne désigne plus rien d'existant ici.
 - **Une étape** : choisissez **qui fait le travail** — MIA avec le modèle de votre choix, ou l'un de
   vos **assistants**, qui travaille alors avec son prompt, son modèle, ses bases de connaissances et
-  ses outils ; son avatar s'affiche sur la carte —, écrivez sa **consigne** et citez les pièces avec **@**,
+  ses outils (sauf son outil image : une image se fait par une brique **Création** ou une étape qui
+  remet une image) ; son avatar s'affiche sur la carte —, écrivez sa **consigne** et citez les pièces avec **@**,
   ajoutez ce qu'elle **peut consulter** (Internet, vos connecteurs, trois bases de connaissances, un
   outil par type — et, pour vos emails et Drive, des filtres : voir [Filtrer les emails et les
-  fichiers](filtrer-emails-et-fichiers.md)), puis ce qu'elle **remet au dossier** : un nom et une forme. Cochez **Je relis la
+  fichiers](filtrer-emails-et-fichiers.md) ; les pièces jointes d'un **Email reçu** cité lui arrivent
+  sans rien cocher, voir [Démarrer sur un évènement](demarrer-sur-un-evenement.md)). Si la consigne
+  demande un service que l'étape ne consulte pas, MIA le dit dans sa réponse : cochez-le dans **Peut
+  consulter**, publiez et relancez. Puis indiquez ce qu'elle **remet au dossier** : un nom et une forme —
+  rédigée par l'étape (texte, liste, tableau, Fiche, document) ou **faite par un outil de création**
+  (image, page web, carte : l'étape prépare la demande, l'outil fabrique la pièce, voir [Créer une
+  image, une page web ou une carte](creer-une-image-une-page-ou-une-carte.md)). Cochez **Je relis la
   pièce avant la suite** pour qu'une validation s'ouvre juste après.
 - **Une décision de MIA** : voir [Laisser MIA choisir la voie](laisser-mia-choisir-la-voie.md).
 - **Une boucle pour chaque élément** — chaque ligne d'un Excel, chaque pièce jointe, chaque slide,
@@ -103,11 +118,25 @@ assistants) apparaît dans **À régler**.
   ses livraisons — voir [Envoyer le livrable](envoyer-le-livrable.md).
 - **Réglages** (en haut, à côté du nom) : l'objectif du workflow, ce qui reste **À régler** (la
   pastille en compte les points), le dossier et le trajet de chaque pièce avec la légende des
-  couleurs, le coût estimé d'une exécution, et **Me prévenir sur mes appareils**.
+  couleurs, le coût estimé d'une exécution (avec son détail, brique par brique, et ce qu'ont
+  coûté les dernières exécutions), et **Me prévenir sur mes appareils**.
 
 ## Publier
 
 **Publier** n'est possible que lorsque la liste **À régler** ne signale plus de point bloquant (une
 consigne vide, une pièce citée qui n'existe pas encore à cet endroit, un assistant devenu
-inaccessible…) — dans **Réglages**, un clic sur un point mène à la brique concernée. Chaque publication crée une
+inaccessible, une règle qui ne pourrait jamais être vraie…) — dans **Réglages**, un clic sur un point mène à la brique concernée. Chaque publication crée une
 nouvelle version ; les modifications suivantes restent en brouillon jusqu'à la publication suivante.
+
+## Revoir les versions
+
+Chaque version publiée est gardée. Le bouton **Versions**, à côté de l'état « Publié · version *N* »,
+les liste de la plus récente à la plus ancienne, avec leur date et leur nombre de briques :
+
+- **Revoir** déroule les briques de cette version ;
+- **Repartir de cette version** remplace le brouillon par elle (après confirmation) : ce que vous
+  aviez changé depuis est remplacé, mais la **version en service ne change pas** tant que vous ne
+  republiez pas.
+
+Une version publiée avant l'arrivée de l'historique est « Reconstituée » d'une de ses exécutions. Le
+bouton **Lancements**, à côté, ouvre l'historique des exécutions de ce workflow.

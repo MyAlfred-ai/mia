@@ -106,7 +106,8 @@ final class ComposerHints
      * Phrases à proposer, d'après ce que la page sait de la personne.
      *
      * @param array{tools?: list<string>, connectors?: list<string>, web?: bool, kb?: bool,
-     *              schedule?: bool, workflow?: bool, assistant?: bool, company?: string} $caps
+     *              schedule?: bool, workflow?: bool, assistant?: bool, company?: string, memory?: bool} $caps
+     *        `memory` : la mémoire est-elle proposée (absent = oui) ?
      * @return list<array{g: string, t: string}>
      */
     public static function forChat(array $caps): array
@@ -147,6 +148,10 @@ final class ComposerHints
                 t('Retiens que je préfère des réponses courtes'),
             ],
         ];
+        // Mémoire coupée par l'administrateur : ne pas promettre de retenir.
+        if (($caps['memory'] ?? true) === false) {
+            unset($phrases['memoire']);
+        }
 
         $company = trim((string)($caps['company'] ?? ''));
         if ($company !== '' && mb_strlen($company) <= 30) {

@@ -13,7 +13,7 @@ sauvegarde complète de l'instance.
 
 | Contient | Ne contient pas |
 |---|---|
-| Utilisateurs et groupes, assistants, bases de connaissances et leurs documents, outils, clés, réglages, avatars, logos, modèle PowerPoint de l'entreprise | Les **conversations** et leurs messages, les liens de partage, l'historique de consommation, les photos de profil |
+| Utilisateurs et groupes, assistants, bases de connaissances et leurs documents, outils, clés, réglages, avatars, logos, modèle PowerPoint de l'entreprise | Les **conversations**, leurs messages et leurs tables de travail, la **mémoire** de chaque personne, les liens de partage, l'historique de consommation, les photos de profil |
 
 L'archive contient les mots de passe hachés et les clés chiffrées de l'instance : **conservez-la en
 lieu sûr**, comme une clé.

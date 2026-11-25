@@ -106,6 +106,10 @@ final class PermissionsTest extends TestCase
             'schedules.view', 'schedules.use', 'schedules.create', 'schedules.edit', 'schedules.delete',
             'tools.use',
             'connectors.use',
+            // Claude dans Office (arrivé après l'écran des rôles) : ouvert à
+            // tous par défaut, l'instance le garde coupé tant qu'un
+            // administrateur ne l'active pas (OfficeAddin::isEnabled).
+            'office_addin.use',
         ], Permissions::defaultsFor('user'));
 
         // Créateur : tout ce que fait l'utilisateur, plus ses assistants, ses

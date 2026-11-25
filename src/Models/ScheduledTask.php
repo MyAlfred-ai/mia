@@ -272,6 +272,8 @@ final class ScheduledTask
                 'description' => (string)($kb['description'] ?? ''),
                 'reason'      => $reason !== null ? t($reason) : null,
                 'live'        => KnowledgeBase::isRemote($kb),
+                'table'       => KnowledgeBase::isTable($kb),
+                'rows'        => (int)($kb['table_rows'] ?? 0),
                 'docs'        => (int)($kb['doc_count'] ?? 0),
                 'shared'      => !empty($kb['is_shared']),
             ];
@@ -467,9 +469,14 @@ final class ScheduledTask
     {
         $jours = 'lundi|mardi|mercredi|jeudi|vendredi|samedi|dimanche';
         $days  = 'monday|tuesday|wednesday|thursday|friday|saturday|sunday';
+        // « toutes les deux semaines », « tous les 15 jours », « every two weeks ».
+        $n     = '\d+|deux|trois|quatre|cinq|six|sept|huit|neuf|dix|douze|quinze|vingt';
+        $nEn   = '\d+|two|three|four|five|six|seven|eight|nine|ten|twelve|fifteen';
         return [
             'chaque\s+(?:' . $jours . '|jour|matin|midi|soir|nuit|semaine|quinzaine|mois|trimestre|semestre|ann[ée]e|d[ée]but|fin|1er|premier|dernier|week-?end)',
-            'tou(?:te)?s\s+les\s+(?:(?:' . $jours . ')s?|jours|matins|midis|soirs|nuits|semaines|quinze\s+jours|mois|trimestres|ans|ann[ée]es|week-?ends|\d+\s+(?:jours|semaines|mois|heures))',
+            'tou(?:te)?s\s+les\s+(?:(?:' . $jours . ')s?|jours|matins|midis|soirs|nuits|semaines|quinze\s+jours|mois|trimestres|ans|ann[ée]es|week-?ends|(?:' . $n . ')\s+(?:jours|semaines|mois|heures))',
+            '(?:une\s+semaine|un\s+(?:' . $jours . '|mois|jour))\s+sur\s+(?:deux|trois|quatre|2|3|4)',
+            '(?:every\s+(?:' . $nEn . ')\s+(?:days|weeks|months|hours)|bi-?weekly|fortnightly)',
             'le\s+(?:1er|premier|dernier(?:\s+jour)?)\s+(?:de\s+chaque|du)\s+mois',
             '(?:every|each)\s+(?:' . $days . '|day|morning|evening|night|week|weekday|weekend|month|quarter|year|\d+\s+(?:days|weeks|months|hours)|other\s+(?:day|week))',
             '(?:daily|weekly|monthly)\s+(?:at|on)',

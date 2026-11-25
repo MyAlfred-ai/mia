@@ -211,19 +211,47 @@ abstract class ConnectorApiService
      */
     protected function apiRaw(string $method, string $url, ?array $body = null, int $timeout = 60): string
     {
+        $type    = '';
+        $payload = '';
+        if ($body !== null) {
+            $type = 'application/json';
+            // `[]` = objet JSON VIDE (`{}`), jamais une liste : c'est le
+            // corps d'une action Graph sans paramètre (`/messages/{id}/send`).
+            // Un POST sans corps n'emporte pas de Content-Length avec le
+            // flux HTTP de PHP, et le front Azure le refuse (411) ; `[]`
+            // encodé tel quel serait un tableau là où l'API attend un objet.
+            $payload = $body === [] ? '{}' : (json_encode($body, JSON_UNESCAPED_UNICODE) ?: '');
+        }
+        return $this->sendAuthorized($method, $url, $type, $payload, $timeout);
+    }
+
+    /**
+     * POST d'un FORMULAIRE (`application/x-www-form-urlencoded`), même
+     * politique que apiRaw (Bearer, 401 → refresh unique, erreurs FR). Pour
+     * les méthodes qui n'acceptent pas sûrement le JSON — les fichiers de
+     * Slack (`files.getUploadURLExternal`).
+     */
+    protected function apiForm(string $url, array $fields, int $timeout = 60): string
+    {
+        return $this->sendAuthorized('POST', $url, 'application/x-www-form-urlencoded', http_build_query($fields), $timeout);
+    }
+
+    /**
+     * Statut HTTP de la dernière réponse (0 = aucune). Le message d'erreur est
+     * présenté en français, sans le corps du fournisseur : l'appelant qui doit
+     * distinguer un conflit (409) d'un abonnement disparu (404) lit ce statut.
+     */
+    protected int $lastHttpStatus = 0;
+
+    /** Le transport authentifié commun à apiRaw et apiForm. */
+    private function sendAuthorized(string $method, string $url, string $type, string $payload, int $timeout): string
+    {
         $token = $this->getValidAccessToken();
 
         for ($attempt = 0; $attempt < 2; $attempt++) {
             $headers = 'Authorization: Bearer ' . $token;
-            $payload = '';
-            if ($body !== null) {
-                $headers .= "\r\nContent-Type: application/json";
-                // `[]` = objet JSON VIDE (`{}`), jamais une liste : c'est le
-                // corps d'une action Graph sans paramètre (`/messages/{id}/send`).
-                // Un POST sans corps n'emporte pas de Content-Length avec le
-                // flux HTTP de PHP, et le front Azure le refuse (411) ; `[]`
-                // encodé tel quel serait un tableau là où l'API attend un objet.
-                $payload  = $body === [] ? '{}' : (json_encode($body, JSON_UNESCAPED_UNICODE) ?: '');
+            if ($type !== '') {
+                $headers .= "\r\nContent-Type: " . $type;
             }
             if (ParallelHttp::active()) {
                 // Sous le planificateur des outils par intention : la requête
@@ -248,6 +276,7 @@ abstract class ConnectorApiService
                 }
             }
 
+            $this->lastHttpStatus = (int)$status;
             if ($response === false) {
                 throw new \RuntimeException(static::API_LABEL . ' injoignable — réessayez dans quelques instants.');
             }

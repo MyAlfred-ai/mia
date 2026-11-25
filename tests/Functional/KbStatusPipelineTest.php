@@ -81,7 +81,7 @@ final class KbStatusPipelineTest extends DatabaseTestCase
         $st = $this->etat($kb);
 
         $this->assertSame(
-            ['total' => 8, 'indexed' => 3, 'no_text' => 1, 'failed' => 1, 'lexical' => 1, 'busy' => 1, 'pending' => 1],
+            ['total' => 8, 'indexed' => 3, 'no_text' => 1, 'failed' => 1, 'lexical' => 1, 'busy' => 1, 'pending' => 1, 'excluded' => 0],
             $st['counts'],
             'Comptes groupés en SQL, classés par la même règle que la liste.'
         );

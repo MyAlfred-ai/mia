@@ -24,6 +24,8 @@ final class PersonalUsage
     public const RING_RADIUS = 40;
     /** Parts au-delà desquelles le reste est regroupé en « Autres ». */
     public const RING_SLICES = 5;
+    /** Ce que « Autres » regroupe : au plus ce nombre de lignes détaillées sous la légende. */
+    public const RING_MEMBERS_SHOWN = 8;
     /** Au plus ce nombre de conseils. */
     public const MAX_TIPS = 3;
 
@@ -100,6 +102,11 @@ final class PersonalUsage
      * de `RING_SLICES`. Chaque part porte son tracé (`dash`, `offset` pour
      * `stroke-dasharray`/`stroke-dashoffset`) et un léger espace entre parts.
      *
+     * « Autres » garde ce qu'il regroupe (`members`, chacun avec sa part) : la
+     * légende le détaille. Sans ce détail, une consommation réelle mais petite
+     * face au reste — Claude dans Office à côté de 75 000 crédits de
+     * conversations — disparaissait de la page.
+     *
      * @param list<array{label:string, value:float|int, color:string}> $items (autres clés conservées)
      * @return array{total:float, slices:list<array>, circumference:float}
      */
@@ -112,18 +119,22 @@ final class PersonalUsage
             $items = array_slice($items, 0, self::RING_SLICES - 1);
             $items[] = [
                 'label' => $othersLabel, 'value' => array_sum(array_map(static fn(array $i): float => (float)$i['value'], $rest)),
-                'color' => $othersColor, 'others' => count($rest),
+                'color' => $othersColor, 'others' => count($rest), 'members' => $rest,
             ];
         }
         $total = array_sum(array_map(static fn(array $i): float => (float)$i['value'], $items));
+        $share = static fn(array $i): float => $total > 0 ? round((float)$i['value'] / $total * 100, 1) : 0.0;
         $c     = 2 * M_PI * self::RING_RADIUS;
         $gap   = count($items) > 1 ? 1.2 : 0.0;
         $acc   = 0.0;
         $slices = [];
         foreach ($items as $i) {
             $len = $total > 0 ? (float)$i['value'] / $total * $c : 0.0;
+            if (isset($i['members'])) {
+                $i['members'] = array_map(static fn(array $m): array => $m + ['share' => $share($m)], $i['members']);
+            }
             $slices[] = $i + [
-                'share'  => $total > 0 ? round((float)$i['value'] / $total * 100, 1) : 0.0,
+                'share'  => $share($i),
                 'dash'   => round(max(0.4, $len - $gap), 2),
                 'offset' => round(-$acc, 2),
             ];
@@ -134,7 +145,8 @@ final class PersonalUsage
 
     /**
      * Coût moyen des actions courantes : une réponse, une image, une recherche
-     * Internet, une minute de voix. Seulement celles qui ont servi.
+     * Internet, une minute de voix, une demande de Claude dans Office.
+     * Seulement celles qui ont servi.
      *
      * @param list<array> $byCategory UsageLog::byCategory()
      * @param list<array> $byTool     UsageLog::byTool()
@@ -161,6 +173,20 @@ final class PersonalUsage
         $voice = $cats[UsageSource::CAT_VOICE] ?? null;
         if ($voice !== null && (float)$voice['quantity'] > 0 && (int)$voice['credits'] > 0) {
             $out['minute'] = (int)round($voice['credits'] / $voice['quantity']);
+        }
+        // Une demande de Claude dans Office, recherches comprises : tout ce
+        // que la catégorie a coûté, rapporté aux demandes (lignes de jetons).
+        $office = $cats[UsageSource::CAT_OFFICE] ?? null;
+        if ($office !== null && (int)$office['credits'] > 0) {
+            $asks = 0;
+            foreach ($office['sources'] ?? [] as $s) {
+                if (($s['source'] ?? '') === UsageSource::OFFICE_ADDIN) {
+                    $asks += (int)($s['requests'] ?? 0);
+                }
+            }
+            if ($asks > 0) {
+                $out['office'] = (int)round($office['credits'] / $asks);
+            }
         }
         return $out;
     }

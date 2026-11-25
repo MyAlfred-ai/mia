@@ -95,11 +95,15 @@ final class PlusMenuLayoutTest extends TestCase
         $this->assertStringContainsString('.plus-menu-panel .plus-menu-hint { display: none; }', $css);
         foreach ([
             '.plus-menu-panel .tool-picker-item.is-disabled .plus-menu-hint',
-            '.plus-menu-panel .plus-menu-row.needs-reconnect .plus-menu-hint',
             '.plus-menu-panel .plus-menu-row.is-blocked .plus-menu-hint { display: block; }',
         ] as $regle) {
             $this->assertStringContainsString($regle, $css);
         }
+        // Une connexion expirée porte sa PASTILLE : son texte vient en bulle,
+        // jamais en ligne toujours visible (2026-11-14).
+        $this->assertStringNotContainsString('.plus-menu-panel .plus-menu-row.needs-reconnect .plus-menu-hint', $css);
+        $tpl = self::lire('templates/chat/index.php');
+        $this->assertStringContainsString("ConnectorRegistry::reconnectDot([\$c['key']], t('Connexion expirée — cliquer pour reconnecter'))", $tpl);
         $this->assertStringContainsString("c.row.classList.toggle('is-blocked', blocked);", self::lire('public/assets/js/chat.js'));
         // display:flex des lignes l'emporterait sur [hidden].
         $this->assertStringContainsString('.plus-menu-fold-body[hidden] { display: none !important; }', $css);
@@ -115,8 +119,10 @@ final class PlusMenuLayoutTest extends TestCase
         // Le résumé est recalculé partout où les indicateurs le sont (chaque bascule).
         $indicateurs = substr($js, (int)strpos($js, 'const syncOptionIndicators = () => {'), 4000);
         $this->assertStringContainsString('syncConnectorSummary();', $indicateurs);
-        // Le point ambre ne parle plus que d'Internet coupé et des connexions à reconnecter.
-        $this->assertStringContainsString('if (optionsDot) optionsDot.hidden = webOn && reconnectRows.length === 0;', $js);
+        // Le point ambre ne parle plus que des connexions à reconnecter : Internet
+        // coupé se lit dans la puce des sources (le globe en sort).
+        $this->assertStringContainsString('if (optionsDot) optionsDot.hidden = reconnectRows.length === 0;', $js);
+        $this->assertStringNotContainsString('optionsDot.hidden = webOn', $js);
         // La puce est hors de #plusMenu : sans stopPropagation, le menu se refermerait aussitôt.
         $puce = substr($js, (int)strpos($js, "connChip?.addEventListener('click'"), 600);
         $this->assertStringContainsString('e.stopPropagation();', $puce);
@@ -127,9 +133,37 @@ final class PlusMenuLayoutTest extends TestCase
         $this->assertStringContainsString('miaUiZoom', $reveal);
 
         $client = (array)(require ROOT . '/lang/en.client.php');
-        foreach (['{n} sur {total}', '{n} relié', '{n} reliés', 'Connecteurs allumés : {liste}', 'ouvrir les connecteurs', 'Laisser MIA choisir'] as $cle) {
+        foreach (['{n} sur {total}', '{n} relié', '{n} reliés', 'Sources actives : {liste}', 'ouvrir le menu', 'Laisser MIA choisir'] as $cle) {
             $this->assertArrayHasKey($cle, $client, $cle);
         }
+    }
+
+    /**
+     * Retour utilisateur (2026-11-04) : couper la Recherche Internet allumait un
+     * point ambre sur le « × » du menu, sans rien dire ; elle doit se lire à côté
+     * des connecteurs. La puce montre donc les SOURCES allumées, le globe en tête.
+     */
+    public function testLaPuceMontreLaRechercheInternetEnTete(): void
+    {
+        $js = self::lire('public/assets/js/chat.js');
+        $fn = substr($js, (int)strpos($js, 'function syncConnectorSummary() {'), 4200);
+        // Allumée ET proposée : la ligne absente (masquée par l'admin) n'y entre jamais.
+        $this->assertStringContainsString("const webRow = document.getElementById('plusMenuWebRow');", $js);
+        $this->assertStringContainsString('const webOn  = !!(webRow && webToggle && webToggle.checked);', $fn);
+        // Le globe vient de la ligne du menu (une seule source de dessin), en tête.
+        $this->assertStringContainsString("webRow.querySelector('.plus-menu-icon svg')", $fn);
+        $this->assertStringContainsString('chipPieces.unshift(copie);', $fn);
+        // Internet seul suffit à montrer la puce ; elle compte le globe, sur téléphone aussi.
+        $this->assertStringContainsString('connChip.hidden = chipPieces.length === 0;', $fn);
+        $this->assertStringContainsString('const others = chipPieces.length - 1 + Math.max(extra, 0);', $fn);
+        $this->assertStringContainsString('btn.dataset.count = String(chipPieces.length + Math.max(extra, 0));', $fn);
+        // Sans volet (aucun connecteur relié), la puce dit encore Internet.
+        $this->assertStringNotContainsString('if (!foldBody) { if (connChip) connChip.hidden = true; return; }', $fn);
+        // Le nom vient de la ligne (traduit par le serveur), en tête de la liste.
+        $this->assertStringContainsString("noms.unshift((webRow.querySelector('.plus-menu-info strong')?.textContent || '').trim());", $fn);
+        $this->assertStringContainsString("t('Sources actives : {liste}'", $fn);
+        // Le globe a la taille des logos.
+        $this->assertStringContainsString(".composer-connectors-chip img,\n.composer-connectors-chip svg { width: 14px; height: 14px; flex-shrink: 0; }", self::lire('public/assets/css/main.css'));
     }
 
     public function testLesConsignesDeMiaCitentLeMenuTelQuIlEst(): void

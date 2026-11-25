@@ -30,7 +30,10 @@ actions](conditions-validations-actions.md).
    s'ouvrent côte à côte sous la décision, de même largeur, chacune de sa couleur, avec son numéro
    et son nom en tête. Trois voies ou plus élargissent le rail ; s'il ne tient pas à l'écran, il
    défile de côté.
-5. **Si MIA ne sait pas choisir** : **Me demander** (par défaut), ou une voie à prendre sans
+5. **Ce que MIA sait de nous** (facultatif) : cochez les bases de connaissances où sont votre offre,
+   vos références ou vos règles. MIA lit toujours la présentation de l'entreprise (Organisation →
+   Entreprise) ; les bases cochées lui donnent en plus les extraits utiles à ce choix.
+6. **Si MIA ne sait pas choisir** : **Me demander** (par défaut), ou une voie à prendre sans
    attendre.
 
 ## Ce qu'il faut savoir
@@ -40,8 +43,8 @@ actions](conditions-validations-actions.md).
   dans le détail de la brique.
 - **Quand MIA hésite et qu'elle vous demande**, le workflow attend : la page de l'exécution vous
   montre ce qu'elle a vu et **toutes les voies**, la plus proche signalée ; un clic choisit. Dans la
-  conversation, la carte prend la voie la plus proche (**Approuver**) ou arrête le workflow
-  (**Annuler**). Le détail de la brique dit ensuite que la voie a été **choisie par vous**.
+  conversation, la carte prend la voie la plus proche (**Approuver**), une autre voie (**Prendre une
+  autre voie**, chaque voie a son bouton) ou arrête le workflow (**Annuler**). Le détail de la brique dit ensuite que la voie a été **choisie par vous**.
 - **Une pièce remise dans une voie** n'est disponible après la décision que si toutes les autres
   voies arrêtent le workflow — sinon, rien ne garantit qu'elle existe.
 - Une voie ne contient ni décision, ni condition, ni boucle. Une décision ne s'ignore pas en cas

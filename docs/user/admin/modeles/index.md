@@ -37,8 +37,8 @@ Jan — se déclare librement.
 | Capacité | Disponible avec |
 |---|---|
 | Connecteurs, et outils appelés par un assistant | Tous les éditeurs sauf Perplexity ; quelques modèles en sont exclus (leur fiche le dit), le LLM local seulement si vous le déclarez capable |
-| Recherche Internet | OpenAI, Anthropic, Mistral, Gemini, Perplexity |
-| Recherche Internet et outils dans la même réponse | OpenAI, Anthropic, Gemini ; avec Mistral, les outils engagés passent avant la recherche |
+| Recherche Internet | OpenAI, Anthropic, Mistral, Gemini, Perplexity, DeepSeek |
+| Recherche Internet et outils dans la même réponse | OpenAI, Anthropic, Gemini ; avec Mistral et DeepSeek, les outils engagés passent avant la recherche |
 | Images et PDF joints | Les modèles marqués vision et fichiers ; ceux marqués vision seulement (DeepSeek, certains modèles GLM et Kimi) lisent les images mais pas les PDF ; le LLM local lit le texte seul |
 
 **Le modèle par défaut** sert aux nouvelles conversations, à l'assistant d'aide, au découpage des
@@ -47,8 +47,8 @@ documents des bases de connaissances et à l'aide à la rédaction des consignes
 **Les connecteurs sur tous les éditeurs.** DeepSeek, Kimi, GLM, Mistral, Gemini et le LLM local
 pilotent eux aussi les connecteurs et les outils des assistants. Restent à l'écart : Perplexity (son
 API n'en offre pas) et les modèles Gemini 2.5 (ils ne savent pas chercher sur Internet en même
-temps). Avec Mistral, quand un connecteur ou un outil d'assistant est engagé, la recherche
-Internet est mise de côté pour cette réponse, et la réponse le dit.
+temps). Avec Mistral et DeepSeek, quand un connecteur ou un outil d'assistant est engagé, la
+recherche Internet est mise de côté pour cette réponse, et la réponse le dit.
 
 **Le modèle de secours** prend le relais quand un modèle échoue **avant son premier mot** — panne,
 surcharge, saturation, délai dépassé, ou compte de l'éditeur sans crédit. Il garde les connecteurs
@@ -69,11 +69,13 @@ modèle seul : voir [Tester les modèles](tester-les-modeles.md).
 
 ## Configurer
 
+![La page Fournisseurs et modèles de l'administration. En haut, la carte Qui répond par défaut : les conversations sans assistant vont à Claude Opus 5, et GPT-5.6 prend le relais en cas de panne. Dessous, une carte par fournisseur : OpenAI, Anthropic et Mistral connectés, avec le début de leur clé et leurs modèles proposés ; Perplexity, Gemini, DeepSeek, Kimi et GLM à connecter, chacun avec son champ Coller la clé API ; et le LLM local, non configuré.](../../images/fournisseurs-et-modeles.png)
+
 | Réglage | Où | Effet | Page |
 |---|---|---|---|
-| Clés des éditeurs, LLM local | Modèles IA → **Clés API** | Rend un éditeur utilisable | [Enregistrer les clés API](enregistrer-les-cles-api.md) |
-| Activation des modèles | Modèles IA → **Modèles** | Les modèles proposables | [Activer les modèles](activer-les-modeles.md) |
-| **LLM par défaut**, **LLM de secours** | Modèles IA → **Modèles**, carte **Comportement par défaut** | Le démarrage, la continuité | [Régler le comportement par défaut](regler-le-comportement-par-defaut.md) |
+| Clés des éditeurs, LLM local | Modèles IA → **Fournisseurs et modèles** | Rend un éditeur utilisable | [Enregistrer les clés API](enregistrer-les-cles-api.md) |
+| Activation des modèles | Modèles IA → **Fournisseurs et modèles** | Les modèles proposables | [Activer les modèles](activer-les-modeles.md) |
+| **LLM par défaut**, **LLM de secours** | Modèles IA → **Fournisseurs et modèles**, carte **Qui répond par défaut** | Le démarrage, la continuité | [Régler le comportement par défaut](regler-le-comportement-par-defaut.md) |
 | **Vocabulaire de l'entreprise** | Organisation → **Entreprise** | Le jargon maison | [Présenter l'entreprise](../instance/presenter-l-entreprise.md) |
 | Vérification de chaque modèle | Modèles IA → **Tests** | La preuve que tout répond | [Tester les modèles](tester-les-modeles.md) |
 | Pannes et refus d'un modèle | Dans les conversations, encadré ⚠️ | Ce que lit l'utilisateur, ce que vous avez à faire | [Réagir à une erreur de modèle](reagir-a-une-erreur-de-modele.md) |
@@ -96,7 +98,7 @@ sélecteur, gratuit en crédits, en texte seul, sans recherche Internet ; les co
 vous le déclarez capable d'appeler des outils.
 
 **Un éditeur peut fermer ou arrêter un modèle.** Un modèle qu'un éditeur réserve à ses clients
-existants le dit dans sa colonne **Limites** de **Modèles activés**. Un arrêt annoncé porte le badge
+existants le dit sous son nom, dans le panneau de son fournisseur (**Fournisseurs et modèles**). Un arrêt annoncé porte le badge
 **Arrêt le …** et le remplaçant désigné ; une pastille le rappelle tant que le modèle est activé.
 Le jour de l'arrêt, MIA le retire du sélecteur, et ce qui l'utilisait — conversations, assistants,
 modèle par défaut — passe sur le modèle par défaut : voir [Activer les
@@ -110,8 +112,8 @@ qui prend la relève.
 ## Vérifier que tout fonctionne
 
 1. **Tests → Lancer tous les tests** : chaque modèle activé doit répondre.
-2. **Comportement par défaut** : les badges **Défaut** et **Secours** apparaissent dans **Modèles
-   activés**.
+2. **Qui répond par défaut** : les badges **Par défaut** et **Secours** apparaissent dans le panneau
+   de leur fournisseur.
 3. Avec un compte **non administrateur** du groupe ★ Par défaut : le sélecteur montre les modèles
    attendus, et une question reçoit une réponse.
 

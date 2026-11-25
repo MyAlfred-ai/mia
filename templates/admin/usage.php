@@ -97,7 +97,12 @@
     };
 ?>
 <div class="admin-content">
-    <h1><?= te('Consommation') ?></h1>
+    <?php require ROOT . '/templates/partials/admin-topbar.php'; ?>
+    <header class="page-head">
+    <div class="page-head-text">
+        <h1><?= te('Consommation') ?></h1>
+    </div>
+    </header>
     <?php if (!empty($success)): ?>
         <div class="card" style="border-color:#16a34a;margin-bottom:12px;color:#bbf7d0">
             <?= htmlspecialchars($success) ?>

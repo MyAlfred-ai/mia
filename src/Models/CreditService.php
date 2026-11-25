@@ -40,6 +40,14 @@ class CreditService
     /** Ratio par défaut input cache write / input full price (1.25 — convention Anthropic). */
     public const DEFAULT_CACHE_WRITE_RATIO = 1.25;
 
+    /**
+     * Écriture de cache d'une HEURE (Anthropic, `cache_control.ttl: "1h"`) :
+     * 2× l'entrée pleine, contre 1,25× pour les 5 minutes (page Pricing
+     * d'Anthropic, relue le 2026-11-08). MIA n'en demande jamais ; un client
+     * de la passerelle Office peut le faire.
+     */
+    public const CACHE_WRITE_1H_RATIO = 2.0;
+
     /** Taux 1 EUR → USD par défaut (le même que l'écran Crédits). */
     public const DEFAULT_FX_RATE_EUR_USD = 1.08;
 
@@ -108,6 +116,12 @@ class CreditService
      * Crédits + coût réel d'un appel LLM, composante par composante (input
      * plein tarif, output, cache lu, cache écrit, raisonnement).
      *
+     * `$tokensInCacheWrite1h` : la part de `$tokensInCacheWrite` écrite pour
+     * une heure, au tarif de CACHE_WRITE_1H_RATIO × l'entrée pleine.
+     * `$priceFactor` : multiplicateur de prix que le fournisseur applique à
+     * TOUS les jetons de l'appel (mode rapide, inférence aux États-Unis…),
+     * jamais aux sessions de conteneur.
+     *
      * @return array{
      *   total_credits:int, cost_eur:float, billed_eur:float, priced:bool,
      *   components:array<string, array{tokens:int, cost_eur:float, catalog_key:string}>
@@ -121,7 +135,9 @@ class CreditService
         int $tokensInCacheWrite = 0,
         int $tokensOutReasoning = 0,
         array $longContext = [],
-        int $containers = 0
+        int $containers = 0,
+        int $tokensInCacheWrite1h = 0,
+        float $priceFactor = 1.0
     ): array {
         $config = self::config();
         [$provider, $model] = self::splitLlmKey($llmKey);
@@ -152,12 +168,15 @@ class CreditService
         $normalWrite    = $tokensInCacheWrite - $long['input_cache_write'];
         $normalOut      = $tokensOut - $long['output'];
         $normalReason   = $tokensOutReasoning - $long['output_reasoning'];
+        // Écriture d'une heure : une part de l'écriture, jamais plus.
+        $write1h = min(max(0, $normalWrite), max(0, $tokensInCacheWrite1h));
         $parts = [
             'input'             => max(0, $normalIn - $normalCached - $normalWrite),
             'output'            => max(0, $normalOut - $normalReason),
             'input_cached'      => max(0, $normalCached),
-            'input_cache_write' => max(0, $normalWrite),
+            'input_cache_write' => max(0, $normalWrite - $write1h),
             'output_reasoning'  => max(0, $normalReason),
+            'input_cache_write_1h' => $write1h,
         ];
 
         // Tarifs de référence : input plein et output. Les trois variantes
@@ -176,6 +195,9 @@ class CreditService
                 ?? self::ratioOf($inputTariff, self::DEFAULT_CACHE_WRITE_RATIO, 'input_cache_write'),
             'output_reasoning'  => self::resolveLlmTariff($config, $provider, $model, $llmKey, 'output_reasoning')
                 ?? self::ratioOf($outputTariff, 1.0, 'output_reasoning'),
+            // Toujours dérivée de l'entrée pleine : aucun écran ni catalogue
+            // ne déclare ce tarif à part.
+            'input_cache_write_1h' => self::ratioOf($inputTariff, self::CACHE_WRITE_1H_RATIO, 'input_cache_write_1h'),
         ];
 
         $components = [];
@@ -205,6 +227,15 @@ class CreditService
                 $ratio   = str_starts_with($direction, 'input') ? $rule['input_ratio'] : $rule['output_ratio'];
                 $service = self::ratioOf($tariffs[$direction], $ratio, $direction . '_long');
                 $components[$direction . '_long'] = self::component($service, self::tokenQuantity($service, $tokens), $tokens);
+            }
+        }
+
+        // Multiplicateur du fournisseur sur tous les jetons (mode rapide,
+        // inférence localisée) : coût réel ET assiette de la marge.
+        if ($priceFactor > 0.0 && abs($priceFactor - 1.0) > 1e-9) {
+            foreach ($components as $key => $c) {
+                $components[$key]['cost_eur']     = (float)$c['cost_eur'] * $priceFactor;
+                $components[$key]['weighted_eur'] = (float)$c['weighted_eur'] * $priceFactor;
             }
         }
 
@@ -370,23 +401,25 @@ class CreditService
 
     /**
      * Crédits + coût réel de minutes de transcription audio (dictée vocale).
-     * Tarif : service `transcribe:openai::{model}` (unité `audio_minute`)
-     * sinon `transcription_pricing_usd_per_minute` du catalogue LLM.
+     * Tarif : service `transcribe:{provider}::{model}` (unité `audio_minute`)
+     * sinon `transcription_pricing_usd_per_minute` du catalogue LLM de ce
+     * fournisseur (OpenAI Realtime, ou Mistral pour Voxtral).
      *
      * @return array{total_credits:int, cost_eur:float, billed_eur:float, priced:bool, components:array}
      */
-    public static function computeTranscriptionCredits(string $model, float $minutes): array
+    public static function computeTranscriptionCredits(string $model, float $minutes, string $provider = 'openai'): array
     {
-        $config  = self::config();
-        $model   = trim($model);
-        $minutes = max(0.0, $minutes);
+        $config   = self::config();
+        $model    = trim($model);
+        $minutes  = max(0.0, $minutes);
+        $provider = strtolower(trim($provider)) ?: 'openai';
 
         $components = [];
         if ($minutes > 0) {
-            $service = self::findByCatalogKey($config['services'], 'transcribe:openai::' . $model, true)
-                ?? self::findByCatalogKey($config['services'], 'transcribe:openai::' . $model, false);
+            $service = self::findByCatalogKey($config['services'], 'transcribe:' . $provider . '::' . $model, true)
+                ?? self::findByCatalogKey($config['services'], 'transcribe:' . $provider . '::' . $model, false);
             if (!self::hasPrice($service)) {
-                $service = self::catalogTranscriptionTariff($model) ?? $service;
+                $service = self::catalogTranscriptionTariff($model, $provider) ?? $service;
             }
             $components['transcription'] = self::component($service, $minutes, (int)ceil($minutes));
         }
@@ -395,29 +428,39 @@ class CreditService
     }
 
     /**
-     * Crédits + coût réel de minutes de lecture à voix haute (conversation
-     * vocale). Tarif : service `speech:openai::{model}` (unité `audio_minute`)
-     * sinon `speech_pricing_usd_per_minute` du catalogue LLM.
+     * Crédits + coût réel d'une lecture à voix haute (conversation vocale).
+     * Tarif : service `speech:{provider}::{model}` sinon le catalogue LLM du
+     * fournisseur — `speech_pricing_usd_per_minute` (OpenAI : la minute
+     * d'audio produite, mesurée) ou `speech_pricing_usd_per_1m_chars`
+     * (Mistral : Voxtral est facturé au caractère lu). La quantité suit
+     * l'UNITÉ du tarif retenu : `1m_characters` → caractères / 1 000 000,
+     * sinon les minutes.
      *
      * @return array{total_credits:int, cost_eur:float, billed_eur:float, priced:bool, components:array}
      */
-    public static function computeSpeechCredits(string $model, float $minutes): array
+    public static function computeSpeechCredits(string $model, float $minutes, string $provider = 'openai', int $chars = 0): array
     {
-        $config  = self::config();
-        $model   = trim($model);
-        $minutes = max(0.0, $minutes);
+        $config   = self::config();
+        $model    = trim($model);
+        $minutes  = max(0.0, $minutes);
+        $chars    = max(0, $chars);
+        $provider = strtolower(trim($provider)) ?: 'openai';
+        $consumed = $minutes > 0 || $chars > 0;
 
         $components = [];
-        if ($minutes > 0) {
-            $service = self::findByCatalogKey($config['services'], 'speech:openai::' . $model, true)
-                ?? self::findByCatalogKey($config['services'], 'speech:openai::' . $model, false);
+        if ($consumed) {
+            $service = self::findByCatalogKey($config['services'], 'speech:' . $provider . '::' . $model, true)
+                ?? self::findByCatalogKey($config['services'], 'speech:' . $provider . '::' . $model, false);
             if (!self::hasPrice($service)) {
-                $service = self::catalogSpeechTariff($model) ?? $service;
+                $service = self::catalogSpeechTariff($model, $provider) ?? $service;
             }
-            $components['speech'] = self::component($service, $minutes, (int)ceil($minutes));
+            $perChars = ($service['unit'] ?? '') === self::UNIT_1M_CHARACTERS;
+            $components['speech'] = $perChars
+                ? self::component($service, $chars / 1000000, $chars)
+                : self::component($service, $minutes, (int)ceil($minutes));
         }
 
-        return self::settle($components, $config['global'], $minutes > 0);
+        return self::settle($components, $config['global'], $consumed);
     }
 
     /**
@@ -597,12 +640,12 @@ class CreditService
     }
 
     /** Tarif curé d'une minute de transcription (USD / minute → EUR), ou null. */
-    private static function catalogTranscriptionTariff(string $model): ?array
+    private static function catalogTranscriptionTariff(string $model, string $provider = 'openai'): ?array
     {
         if (!class_exists('LlmCatalog')) {
             return null;
         }
-        $table = LlmCatalog::provider('openai')['transcription_pricing_usd_per_minute'] ?? null;
+        $table = LlmCatalog::provider($provider)['transcription_pricing_usd_per_minute'] ?? null;
         if (!is_array($table)) {
             return null;
         }
@@ -610,24 +653,39 @@ class CreditService
         if (!is_numeric($usd)) {
             return null;
         }
-        return self::virtualService('catalog:transcribe:openai::' . $model, 'audio_minute', self::usdToEur((float)$usd));
+        return self::virtualService('catalog:transcribe:' . $provider . '::' . $model, 'audio_minute', self::usdToEur((float)$usd));
     }
 
-    /** Tarif curé d'une minute de synthèse vocale (USD / minute → EUR), ou null. */
-    private static function catalogSpeechTariff(string $model): ?array
+    /** Unité d'un tarif facturé au texte (Voxtral TTS : USD par million de caractères). */
+    public const UNIT_1M_CHARACTERS = '1m_characters';
+
+    /**
+     * Tarif curé de la lecture à voix haute : à la minute d'audio
+     * (`speech_pricing_usd_per_minute`), sinon au million de caractères
+     * (`speech_pricing_usd_per_1m_chars`) — USD → EUR. Null sans tarif.
+     */
+    private static function catalogSpeechTariff(string $model, string $provider = 'openai'): ?array
     {
         if (!class_exists('LlmCatalog')) {
             return null;
         }
-        $table = LlmCatalog::provider('openai')['speech_pricing_usd_per_minute'] ?? null;
-        if (!is_array($table)) {
-            return null;
+        $cat   = LlmCatalog::provider($provider);
+        $key   = 'catalog:speech:' . $provider . '::' . $model;
+        $table = $cat['speech_pricing_usd_per_minute'] ?? null;
+        if (is_array($table)) {
+            $usd = $table[$model] ?? ($table['default'] ?? null);
+            if (is_numeric($usd)) {
+                return self::virtualService($key, 'audio_minute', self::usdToEur((float)$usd));
+            }
         }
-        $usd = $table[$model] ?? ($table['default'] ?? null);
-        if (!is_numeric($usd)) {
-            return null;
+        $table = $cat['speech_pricing_usd_per_1m_chars'] ?? null;
+        if (is_array($table)) {
+            $usd = $table[$model] ?? ($table['default'] ?? null);
+            if (is_numeric($usd)) {
+                return self::virtualService($key, self::UNIT_1M_CHARACTERS, self::usdToEur((float)$usd));
+            }
         }
-        return self::virtualService('catalog:speech:openai::' . $model, 'audio_minute', self::usdToEur((float)$usd));
+        return null;
     }
 
     /**
@@ -640,7 +698,7 @@ class CreditService
      * réellement « non tarifée »).
      *
      * `unit` = unité du prix (`1m_tokens`, `request`, `audio_minute`,
-     * `image_generated`, `video_second`).
+     * `1m_characters`, `image_generated`, `video_second`).
      *
      * @return array{eur: float, unit: string}|null
      */
@@ -657,10 +715,10 @@ class CreditService
             $tariff = self::catalogEmbeddingTariff(strtolower($m[1]), $m[2]);
         } elseif (preg_match('/^websearch:([a-z0-9_.-]+)$/i', $key, $m) === 1) {
             $tariff = self::catalogWebSearchTariff(strtolower($m[1]));
-        } elseif (preg_match('/^transcribe:openai::(.+)$/', $key, $m) === 1) {
-            $tariff = self::catalogTranscriptionTariff($m[1]);
-        } elseif (preg_match('/^speech:openai::(.+)$/', $key, $m) === 1) {
-            $tariff = self::catalogSpeechTariff($m[1]);
+        } elseif (preg_match('/^transcribe:([a-z0-9_.-]+)::(.+)$/i', $key, $m) === 1) {
+            $tariff = self::catalogTranscriptionTariff($m[2], strtolower($m[1]));
+        } elseif (preg_match('/^speech:([a-z0-9_.-]+)::(.+)$/i', $key, $m) === 1) {
+            $tariff = self::catalogSpeechTariff($m[2], strtolower($m[1]));
         } elseif (preg_match('/^tool:(\d+)$/', $key, $m) === 1 && class_exists('ChatTool')) {
             $tool = ChatTool::findById((int)$m[1]);
             $pricing = $tool !== null ? self::catalogToolPricing((string)($tool['type'] ?? ''), (string)($tool['model'] ?? '')) : null;

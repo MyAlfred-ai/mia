@@ -11,6 +11,17 @@ class GeminiAdapter implements LLMInterface
     private const API_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/models/';
 
     /**
+     * Les requêtes NE SONT PAS conservées chez Google. Depuis le 26/10/2026,
+     * un projet payant créé à partir de cette date conserve par défaut
+     * `generateContent` et `streamGenerateContent` (`store=true`, journaux
+     * gardés 55 jours) ; un projet plus ancien ne les conserve pas. Le champ
+     * de la requête prime sur le réglage du projet (« Logs and datasets »,
+     * relu le 2026-11-10) : MIA garde ainsi le comportement d'avant, quelle
+     * que soit la date de création de la clé.
+     */
+    private const STORE_REQUESTS = false;
+
+    /**
      * La recherche Google a été refusée À CÔTÉ des outils pendant ce process
      * (400 qui la vise) : les boucles suivantes partent sans, et le disent au
      * modèle, sans payer un 400 par message. Statique (worker long-vivant).
@@ -88,10 +99,14 @@ class GeminiAdapter implements LLMInterface
         $errorSent = false; // une erreur a-t-elle déjà été émise ?
         $finish    = null;  // finishReason du candidat, ou blockReason de la demande
 
-        while (!feof($stream)) {
-            $line = fgets($stream);
-            if ($line === false) continue;
-
+        // Silence surveillé : un modèle qui raisonne longtemps (Gemini 4
+        // Argon) peut ne rien écrire pendant des minutes — sans battement, le
+        // job passerait pour mort au bout de 120 s (cf. readSseLine).
+        stream_set_timeout($stream, LlmAdapterHelpers::SILENCE_TICK_SEC);
+        $pending = '';
+        $stalled = false;
+        $stopped = false;
+        while (($line = LlmAdapterHelpers::readSseLine($stream, $pending, $stalled, $stopped)) !== null) {
             if (!str_starts_with($line, 'data: ')) {
                 if (LlmAdapterHelpers::isSseNoise($line)) continue;
                 $rawBuffer .= $line;
@@ -176,6 +191,12 @@ class GeminiAdapter implements LLMInterface
         $tokens = self::tokensFromUsage($usage);
 
         fclose($stream);
+
+        if ($stalled) {
+            error_log('[GeminiAdapter] Flux abandonné après ' . LlmAdapterHelpers::SILENCE_MAX_SEC . ' s de silence | model=' . $this->model);
+            $onChunk(self::stalledChunk());
+            $errorSent = true;
+        }
 
         // Erreur restée en tampon, arrêt anormal (plafond de sortie atteint —
         // la réflexion seule peut l'épuiser —, filtre de sécurité, demande
@@ -339,7 +360,7 @@ class GeminiAdapter implements LLMInterface
      */
     private function toolPayload(array $contents, string $systemPrompt, ?float $temperature, array $declarations, bool $withSearch, bool $lastRound): array
     {
-        $payload = ['contents' => $contents];
+        $payload = ['contents' => $contents, 'store' => self::STORE_REQUESTS];
         if ($systemPrompt !== '') {
             $payload['systemInstruction'] = ['parts' => [['text' => $systemPrompt]]];
         }
@@ -435,11 +456,11 @@ class GeminiAdapter implements LLMInterface
         $rawBuffer = '';
         $finish = null;
 
-        while (!feof($stream)) {
-            $line = fgets($stream);
-            if ($line === false) {
-                continue;
-            }
+        stream_set_timeout($stream, LlmAdapterHelpers::SILENCE_TICK_SEC);
+        $pending = '';
+        $stalled = false;
+        $stopped = false;
+        while (($line = LlmAdapterHelpers::readSseLine($stream, $pending, $stalled, $stopped)) !== null) {
             if (!str_starts_with($line, 'data: ')) {
                 if (LlmAdapterHelpers::isSseNoise($line)) {
                     continue;
@@ -521,6 +542,12 @@ class GeminiAdapter implements LLMInterface
             }
         }
         fclose($stream);
+
+        if ($stalled) {
+            error_log('[GeminiAdapter/Outils] Flux abandonné après ' . LlmAdapterHelpers::SILENCE_MAX_SEC . ' s de silence | model=' . $this->model);
+            $onChunk(self::stalledChunk());
+            return $fail();
+        }
 
         if ($rawBuffer !== '' && $text === '' && $calls === []) {
             $msg = LlmAdapterHelpers::errorDetail(json_decode($rawBuffer, true), $rawBuffer, $httpStatus);
@@ -707,6 +734,12 @@ class GeminiAdapter implements LLMInterface
         ) === 1;
     }
 
+    /** Panne présentée quand le flux reste muet au-delà de SILENCE_MAX_SEC (genre « timeout »). */
+    private static function stalledChunk(): string
+    {
+        return '[Erreur Gemini : timeout — aucune donnée reçue depuis ' . LlmAdapterHelpers::SILENCE_MAX_SEC . ' s]';
+    }
+
     /**
      * Corps de la requête GenerateContent.
      *
@@ -716,6 +749,7 @@ class GeminiAdapter implements LLMInterface
     {
         $payload = [
             'contents' => $this->formatMessages($messages),
+            'store'    => self::STORE_REQUESTS,
         ];
 
         if ($systemPrompt !== '') {

@@ -66,6 +66,17 @@ install_cmd() {
   [[ "$output" == *signature* ]]
   ! grep -q ' pull' "$JOURNAL"
   ! grep -q ' up -d' "$JOURNAL"
+  [ ! -e "$K/.env" ]
+}
+
+@test "espace disque insuffisant refuse avant de créer le fichier .env" {
+  # Hors install_cmd : son KIT_ESPACE_LIBRE_MO=10000 passe après les arguments.
+  run env KIT_ESPACE_LIBRE_MO=1 APP_URL=https://mia.example.test \
+    MIA_ADMIN_EMAIL=admin@example.test MIA_ADMIN_PASSWORD=supersecure \
+    bash "$K/install.sh"
+  [ "$status" -eq 1 ]
+  [ ! -e "$K/.env" ]
+  ! grep -q ' pull' "$JOURNAL"
 }
 
 @test "e-mail admin absent refuse avant de créer le fichier .env" {

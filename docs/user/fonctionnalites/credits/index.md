@@ -9,6 +9,8 @@ Le **crédit** est l'unité dans laquelle MIA compte tout ce que vous consommez 
 chaque recherche Internet, chaque image générée. Votre **quota** est le nombre de crédits dont vous
 disposez chaque mois, fixé par votre administrateur.
 
+![La page Usage & crédits : les crédits restants sur un quota de 8 000 ce mois-ci, la barre de consommation et sa suite en hachures, la prévision pour la fin du mois, le rythme par jour et ce qui reste disponible chaque jour. Dessous, Ce qui a consommé vos crédits : trois camemberts, par usage (surtout les conversations), par assistant et par modèle (surtout Claude Opus 5), et le coût moyen d'une réponse, d'une image et d'une recherche Internet.](../../images/usage-et-credits.png)
+
 ## À quoi ça sert
 
 Les services d'IA sont payants, et leurs prix varient d'un facteur cent d'un modèle à l'autre. Le
@@ -22,8 +24,9 @@ qui a consommé votre quota. Votre organisation, elle, maîtrise son budget.
 | Poste | Ce qu'il comprend |
 |---|---|
 | **Conversations** | Les réponses et les régénérations |
-| **Assistance de conversation** | Le titre automatique, la mémorisation sur « souviens-toi », la préparation d'une demande d'image, la recherche dans les bases de connaissances, le résumé du début d'une très longue conversation, la synthèse d'un résultat volumineux, la suite proposée dans la zone de saisie |
+| **Assistance de conversation** | Le titre automatique, la mise à jour de votre mémoire sur « souviens-toi » ou « oublie que », la préparation d'une demande d'image, la recherche dans les bases de connaissances, le résumé du début d'une très longue conversation, la synthèse d'un résultat volumineux, la suite proposée dans la zone de saisie. Ce que MIA apprend d'elle-même pour votre mémoire n'entame pas votre quota |
 | **Recherche Internet** | Chaque recherche effectuée, en plus de la réponse |
+| **Claude dans Office** | Les demandes de l'add-in Claude dans Excel, Word et PowerPoint, quand votre organisation le fait passer par MIA, et ses recherches Internet |
 | **Créations par outil** | Images, vidéos, pages web, itinéraires, présentations |
 | **Voix** | Les minutes dictées ou écoutées, et les minutes lues à voix haute en conversation vocale |
 | **Conception d'assistants** | L'aide à la rédaction des consignes d'un assistant |
@@ -33,6 +36,11 @@ réponse, le tarif du modèle, le nombre d'images. Une conversation longue coût
 message, parce que tout l'historique est relu. Un modèle puissant coûte plus qu'un modèle rapide.
 Les pages lues pendant une recherche Internet comptent comme du texte relu, et une réponse arrêtée
 avec le bouton carré compte ce qu'elle a déjà lu et écrit.
+
+**Un compte de démonstration** reçoit une enveloppe de crédits utilisable une seule fois, à la place
+du quota mensuel : la carte du compte affiche par exemple *12 400 crédits de démo restants sur 50 000*.
+Elle ne se renouvelle pas. Une fois épuisée, MIA ne répond plus, vos conversations restent
+consultables, et un message vous indique à qui écrire pour la suite.
 
 **Le hors quota.** Certaines opérations sont comptées sans être retirées de votre quota : alimenter
 une base de connaissances, tester un outil d'administration. Elles apparaissent à part, marquées
@@ -48,6 +56,7 @@ refusées jusqu'au mois suivant, ou jusqu'à ce qu'un administrateur l'augmente.
 | Vous voulez… | Page |
 |---|---|
 | Savoir où vous en êtes, ce qui a consommé vos crédits, et que faire quand le quota est épuisé | [Suivre sa consommation](suivre-sa-consommation.md) |
+| Retrouver vos opérations des mois passés, les filtrer par origine, type ou modèle, et les exporter | [Suivre sa consommation](suivre-sa-consommation.md), onglet **Historique** |
 
 ## Ce que vous pouvez régler
 

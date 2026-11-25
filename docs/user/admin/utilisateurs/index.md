@@ -48,7 +48,7 @@ qu'on y coche est le socle commun.
 ```mermaid
 flowchart LR
   accTitle: D'où viennent les droits d'un utilisateur
-  accDescr: Un utilisateur appartient au groupe Par défaut et, souvent, à d'autres groupes. Ses droits sont l'union des droits de ses groupes actifs. Son quota est le plus élevé des quotas définis parmi eux, sauf quota individuel, qui prime.
+  accDescr: Un utilisateur appartient au groupe Par défaut et, souvent, à d'autres groupes. Ses droits sont l'union des droits de ses groupes actifs. Son quota est le plus élevé des quotas définis parmi eux et son quota individuel.
   U@{ icon: "concept:utilisateurs", label: "Un utilisateur" } --> GD & GA
   subgraph G ["Ses groupes actifs"]
     GD["★ Par défaut<br>le socle commun"]
@@ -56,7 +56,7 @@ flowchart LR
   end
   GD & GA -- "union" --> DR@{ icon: "concept:permissions", label: "Droits : modèles,<br>assistants, outils" }
   GD & GA -- "le plus élevé<br>des définis" --> QU@{ icon: "concept:credits", label: "Quota mensuel" }
-  QI(["Quota individuel,<br>s'il est renseigné"]) -- "prime" --> QU
+  QI(["Quota individuel,<br>s'il est renseigné"]) -- "compté avec eux" --> QU
 ```
 
 **Les règles qui surprennent**, à connaître avant de configurer :
@@ -65,8 +65,9 @@ flowchart LR
   Si aucun n'en a : membre du seul groupe par défaut, il n'a que le **modèle par défaut** ; membre
   d'un autre groupe actif, il a **tous** les modèles. Un modèle nouvellement activé n'est ajouté à
   aucune liste existante.
-- **Quota** : le quota individuel prime, même plus bas. Sinon, c'est le **plus élevé** des quotas
-  définis parmi ses groupes actifs. Un groupe sans quota ne rend personne illimité.
+- **Quota** : c'est le **plus élevé** des quotas définis — ceux de ses groupes actifs et son quota
+  individuel. Le plus généreux l'emporte toujours : un quota individuel ne limite pas en dessous
+  d'un groupe. Un groupe sans quota ne rend personne illimité.
 - **Connecteurs et dictée** ne se règlent pas par groupe : ils valent pour toute l'instance.
 
 ## Configurer
@@ -78,6 +79,7 @@ flowchart LR
 | Rôle, quota individuel, groupes d'un compte | Personnes → Comptes, **Modifier** | Les droits d'une personne | [Gérer les utilisateurs](gerer-les-utilisateurs.md) |
 | Ce que chaque rôle peut faire, rôles sur mesure | Personnes → Rôles | Les droits d'un métier | [Gérer les rôles](gerer-les-roles.md) |
 | Droits d'accès et quota d'un groupe | Personnes → Groupes | Les droits d'une équipe | [Organiser les groupes](organiser-les-groupes.md) |
+| Compte de démonstration : enveloppe de crédits sans renouvellement, conversion | Personnes → Comptes, **+ Nouvel utilisateur** ou **Modifier** | Faire découvrir MIA à un prospect | [Comptes de démonstration](comptes-de-demonstration.md) |
 
 ## Exemples de configuration
 
@@ -93,8 +95,14 @@ du tableau de bord signalent les demandes ; vous activez au cas par cas.
 quota 5. Groupe *Marketing* : en plus, les outils image et vidéo. Groupe *Direction* : les modèles
 les plus puissants, quota 50.
 
-**Un stagiaire limité.** Quota individuel de 2 sur son compte : il prime sur les 5 du groupe par
-défaut, même si ce dernier est plus généreux.
+**Un stagiaire limité.** Groupe *★ Par défaut* à 2, groupe *Équipe* à 5 pour les salariés : le
+stagiaire, absent d'*Équipe*, reste à 2. Un quota individuel ne sert qu'à **relever** une personne
+au-dessus de ses groupes.
+
+**Une démo pour un prospect.** Un compte à mot de passe, rôle *Créateur*, membre d'un groupe *Démo*
+qui ouvre deux assistants et l'outil image, **Compte de démonstration** coché avec 5 000 crédits. Le
+prospect essaie MIA sans quota qui se renouvelle ; quand ses crédits sont épuisés, la pastille de
+**Personnes → Comptes** vous prévient. Voir [Comptes de démonstration](comptes-de-demonstration.md).
 
 **Déléguer la gestion des comptes.** Un rôle *Responsable des comptes* — **Comptes** et **Groupes**
 cochés dans **Personnes → Rôles** — crée les comptes des nouveaux arrivants et les range dans leurs

@@ -52,8 +52,8 @@ interne**. Cliquer une ligne détaille son calcul.
   - une **très longue requête** suit le tarif majoré de l'éditeur quand il en a un (OpenAI au-delà
     de 272 000 jetons d'entrée, Gemini Pro au-delà de 200 000 : entrée ×2, sortie ×1,5) ; chaque
     étape d'une réponse qui enchaîne des actions est jugée à part, comme l'éditeur le fait ;
-  - la **session de code** que GPT ouvre pour la « Version soignée » d'une présentation ou d'un
-    classeur (tarif d'OpenAI par session) ;
+  - la **session de code** que GPT ouvre pour la « Version soignée » d'une présentation, d'un
+    classeur ou d'un document PDF ou Word (tarif d'OpenAI par session) ;
   - les **recherches Internet**, à l'unité. Celles de Mistral n'ont pas de prix publié : elles
     apparaissent comme **non tarifées** tant que la ligne de recherche web de Mistral n'a pas de
     coût saisi ;
@@ -77,8 +77,14 @@ raisonnement ne se règlent que dans la Vue services —, et **Tarif par outil**
 — outils image et vidéo compris, sauf ceux dont le coût se calcule image par image —, puis, pour le
 reste, une recherche en ligne — qui demande une clé OpenAI ou Perplexity.
 
-- La recherche tourne côté serveur et peut durer **plusieurs minutes** : vous pouvez changer d'écran,
-  elle continue. **Arrêter** l'interrompt.
+- Seul ce que le catalogue ne tarife pas part en ligne, en petits lots menés en même temps : comptez
+  quelques secondes. La recherche tourne côté serveur : vous pouvez changer d'écran, elle continue.
+  **Arrêter** l'interrompt.
+- Rien n'est cherché pour ce qui n'a pas de prix unitaire — modèle local, page web, carte,
+  présentation, Gamma, n8n : la ligne dit sous le coût sur quoi il est compté. Un modèle d'image
+  facturé au jeton voit sa ligne remise à zéro : son coût suit la taille et la qualité de chaque image.
+- Si la recherche en ligne échoue, les prix du catalogue sont enregistrés quand même. Un échec
+  complet affiche sa cause ; une erreur interne renvoie à **Maintenance → Diagnostic → Journaux**.
 - Elle **remplace le coût réel** saisi à la main, garde vos coefficients, note sa source dans le
   commentaire, et passe l'affichage en USD.
 - Pour un modèle du catalogue en tarif de lancement, c'est le **tarif normal** qui est recopié, la

@@ -121,12 +121,29 @@ qui comptent. Voir [Gérer ses conversations](conversations/gerer-ses-conversati
 
 ## Ma session a expiré
 
+Vous restez connecté tant que vous revenez dans MIA au moins une fois tous les **30 jours**, et une
+mise à jour de MIA ne vous déconnecte pas. Après 30 jours sans venir, ou si votre compte a été désactivé,
 MIA le détecte d'elle-même et affiche une fenêtre avec **Se reconnecter**. **Le message en cours
 d'écriture n'est pas perdu** : il est restauré après reconnexion.
 
 ## Puis-je envoyer une image sans texte ?
 
 Oui. Ajouter une consigne reste préférable pour préciser le résultat attendu.
+
+## Où voir ce qui a changé, y compris les anciennes nouveautés ?
+
+Cliquez le **numéro de version**, sous la conversation ou sur la page **À propos** : la fenêtre **Nouveautés** s'ouvre sur
+les vingt plus récentes, rangées par mois. Le bouton **Voir les nouveautés plus anciennes**, en bas de la liste, déroule
+tout l'historique. Les filtres **Nouveautés**, **Améliorations** et **Correctifs** trient la liste, et la recherche
+parcourt aussi l'historique. Ce qui est arrivé depuis votre dernière visite porte **Nouveau pour vous**.
+
+## Qu'est-ce que la fenêtre « Quoi de neuf » et la pastille verte ?
+
+Quand une fonctionnalité importante arrive, une fenêtre **Quoi de neuf** vous la présente à votre prochaine visite :
+un titre, deux phrases, un schéma animé qui la montre sur un exemple concret et un bouton **Aller voir**. Elle ne s'ouvre qu'une seule fois — sur l'ordinateur
+comme sur le téléphone — et ne montre que ce dont vous pouvez vous servir. Fermez-la par **J'ai compris** : une
+**pastille verte** reste sur l'endroit où trouver la nouveauté (une tuile des **Espaces**, le bouton **Réglages** ou **Admin**…) et
+s'éteint dès que vous l'ouvrez. Les améliorations et les correctifs, eux, ne passent que par la fenêtre **Nouveautés**.
 
 ## Une question qui n'est pas ici
 

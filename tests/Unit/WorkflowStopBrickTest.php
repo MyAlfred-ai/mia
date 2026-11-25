@@ -107,7 +107,7 @@ final class WorkflowStopBrickTest extends TestCase
         $lines = WorkflowDraft::railLines($def, ['profiles' => [], 'creations' => []]);
         $stops = array_values(array_filter($lines, static fn($l) => $l['kind'] === 'stop'));
         $this->assertCount(1, $stops, 'Une ligne pour la brique, pas une seconde « fin du workflow ».');
-        $this->assertSame('statut Arrêtée', $stops[0]['sub']);
+        $this->assertSame('Fin du workflow · Arrêtée', $stops[0]['sub']);
         $this->assertStringContainsString('"arreter"', WorkflowDraft::schemaGuide([]));
     }
 

@@ -15,7 +15,9 @@ declare(strict_types=1);
  *     toujours 0 dans un worker CLI, le bouton Stop serait sans effet.
  *
  * Les deux sont remis à null en `finally` — le worker enchaîne les jobs dans
- * le même process, une sonde oubliée arrêterait le job suivant.
+ * le même process, une sonde oubliée arrêterait le job suivant. Même règle
+ * pour la source du texte vu au clic Stop (`setStopTextSource()` : la réponse
+ * enregistrée s'arrête là où l'écran s'est arrêté).
  */
 abstract class ChatJob implements JobHandler
 {
@@ -25,12 +27,17 @@ abstract class ChatJob implements JobHandler
             $ctx->emit($event);
         });
         LlmAdapterHelpers::setStopProbe(static fn(): bool => $ctx->shouldStop());
+        ChatController::setStopTextSource(static function () use ($ctx): ?string {
+            $seq = $ctx->shouldStop() ? $ctx->stopSeq() : null;
+            return $seq !== null ? JobQueue::textSeenUpTo($ctx->jobId(), $seq) : null;
+        });
 
         try {
             $result = $this->execute(new ChatController(), $payload, $ctx);
         } finally {
             ChatController::setEmitSink(null);
             LlmAdapterHelpers::setStopProbe(null);
+            ChatController::setStopTextSource(null);
         }
 
         // `done` est un évènement du flux ET le résultat stocké : un client

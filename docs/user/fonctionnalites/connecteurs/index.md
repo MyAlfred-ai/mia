@@ -9,6 +9,8 @@ Un **connecteur** relie MIA à une source extérieure : votre Google Drive, votr
 Outlook, vos agendas, vos tâches, vos conversations Slack ou Microsoft Teams — et Internet. Une fois allumé, MIA peut y
 chercher, y lire, et préparer des écritures que vous approuvez une à une.
 
+![Le menu + ouvert dans une conversation : Joindre des fichiers en tête, la section Créer avec Image, Page web, Site illustré et Itinéraire et leur coût en crédits, puis les Sources : Recherche Internet allumée, et le volet Connecteurs déplié, où Emails Gmail est allumé à côté de Fichiers Google Drive et Agenda Google. Le logo de Gmail s'affiche à côté du bouton +.](../../images/menu-plus.png)
+
 ## À quoi ça sert
 
 À travailler sur **vos** données sans copier-coller : *« résume le dernier mail de Paul sur le
@@ -22,7 +24,7 @@ devis »*, *« ajoute une conclusion au compte rendu du comité »*, *« qu'ai-j
 1. **Relier** le service, une fois pour toutes, depuis **Réglages → Comptes connectés** : vous autorisez
    MIA auprès de Google ou de Microsoft, avec votre propre compte.
 2. **Allumer** le connecteur dans la conversation, depuis le volet **Connecteurs** du menu **+**,
-   quand vous en avez besoin.
+   quand vous en avez besoin. Un service que vous venez de relier est déjà allumé.
    Il reste allumé pour vos messages suivants et vos nouvelles conversations, sur ce navigateur,
    jusqu'à ce que vous l'éteigniez.
 
@@ -30,7 +32,8 @@ devis »*, *« ajoute une conclusion au compte rendu du comité »*, *« qu'ai-j
 plus à allumer chaque connecteur avant de poser votre question : MIA allume elle-même, pour la
 réponse en cours, un service relié dont votre demande a besoin, et laisse les autres éteints. La pile
 d'actions l'indique (« Activation d'un connecteur — Gmail »), et les écritures restent soumises à
-votre approbation.
+votre approbation. En [conversation vocale](../conversations/converser-a-la-voix.md), ce mode vaut
+d'office quand il est proposé : à la voix, personne n'ouvre le menu **+**.
 
 La **Recherche Internet** fait exception : rien à relier, elle est allumée par défaut.
 
@@ -49,9 +52,9 @@ flowchart TB
 ```
 
 **Si une connexion expire**, MIA vous le dit sans bruit : une **pastille ambre** sur votre avatar, une
-autre sur l'entrée **Comptes connectés** du menu de vos réglages — son infobulle nomme le service —,
-et la ligne du connecteur qui l'annonce dans le menu **+**. Un clic mène à la carte du service, à
-reconnecter ou à retirer :
+autre sur l'entrée **Comptes connectés** du menu de vos réglages, sur la ligne du connecteur dans le
+menu **+**, et sur la carte du service — sa bulle, au survol ou en la touchant, nomme le service. Un
+clic mène à la carte du service, à reconnecter ou à retirer :
 [Relier un service](relier-un-service.md#quand-une-connexion-expire).
 
 **Ce que MIA peut faire, service par service.**
@@ -61,8 +64,8 @@ reconnecter ou à retirer :
 | **Fichiers Google Drive** | Rechercher, lire, parcourir les dossiers | Créer et modifier des Docs et des Sheets, les mettre en forme, dupliquer, renommer, déplacer |
 | **Emails Gmail** | Rechercher et lire vos mails **et leurs pièces jointes** | Préparer un **email**, nouveau ou en réponse, que vous enregistrez en brouillon ou **envoyez** d'un clic |
 | **Emails Outlook** | Rechercher et lire vos mails **et leurs pièces jointes** | Préparer un **email**, nouveau ou en réponse, que vous enregistrez en brouillon ou **envoyez** d'un clic |
-| **Agenda Google** | Consulter vos agendas, trouver un **créneau libre** | Créer un évènement ; les participants sont ajoutés sans invitation envoyée |
-| **Agenda Outlook** | Consulter vos agendas, trouver un **créneau libre** | Créer un évènement, sans participant |
+| **Agenda Google** | Consulter vos agendas, trouver un **créneau libre** | Créer ou modifier une **réunion** : invités, **répétition**, visibilité **privée** ou publique, **disponible** ou occupé — Google Agenda écrit aux invités dès l'approbation, sauf si vous dites de ne pas leur envoyer d'invitation |
+| **Agenda Outlook** | Consulter vos agendas, trouver un **créneau libre** ou une **salle libre** | Créer ou modifier une **réunion** : invités, **salle**, réunion Teams, répétition, rappel — Outlook écrit aux invités dès l'approbation |
 | **Tâches Google** | Lister vos tâches | Ajouter, modifier, cocher, supprimer — suppression désactivable |
 | **Tâches Microsoft To Do** | Lister vos tâches, lire leurs notes et leurs étapes | Ajouter, modifier, cocher, poser un **rappel à une heure** — jamais de suppression |
 | **Messages Slack** | Rechercher, lire un canal, dérouler un fil | Publier un message en votre nom, nouveau ou en réponse — **visible aussitôt** |
@@ -71,9 +74,10 @@ reconnecter ou à retirer :
 
 **Aucun email ne part sans votre clic** : MIA n'a aucun outil d'envoi, seul le bouton **Envoyer** de la
 carte de relecture envoie, après votre confirmation.
-**Aucun fichier n'est jamais supprimé.** Les **pièces jointes** des mails (PDF, Word, Excel, PowerPoint,
-texte) se lisent quand votre question porte dessus ; une image ou un ancien format .doc ne se lit pas,
-et MIA le dit. Un long document se lit **en entier, partie par partie**.
+**Aucun fichier, aucun email, aucun évènement n'est jamais supprimé.** Les **pièces jointes** des mails (PDF, Word, Excel, PowerPoint —
+anciens .doc, .xls et .ppt compris —, OpenDocument, EPUB, emails joints, archives ZIP, et tout fichier texte :
+CSV, JSON, invitation .ics, code…) se lisent quand votre question porte dessus ; une image ne se lit pas, et
+MIA le dit. Un long document se lit **en entier, partie par partie**.
 
 **Les heures sont les vôtres.** Les agendas, et les échéances et rappels de Microsoft To Do, se lisent et s'écrivent à l'heure de votre appareil : un
 évènement demandé « demain à 14 h » est créé à 14 h chez vous, et la carte d'approbation nomme le
@@ -81,10 +85,12 @@ fuseau. Pour un **créneau libre**, MIA tient compte aussi des disponibilités d
 nommez, quand leur agenda lui est visible (même organisation, ou agenda partagé) — sans jamais en
 voir le contenu.
 
-**Deux écritures sont immédiates et sans retour.** Un message Slack approuvé n'est pas un brouillon :
-il **part dans le canal** et devient visible de tous ses membres — MIA ne peut ensuite ni le modifier
-ni le supprimer, et ne voit jamais un canal privé dont vous n'êtes pas membre. Un email **envoyé**
-depuis sa carte part de même, à ses destinataires ; c'est pourquoi le bouton demande confirmation.
+**Trois écritures sont immédiates et sans retour.** Un message Slack ou Teams approuvé n'est pas un
+brouillon : il **part dans le canal** ou la conversation et devient visible de tous — MIA ne peut
+ensuite ni le modifier ni le supprimer, et ne voit jamais un canal privé dont vous n'êtes pas membre.
+Un email **envoyé** depuis sa carte part de même, à ses destinataires ; c'est pourquoi le bouton
+demande confirmation. Une **réunion Outlook avec invités** leur envoie l'**invitation** dès
+l'approbation, et chaque modification les en informe : la carte les nomme avant.
 
 **Toute écriture passe par votre approbation.** MIA ne modifie rien pendant qu'elle répond : elle
 dépose une **carte d'approbation** — l'action exacte, l'objet visé, ses conséquences, un aperçu —,
@@ -105,6 +111,19 @@ dossier Durand ? »* interroge toutes les sources en même temps — mails, Driv
 bases de connaissances — et la réponse cite d'où vient chaque élément. Gmail et Outlook, ou vos deux
 agendas, se consultent aussi d'un seul coup. Une source en panne est nommée ; les autres répondent.
 
+**Un travail complet, sans rien oublier.** Pour une demande qui porte sur **tout** — tous les mails
+d'un client, tous les fichiers d'un dossier, chaque ligne d'un classeur —, MIA range les éléments
+dans une **liste** au lieu de les lire un par un, puis croise, filtre et compte dessus :
+*« quels clients de ce fichier ne m'ont pas écrit depuis septembre ? »*. Les chiffres de sa réponse
+sont comptés, pas estimés, et la liste complète vous est remise en Excel. La table ne s'affiche pas
+dans la conversation : un bouton **« Voir »**, sous la réponse, l'ouvre dans un volet où vous la
+parcourez, la renommez ou la supprimez. Voir
+[Recouper beaucoup d'éléments](recouper-des-sources.md) et
+[Voir, renommer ou supprimer une table](voir-ses-tables.md). Elle peut ensuite **lire chaque ligne**
+(classer, résumer, relever une valeur) et **préparer une action par ligne** — un brouillon, une
+tâche — que vous approuvez en une fois : voir
+[Classer, compléter et agir ligne par ligne](traiter-chaque-ligne.md).
+
 **MIA garde le fil.** Un mail, un document ou un évènement qu'elle vient d'ouvrir peut être désigné
 sans le renommer : *« réponds à ce mail »*, *« ajoute-lui une conclusion »*.
 
@@ -118,9 +137,15 @@ relit ce qu'il a trouvé, et chaque recherche Internet. Voir
 |---|---|
 | Autoriser MIA à accéder à votre Drive, votre messagerie, vos agendas ou vos tâches | [Relier un service](relier-un-service.md) |
 | Faire chercher, lire ou préparer un brouillon dans une conversation | [Utiliser un connecteur](utiliser-un-connecteur.md) |
+| Faire traiter des centaines de mails, de fichiers ou de lignes : tout collecter, croiser, compter, exporter | [Recouper beaucoup d'éléments](recouper-des-sources.md) |
+| Faire classer ou compléter chaque ligne d'une liste, puis préparer un brouillon ou une tâche pour chacune | [Classer, compléter et agir ligne par ligne](traiter-chaque-ligne.md) |
+| Ouvrir une table établie par MIA, la parcourir, la télécharger, la renommer ou la supprimer | [Voir, renommer ou supprimer une table](voir-ses-tables.md) |
+| Faire préparer une réunion Google Agenda — invités, répétition, privée ou publique, disponible ou occupé — ou en modifier une | [Organiser une réunion dans Google Agenda](organiser-une-reunion-google.md) |
+| Faire préparer une réunion Outlook — invités, salle, Teams, répétition — ou en modifier une | [Organiser une réunion dans Outlook](organiser-une-reunion.md) |
 | Résumer un canal Slack, ou y publier un message | [Travailler avec Slack](travailler-avec-slack.md) |
 | Résumer une conversation ou un canal Microsoft Teams, ou y publier un message | [Travailler avec Microsoft Teams](travailler-avec-teams.md) |
 | Faire vérifier une information en ligne | [Rechercher sur Internet](rechercher-sur-internet.md) |
+| Relier Claude à Excel, Word ou PowerPoint avec votre compte MIA, pas à pas, sans compte Claude | [Utiliser Claude dans Excel, Word ou PowerPoint](claude-dans-office.md) |
 
 ## Ce que vous pouvez régler
 
@@ -162,7 +187,18 @@ est le taux du livret A ce mois-ci ? »* — MIA cherche avant de répondre.
 
 **Caser une réunion.** Avec **Agenda Google** : *« trouve une heure libre jeudi ou vendredi avec
 marie@exemple.fr »*. MIA propose des créneaux communs, puis, sur votre accord, prépare l'évènement à
-approuver.
+approuver — Marie invitée.
+
+**Un comité mensuel privé.** Avec **Agenda Google** : *« crée le comité de direction le premier lundi
+de chaque mois à 9 h avec paul@exemple.fr, en privé, jusqu'à fin juin »*. La carte écrit la
+répétition en clair (« chaque mois, le premier lundi du mois jusqu'au 2027-06-30 »), annonce la
+visibilité privée et l'invitation de Paul. Plus tard : *« ajoute Carla à toutes les séances »*.
+
+**Lancer un point d'équipe récurrent.** Avec **Agenda Outlook** : *« organise un point Teams chaque
+mardi à 10 h avec sophie.bernard@example.com et julien.moreau@example.com, jusqu'à fin
+janvier »*. La carte nomme les deux invités, annonce la réunion Teams et la répétition ; à
+l'approbation, Outlook leur envoie l'invitation. Plus tard : *« décale celui de la semaine prochaine
+à 11 h »*.
 
 **Lire la facture jointe.** Avec **Emails Outlook** : *« que dit la facture jointe au dernier mail
 d'Orange ? »*. MIA ouvre le mail, lit le PDF joint et cite son montant.

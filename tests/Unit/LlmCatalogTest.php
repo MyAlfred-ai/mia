@@ -149,6 +149,43 @@ final class LlmCatalogTest extends TestCase
         $this->assertSame('claude-opus-5', LlmCatalog::defaultModel('anthropic'), 'Un nouveau modèle ne devient pas le défaut en silence.');
     }
 
+    public function testClaudeFable52EtHaiku55(): void
+    {
+        // Fiches « models/fable-5-2/overview » et « models/haiku-5-5/overview »,
+        // relues le 2026-11-10.
+        // Fable 5.2 : mêmes contraintes que Fable 5.1, moins cher.
+        $this->assertFalse(LlmCatalog::supportsTemperature('anthropic', 'claude-fable-5-2'));
+        $this->assertTrue(LlmCatalog::supportsToolUse('anthropic', 'claude-fable-5-2'));
+        $this->assertTrue(LlmCatalog::supportsWebSearch('anthropic', 'claude-fable-5-2'));
+        $this->assertTrue(LlmCatalog::supportsProgressUpdates('anthropic', 'claude-fable-5-2'));
+        $this->assertSame(1000000, LlmCatalog::contextWindow('anthropic', 'claude-fable-5-2'));
+        $this->assertSame('default', LlmCatalog::refusalFallback('anthropic', 'claude-fable-5-2'));
+        $this->assertSame('claude-opus-5', LlmCatalog::retentionFallback('anthropic', 'claude-fable-5-2'));
+        $fable = LlmCatalog::pricing('anthropic', 'claude-fable-5-2');
+        $this->assertSame(8.0, $fable['input']);
+        $this->assertSame(40.0, $fable['output']);
+        $this->assertSame(0.2, $fable['cached_input'], 'Lecture de cache à 0,025× l\'entrée : le ratio par défaut donnerait 0,80 $.');
+        $this->assertSame(10.0, $fable['cache_write']);
+        $this->assertNull(LlmCatalog::longContext('anthropic', 'claude-fable-5-2'), 'Tarif unique sur tout le million de jetons.');
+
+        // Haiku 5.5 : aucun repli serveur, pas de notes d'avancement, effort
+        // `medium` par défaut, palier ×5 au-delà de 100 000 jetons d'entrée.
+        $this->assertFalse(LlmCatalog::supportsTemperature('anthropic', 'claude-haiku-5-5'));
+        $this->assertTrue(LlmCatalog::supportsToolUse('anthropic', 'claude-haiku-5-5'));
+        $this->assertNull(LlmCatalog::refusalFallback('anthropic', 'claude-haiku-5-5'), 'Haiku 5.5 n\'a pas de repli serveur : le paramètre serait refusé.');
+        $this->assertNull(LlmCatalog::retentionFallback('anthropic', 'claude-haiku-5-5'));
+        $this->assertFalse(LlmCatalog::supportsProgressUpdates('anthropic', 'claude-haiku-5-5'));
+        $this->assertSame('medium', LlmCatalog::defaultEffort('anthropic', 'claude-haiku-5-5'));
+        $this->assertSame(['above' => 100000, 'input_ratio' => 5.0, 'output_ratio' => 5.0], LlmCatalog::longContext('anthropic', 'claude-haiku-5-5'));
+        $haiku = LlmCatalog::pricing('anthropic', 'claude-haiku-5-5');
+        $this->assertSame(0.1, $haiku['input']);
+        $this->assertSame(0.5, $haiku['output']);
+        $this->assertSame(0.01, $haiku['cached_input']);
+        $this->assertSame(0.125, $haiku['cache_write']);
+
+        $this->assertSame('claude-opus-5', LlmCatalog::defaultModel('anthropic'), 'Aucun des deux ne devient le défaut en silence.');
+    }
+
     /**
      * GPT-6 Astra : hors du préfixe `gpt-5`, le routage par défaut du provider
      * ne le rattrape pas — sans `routing` déclaré il partirait sur Chat
@@ -179,17 +216,18 @@ final class LlmCatalogTest extends TestCase
     }
 
     /**
-     * Mistral Large 4 (06/10/2026), relu sur la documentation de Mistral le
-     * 07/10/2026 : en aperçu public, il n'a pas d'alias `-latest` ; MIA retient
-     * l'identifiant figé `mistral-large-4-0`. Tarif de lancement -50 % pendant
-     * deux semaines, borné au 19/10 inclus, puis tarif normal sans
-     * intervention. Il ne devient pas le défaut : 2,7 fois Large 3.
+     * Mistral Large 4 : aperçu public le 06/10/2026, disponibilité générale le
+     * 05/11/2026 (carte du modèle et page « Models » relues le 2026-11-10).
+     * MIA retient l'identifiant figé `mistral-large-4-0`, au tarif de GA
+     * (moitié de celui de l'aperçu). Depuis la revue du 2026-11-17, l'alias
+     * `mistral-large-latest` (défaut de Mistral) sert Large 4 : même tarif,
+     * plus d'arrêt. Large 3 et Medium 3.5 sont arrêtés le 30/04/2027.
      */
     public function testMistralLarge4(): void
     {
         $info = LlmCatalog::model('mistral', 'mistral-large-4-0');
         $this->assertNotNull($info, 'mistral-large-4-0 absent du catalogue');
-        $this->assertSame('Mistral Large 4 (aperçu)', $info['label']);
+        $this->assertSame('Mistral Large 4', $info['label']);
         $this->assertNull(LlmCatalog::model('mistral', 'mistral-large-4'), 'un seul identifiant pour le même modèle');
         $this->assertSame('mistral-large-4-0', array_key_first(LlmCatalog::models('mistral')), 'le plus récent ouvre Mistral');
         $this->assertContains('vision', $info['tags']);
@@ -197,24 +235,55 @@ final class LlmCatalogTest extends TestCase
         $this->assertTrue(LlmCatalog::supportsWebSearch('mistral', 'mistral-large-4-0'));
         $this->assertFalse(LlmCatalog::supportsWebSearchWithTools('mistral', 'mistral-large-4-0'));
         $this->assertSame(1000000, LlmCatalog::contextWindow('mistral', 'mistral-large-4-0'));
-        $this->assertSame('mistral-large-latest', LlmCatalog::defaultModel('mistral'), 'Un nouveau modèle ne devient pas le défaut en silence.');
+
+        $prix = LlmCatalog::pricing('mistral', 'mistral-large-4-0');
+        $this->assertSame([0.7, 2.1, 0.07], [$prix['input'], $prix['output'], $prix['cached_input']]);
+        $this->assertArrayNotHasKey('launch_until', $prix, 'Plus de remise : le tarif de GA est le tarif.');
+
+        // L'alias du défaut sert Large 4 (cartes relues le 2026-11-17) : compté
+        // au tarif de Large 4, sans date d'arrêt.
+        $alias = LlmCatalog::pricing('mistral', 'mistral-large-latest');
+        $this->assertSame([0.7, 2.1, 0.07], [$alias['input'], $alias['output'], $alias['cached_input']], 'Plus au tarif de Large 3.');
+        $this->assertSame(1000000, LlmCatalog::contextWindow('mistral', 'mistral-large-latest'));
+        $this->assertContains('raisonnement', LlmCatalog::model('mistral', 'mistral-large-latest')['tags']);
 
         try {
-            LlmCatalog::setToday('2026-10-19');
-            $lancement = LlmCatalog::pricing('mistral', 'mistral-large-4-0');
-            $this->assertSame(0.68, $lancement['input']);
-            $this->assertSame(2.09, $lancement['output']);
-            $this->assertSame(0.07, $lancement['cached_input']);
-            $this->assertSame('2026-10-19', $lancement['launch_until']);
-
-            LlmCatalog::setToday('2026-10-20');
-            $normal = LlmCatalog::pricing('mistral', 'mistral-large-4-0');
-            $this->assertSame(1.36, $normal['input']);
-            $this->assertSame(4.18, $normal['output']);
-            $this->assertSame(0.14, $normal['cached_input'], 'lecture de cache déclarée : 0,1× donnerait 0,136 $');
-            $this->assertArrayNotHasKey('launch_until', $normal);
+            LlmCatalog::setToday('2027-04-29');
+            foreach (['mistral-large-2512', 'mistral-medium-latest', 'mistral-medium-3-5', 'mistral-medium-2604'] as $id) {
+                $r = LlmCatalog::retirement('mistral', $id);
+                $this->assertSame(['2027-04-30', 'mistral-large-4-0', false], [$r['date'], $r['replacement'], $r['retired']], $id);
+            }
+            LlmCatalog::setToday('2027-04-30');
+            $this->assertTrue(LlmCatalog::isRetired('mistral', 'mistral-large-2512'));
+            $this->assertNull(LlmCatalog::retirement('mistral', 'mistral-large-latest'), 'L\'alias ne vise plus Large 3.');
+            $this->assertSame('mistral-large-latest', LlmCatalog::defaultModel('mistral'), 'Le défaut reste l\'alias, toujours servi.');
+            $this->assertNull(LlmCatalog::retirement('mistral', 'mistral-small-2603'), 'Small 4 reste servi.');
         } finally {
             LlmCatalog::setToday(null);
+        }
+    }
+
+    /**
+     * Un défaut ARRÊTÉ cède la place à son remplaçant (LlmCatalog::defaultModel),
+     * sinon les appels sans modèle choisi partiraient vers un identifiant coupé.
+     * Plus aucun défaut réel ne porte de date d'arrêt : catalogue de substitution.
+     */
+    public function testUnDefautArreteCedeLaPlaceASonRemplacant(): void
+    {
+        $catalogue = require ROOT . '/config/llm_catalog.php';
+        $catalogue['mistral']['models']['mistral-large-latest']['retirement'] = [
+            'date' => '2027-04-30', 'replacement' => 'mistral-large-4-0', 'source_url' => 'https://docs.mistral.ai/models',
+        ];
+        $cache = new ReflectionProperty(LlmCatalog::class, 'cache');
+        try {
+            $cache->setValue(null, $catalogue);
+            LlmCatalog::setToday('2027-04-29');
+            $this->assertSame('mistral-large-latest', LlmCatalog::defaultModel('mistral'));
+            LlmCatalog::setToday('2027-04-30');
+            $this->assertSame('mistral-large-4-0', LlmCatalog::defaultModel('mistral'));
+        } finally {
+            LlmCatalog::setToday(null);
+            LlmCatalog::flushCache();
         }
     }
 
@@ -231,10 +300,8 @@ final class LlmCatalogTest extends TestCase
         $this->assertNotNull($officiel, 'mistral-medium-3-5 absent du catalogue');
         $this->assertSame('Mistral Medium 3.5', $officiel['label']);
         $this->assertSame(256000, LlmCatalog::contextWindow('mistral', 'mistral-medium-3-5'));
-        $this->assertSame(
-            LlmCatalog::pricing('mistral', 'mistral-medium-3-5'),
-            array_merge(LlmCatalog::pricing('mistral', 'mistral-medium-2604'), ['source_url' => 'https://docs.mistral.ai/inference/pricing'])
-        );
+        $this->assertSame(LlmCatalog::pricing('mistral', 'mistral-medium-3-5'), LlmCatalog::pricing('mistral', 'mistral-medium-2604'),
+            'Même modèle, même tarif, même fiche (relue le 2026-11-17).');
         $this->assertStringContainsString('mistral-medium-3-5', LlmCatalog::model('mistral', 'mistral-medium-2604')['note']);
     }
 
@@ -271,6 +338,19 @@ final class LlmCatalogTest extends TestCase
      * bornée au catalogue, et rien ne part pour un modèle qui refuse le
      * paramètre ou un assistant qui n'en fixe pas.
      */
+    /**
+     * La Conversations API de Mistral (recherche Internet) borne
+     * `completion_args.temperature` à 1,0 — Chat Completions accepte 1,5
+     * (schémas CompletionArgs / ChatCompletionRequest, relus le 2026-11-10).
+     */
+    public function testLaRechercheMistralBorneLaTemperatureAUn(): void
+    {
+        $this->assertSame(1.5, LlmCatalog::temperatureFor('mistral', 'mistral-large-4-0', 1.8));
+        $src = (string)file_get_contents(ROOT . '/src/LLM/MistralAdapter.php');
+        $this->assertStringContainsString("private const CONVERSATIONS_TEMPERATURE_MAX = 1.0;", $src);
+        $this->assertStringContainsString("['temperature' => min(self::CONVERSATIONS_TEMPERATURE_MAX, \$sendTemperature)]", $src);
+    }
+
     public function testLaTemperatureEnvoyeeEstBorneeAuCatalogue(): void
     {
         $this->assertSame(1.0, LlmCatalog::temperatureFor('anthropic', 'claude-sonnet-4-6', 1.8));
@@ -320,19 +400,20 @@ final class LlmCatalogTest extends TestCase
 
     /**
      * Grille OpenAI relue le 07/10/2026 : Terra (-20 %) et Luna (-80 %) depuis
-     * le 30/07, Sol en promotion (4 $ / 20 $) « at least through November 21,
-     * 2026 » — bornée à cette date, puis tarif GA. MIA facturait Luna cinq
-     * fois son prix.
+     * le 30/07, Sol en promotion (4 $ / 20 $) annoncée « at least through
+     * November 21, 2026 », prolongée « until November 30, 2026 » (relu le
+     * 10/11/2026) — bornée à cette date, puis tarif GA. MIA facturait Luna
+     * cinq fois son prix. Terra et Luna ont leur palier au-delà de 272k.
      */
     public function testLesTarifsGpt56SuiventLaGrille(): void
     {
         try {
-            LlmCatalog::setToday('2026-11-21');
+            LlmCatalog::setToday('2026-11-30');
             foreach (['gpt-5.6', 'gpt-5.6-sol'] as $id) {
                 $promo = LlmCatalog::pricing('openai', $id);
                 $this->assertSame([4.0, 20.0, 0.4, 5.0], [$promo['input'], $promo['output'], $promo['cached_input'], $promo['cache_write']], $id);
             }
-            LlmCatalog::setToday('2026-11-22');
+            LlmCatalog::setToday('2026-12-01');
             foreach (['gpt-5.6', 'gpt-5.6-sol'] as $id) {
                 $ga = LlmCatalog::pricing('openai', $id);
                 $this->assertSame([5.0, 30.0, 0.5], [$ga['input'], $ga['output'], $ga['cached_input']], $id);
@@ -345,6 +426,57 @@ final class LlmCatalogTest extends TestCase
         $this->assertSame([2.0, 12.0, 0.2], [$terra['input'], $terra['output'], $terra['cached_input']]);
         $luna = LlmCatalog::pricing('openai', 'gpt-5.6-luna');
         $this->assertSame([0.2, 1.2, 0.02], [$luna['input'], $luna['output'], $luna['cached_input']]);
+        foreach (['gpt-5.6-terra', 'gpt-5.6-luna'] as $id) {
+            $this->assertSame(['above' => 272000, 'input_ratio' => 2.0, 'output_ratio' => 1.5], LlmCatalog::longContext('openai', $id), $id);
+        }
+    }
+
+    /**
+     * GPT-6.2 Astra et GPT-6.2 Sol (17/11/2026), fiches, page Pricing et guide
+     * « Using GPT-6.2 » relus le 2026-11-17. Chat Completions accepté mais
+     * « tool calling requires the Responses API » : routage déclaré, sinon les
+     * connecteurs disparaîtraient en silence. `temperature` à omettre. Cache lu
+     * à 5 % (le ratio conventionnel donnerait le double), palier > 272k.
+     */
+    public function testGpt62AstraEtSol(): void
+    {
+        foreach (['gpt-6.2-astra' => 'GPT-6.2 Astra', 'gpt-6.2-sol' => 'GPT-6.2 Sol'] as $id => $label) {
+            $info = LlmCatalog::model('openai', $id);
+            $this->assertNotNull($info, "$id absent du catalogue");
+            $this->assertSame($label, $info['label']);
+            $this->assertSame('responses_api', LlmCatalog::routing('openai', $id), "$id : hors préfixe gpt-5, routage déclaré.");
+            $this->assertFalse(LlmCatalog::supportsTemperature('openai', $id), $id);
+            $this->assertTrue(LlmCatalog::supportsToolUse('openai', $id), $id);
+            $this->assertTrue(LlmCatalog::supportsWebSearch('openai', $id), $id);
+            $this->assertTrue(LlmCatalog::supportsNativePptx('openai', $id), "$id : Code Interpreter pris en charge.");
+            $this->assertTrue(LlmCatalog::acceptsImages('openai', $id), $id);
+            $this->assertSame(1050000, LlmCatalog::contextWindow('openai', $id), $id);
+            $this->assertSame(['above' => 272000, 'input_ratio' => 2.0, 'output_ratio' => 1.5], LlmCatalog::longContext('openai', $id), $id);
+            $this->assertNull(LlmCatalog::retirement('openai', $id), $id);
+        }
+        $astra = LlmCatalog::pricing('openai', 'gpt-6.2-astra');
+        $this->assertSame([8.0, 40.0, 0.4, 10.0], [$astra['input'], $astra['output'], $astra['cached_input'], $astra['cache_write']]);
+        $sol = LlmCatalog::pricing('openai', 'gpt-6.2-sol');
+        $this->assertSame([2.0, 10.0, 0.1, 2.5], [$sol['input'], $sol['output'], $sol['cached_input'], $sol['cache_write']]);
+        $this->assertSame('gpt-5.6', LlmCatalog::defaultModel('openai'), 'Un nouveau modèle ne devient pas le défaut en silence.');
+        $this->assertSame('gpt-5.6', LlmCatalog::fallbackSearchModel('openai'));
+    }
+
+    /** GPT-6.1 Terra (26/10/2026), fiche relue le 2026-11-10. */
+    public function testGpt61Terra(): void
+    {
+        $this->assertTrue(LlmCatalog::supportsToolUse('openai', 'gpt-6.1-terra'));
+        $this->assertTrue(LlmCatalog::supportsWebSearch('openai', 'gpt-6.1-terra'));
+        $this->assertFalse(LlmCatalog::supportsTemperature('openai', 'gpt-6.1-terra'));
+        $this->assertTrue(LlmCatalog::supportsNativePptx('openai', 'gpt-6.1-terra'));
+        $this->assertSame('responses_api', LlmCatalog::model('openai', 'gpt-6.1-terra')['routing'], 'Hors préfixe gpt-5 : routage déclaré, sinon Chat Completions sans outils.');
+        $this->assertSame(1050000, LlmCatalog::contextWindow('openai', 'gpt-6.1-terra'));
+        $terra = LlmCatalog::pricing('openai', 'gpt-6.1-terra');
+        $this->assertSame([1.0, 5.0, 0.05, 1.25], [$terra['input'], $terra['output'], $terra['cached_input'], $terra['cache_write']],
+            'Lecture de cache à 5 % : le ratio conventionnel donnerait 0,10 $.');
+        $this->assertSame(['above' => 272000, 'input_ratio' => 2.0, 'output_ratio' => 1.5], LlmCatalog::longContext('openai', 'gpt-6.1-terra'));
+        $this->assertSame('GPT-5.4 (26.03.05)', LlmCatalog::model('openai', 'gpt-5.4-2026-03-05')['label']);
+        $this->assertSame('gpt-5.6', LlmCatalog::defaultModel('openai'), 'Un nouveau modèle ne devient pas le défaut en silence.');
     }
 
     /**
@@ -382,7 +514,7 @@ final class LlmCatalogTest extends TestCase
     /**
      * « Mettre à jour les prix » enregistre le tarif NORMAL : un tarif
      * enregistré prime sur le catalogue et ne suit aucune date — y figer une
-     * remise de lancement (Mistral Large 4, promotion GPT-5.6, Gemini 3.x)
+     * remise de lancement (Gemini 4 Argon, promotion GPT-5.6, Gemini 3.x)
      * ferait sous-facturer en silence dès sa fin. La remise en cours est
      * seulement signalée dans la note.
      */
@@ -392,17 +524,17 @@ final class LlmCatalogTest extends TestCase
         $resoudre = new ReflectionMethod(AdminController::class, 'resolveCuratedUsdPrice');
         $admin = (new ReflectionClass(AdminController::class))->newInstanceWithoutConstructor();
         try {
-            LlmCatalog::setToday('2026-10-10');
-            $prix = $resoudre->invoke($admin, ['id' => 's1', 'catalog_key' => 'llm:mistral::mistral-large-4-0:input']);
-            $this->assertSame(1.36, $prix['real_cost_usd'], 'tarif normal, pas la remise de lancement (0,68 $)');
-            $this->assertStringContainsString('2026-10-19', $prix['source_note']);
+            LlmCatalog::setToday('2026-11-10');
+            $prix = $resoudre->invoke($admin, ['id' => 's1', 'catalog_key' => 'llm:gemini::gemini-4-argon:input']);
+            $this->assertSame(4.0, $prix['real_cost_usd'], 'tarif normal, pas la remise de lancement (2 $)');
+            $this->assertStringContainsString('2026-11-30', $prix['source_note']);
 
             $lu = $resoudre->invoke($admin, ['id' => 's2', 'catalog_key' => 'llm:openai::gpt-5.6-sol:input_cached']);
             $this->assertSame(0.5, $lu['real_cost_usd']);
 
-            LlmCatalog::setToday('2026-10-20');
-            $apres = $resoudre->invoke($admin, ['id' => 's1', 'catalog_key' => 'llm:mistral::mistral-large-4-0:input']);
-            $this->assertSame(1.36, $apres['real_cost_usd']);
+            LlmCatalog::setToday('2026-12-01');
+            $apres = $resoudre->invoke($admin, ['id' => 's1', 'catalog_key' => 'llm:gemini::gemini-4-argon:input']);
+            $this->assertSame(4.0, $apres['real_cost_usd']);
             $this->assertStringNotContainsString('remise de lancement', $apres['source_note']);
         } finally {
             LlmCatalog::setToday(null);
@@ -417,14 +549,14 @@ final class LlmCatalogTest extends TestCase
      */
     public function testLesNouveauxModelesOuvrentLeurFournisseur(): void
     {
-        // Génération 5.5 d'abord (l'Opus puis le Sonnet, comme le tableau
-        // d'Anthropic), puis Fable 5.1.
+        // Génération courante dans l'ordre du tableau d'Anthropic (Fable 5.2,
+        // Opus 5.5, Sonnet 5.5, Haiku 5.5), puis Fable 5.1.
         $this->assertSame(
-            ['claude-opus-5-5', 'claude-sonnet-5-5', 'claude-fable-5-1'],
-            array_slice(array_keys(LlmCatalog::models('anthropic')), 0, 3)
+            ['claude-fable-5-2', 'claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5', 'claude-fable-5-1'],
+            array_slice(array_keys(LlmCatalog::models('anthropic')), 0, 5)
         );
-        $this->assertSame(['gpt-6.1-sol', 'gpt-6-luna', 'gpt-6-astra'], array_slice(array_keys(LlmCatalog::models('openai')), 0, 3));
-        $this->assertSame('gemini-3.8-flash', array_key_first(LlmCatalog::models('gemini')));
+        $this->assertSame(['gpt-6.2-astra', 'gpt-6.2-sol', 'gpt-6.1-sol', 'gpt-6.1-terra', 'gpt-6-luna', 'gpt-6-astra'], array_slice(array_keys(LlmCatalog::models('openai')), 0, 6));
+        $this->assertSame('gemini-4-neon', array_key_first(LlmCatalog::models('gemini')));
     }
 
     /** Perplexity est web_native de bout en bout : il ne doit pas être oublié. */
@@ -438,7 +570,7 @@ final class LlmCatalogTest extends TestCase
     /** Les providers sans recherche ni repli restent honnêtement à false. */
     public function testProvidersSansRechercheWeb(): void
     {
-        foreach (['deepseek', 'moonshot', 'zai'] as $provider) {
+        foreach (['moonshot', 'zai'] as $provider) {
             foreach (array_keys(LlmCatalog::models($provider)) as $model) {
                 $this->assertFalse(LlmCatalog::supportsWebSearch($provider, (string) $model), $provider);
             }
@@ -452,10 +584,10 @@ final class LlmCatalogTest extends TestCase
      */
     public function testModeleInconnuRetombeSurLeDefaut(): void
     {
-        foreach (['openai', 'anthropic', 'mistral', 'perplexity', 'gemini'] as $provider) {
+        foreach (['openai', 'anthropic', 'mistral', 'perplexity', 'gemini', 'deepseek'] as $provider) {
             $this->assertTrue(LlmCatalog::supportsWebSearch($provider, $provider), $provider);
             $this->assertTrue(LlmCatalog::supportsWebSearch($provider, 'modele-absent-du-catalogue'), $provider);
         }
-        $this->assertFalse(LlmCatalog::supportsWebSearch('deepseek', 'deepseek'));
+        $this->assertFalse(LlmCatalog::supportsWebSearch('zai', 'zai'));
     }
 }

@@ -588,8 +588,8 @@ final class LoopFiles
     public static function isDocument(string $mime, string $name): bool
     {
         $ext = strtolower(pathinfo($name, PATHINFO_EXTENSION));
-        return in_array($ext, ['docx', 'md', 'markdown', 'txt', 'odt', 'rtf', 'html', 'htm'], true)
-            || str_contains($mime, 'wordprocessingml') || in_array($mime, ['text/markdown', 'text/plain', 'text/html'], true);
+        return in_array($ext, ['docx', 'doc', 'md', 'markdown', 'txt', 'odt', 'rtf', 'html', 'htm'], true)
+            || str_contains($mime, 'wordprocessingml') || in_array($mime, ['text/markdown', 'text/plain', 'text/html', LegacyOffice::MIME_DOC], true);
     }
 
     /** Texte à sections d'un fichier : Word converti en Markdown (titres gardés), le reste extrait. */

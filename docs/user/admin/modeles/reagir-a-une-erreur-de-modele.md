@@ -32,7 +32,7 @@ de l'écran.
 ## Le crédit épuisé vous est signalé
 
 Un éditeur qui refuse les demandes faute de crédit, ou dont la clé est refusée, allume un point rouge
-sur **Modèles IA › Clés API** dans le menu, et une alerte sur le tableau de bord : depuis combien de
+sur **Modèles IA › Fournisseurs et modèles** dans le menu, et une alerte sur le tableau de bord : depuis combien de
 temps, et combien de demandes ont été refusées. Vous n'attendez plus qu'un utilisateur vous l'écrive —
 ni que quelqu'un remarque que le LLM de secours répond à la place du modèle habituel. Le point
 s'éteint de lui-même dès que l'éditeur répond de nouveau (une réponse aboutie, un **Tester** réussi,
@@ -66,7 +66,7 @@ l'éditeur, avec le statut, le code de l'erreur et le message d'origine. Voir
 ## Cas particuliers
 
 - **Un éditeur sans crédit déclenche le secours**, comme une panne : pour l'instance, l'éditeur est
-  indisponible. Les utilisateurs continuent de recevoir des réponses ; le point rouge de **Clés API**
+  indisponible. Les utilisateurs continuent de recevoir des réponses ; le point rouge de **Fournisseurs et modèles**
   vous alerte quand même.
 - **Un plafond de dépense mensuel atteint** se lit comme un crédit épuisé, même quand l'éditeur le
   signale comme une limite de débit (c'est le cas de Claude) : attendre quelques secondes n'y change
@@ -84,7 +84,7 @@ l'éditeur, avec le statut, le code de l'erreur et le message d'origine. Voir
 | Ce qui arrive | Quoi faire |
 |---|---|
 | Des utilisateurs signalent **Crédit épuisé**, d'autres non | Seuls les modèles de cet éditeur sont touchés : recharger son compte. |
-| Le point rouge de **Clés API** reste allumé après la recharge | Cliquez **Tester** sur la clé de l'éditeur : un test réussi l'éteint. |
+| Le point rouge de **Fournisseurs et modèles** reste allumé après la recharge | Cliquez **Tester** sur la clé de l'éditeur : un test réussi l'éteint. |
 | Un utilisateur dit ne pas savoir à qui écrire | Le bouton **Prévenir un administrateur** liste les comptes administrateurs actifs : vérifiez qu'ils ont une adresse valide dans **Personnes › Comptes**. |
 | Le secours répond à tout le monde depuis des heures | L'éditeur du modèle par défaut est en panne ou à sec : la raison est dans le message de bascule et dans les journaux. |
 | Un encadré **Une erreur est survenue** sans cause nommée | L'éditeur a renvoyé une erreur que MIA ne sait pas classer : le message d'origine est dans les journaux. |

@@ -1,0 +1,602 @@
+/* Fenêtre « Quoi de neuf » — schémas animés des nouveautés majeures
+   (templates/partials/feature-news/<id>.php). Chargée par
+   templates/partials/feature-news-modal.php, seulement quand la fenêtre est rendue.
+
+   Un schéma remplit le cadre de sa carte (.fn-shot, 16:9). Ses tailles sont en
+   unités du conteneur (cqw : 1/100 de la largeur du cadre) : il se
+   redimensionne comme une image, du téléphone à l'ordinateur, mais ses mots
+   sont du vrai texte — traduit, net, aux couleurs du thème. */
+
+/* ---- Socle d'un schéma --------------------------------------------------- */
+.fns {
+    --fns-node: #ffffff;
+    --fns-line: #d9d9e3;
+    --fns-dot: rgba(60, 60, 90, .10);
+    --fns-shadow: rgba(30, 27, 75, .16);
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+    color: var(--text);
+    line-height: 1.25;
+    background:
+        radial-gradient(var(--fns-dot) .22cqw, transparent .3cqw) 0 0 / 3.4cqw 3.4cqw,
+        var(--fns-bg, var(--fn-shot));
+}
+[data-theme="dark"] .fns,
+:root:not([data-theme="light"]) .fns {
+    --fns-node: color-mix(in srgb, var(--text) 9%, var(--bg-sidebar));
+    --fns-line: color-mix(in srgb, var(--text) 22%, transparent);
+    --fns-dot: color-mix(in srgb, var(--text) 9%, transparent);
+    --fns-shadow: rgba(0, 0, 0, .45);
+}
+[data-theme="light"] .fns {
+    --fns-node: #ffffff;
+    --fns-line: #d9d9e3;
+    --fns-dot: rgba(60, 60, 90, .10);
+    --fns-shadow: rgba(30, 27, 75, .16);
+}
+.fns svg { display: block; }
+
+/* Étiquette en tête : « Exemple : … ». */
+.fns-tag {
+    position: absolute;
+    top: 4.2cqw;
+    left: 50%;
+    transform: translateX(-50%);
+    display: inline-flex;
+    align-items: center;
+    gap: 1.2cqw;
+    padding: 1cqw 2.6cqw;
+    border: 1px solid var(--border);
+    border-radius: 10cqw;
+    background: var(--fns-node);
+    color: var(--text-muted);
+    font-size: 2.6cqw;
+    font-weight: 500;
+    white-space: nowrap;
+    box-shadow: 0 .6cqw 1.6cqw -1cqw var(--fns-shadow);
+}
+.fns-tag svg { width: 2.8cqw; height: 2.8cqw; color: #8b5cf6; }
+.fns-foot {
+    position: absolute;
+    bottom: 5cqw;
+    left: 50%;
+    transform: translateX(-50%);
+    display: inline-flex;
+    align-items: center;
+    gap: 1cqw;
+    color: var(--text-muted);
+    font-size: 2.5cqw;
+    white-space: nowrap;
+}
+.fns-foot svg { width: 2.7cqw; height: 2.7cqw; }
+
+/* ===================== Les workflows ===================== */
+.fns-wf {
+    --fns-bg: linear-gradient(135deg, #f5f3ff 0%, #f8f7fc 48%, #effbf4 100%);
+}
+:root:not([data-theme="light"]) .fns-wf,
+[data-theme="dark"] .fns-wf {
+    --fns-bg: linear-gradient(135deg,
+        color-mix(in srgb, #8b5cf6 13%, var(--bg-sidebar)) 0%,
+        color-mix(in srgb, var(--text) 5%, var(--bg-sidebar)) 50%,
+        color-mix(in srgb, #22c55e 10%, var(--bg-sidebar)) 100%);
+}
+[data-theme="light"] .fns-wf { --fns-bg: linear-gradient(135deg, #f5f3ff 0%, #f8f7fc 48%, #effbf4 100%); }
+
+/* Le fil : de l'étape 1 à l'étape 4 (centres des colonnes : 14, 38, 62 et 86 cqw). */
+.fns-wf-track {
+    position: absolute;
+    top: 24.2cqw;
+    left: 14cqw;
+    right: 14cqw;
+    height: .6cqw;
+    border-radius: 1cqw;
+    background: repeating-linear-gradient(90deg, var(--fns-line) 0 1.4cqw, transparent 1.4cqw 2.4cqw);
+}
+.fns-wf-fill {
+    position: absolute;
+    inset: 0 auto 0 0;
+    width: 100%;
+    border-radius: inherit;
+    background: linear-gradient(90deg, #6366f1, #8b5cf6 33%, #f59e0b 66%, #22c55e);
+    animation: fnsw-fill 9s linear infinite;
+}
+.fns-wf-token {
+    position: absolute;
+    top: 50%;
+    left: 0;
+    display: grid;
+    place-items: center;
+    width: 6.2cqw;
+    height: 6.2cqw;
+    border: .35cqw solid #8b5cf6;
+    border-radius: 1.6cqw;
+    background: var(--fns-node);
+    color: #8b5cf6;
+    box-shadow: 0 .8cqw 1.8cqw -.6cqw var(--fns-shadow);
+    transform: translate(-50%, -50%);
+    opacity: 0;
+    animation: fnsw-token 9s linear infinite;
+}
+.fns-wf-token svg { width: 3.6cqw; height: 3.6cqw; }
+
+.fns-wf-steps {
+    position: absolute;
+    top: 18.2cqw;
+    left: 0;
+    right: 0;
+    z-index: 1;
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    margin: 0;
+    padding: 0 2cqw;
+    list-style: none;
+}
+.fns-wf-step {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    min-width: 0;
+    padding: 0 .8cqw;
+    text-align: center;
+}
+.fns-wf-dot {
+    position: relative;
+    display: grid;
+    place-items: center;
+    width: 12cqw;
+    height: 12cqw;
+    margin-bottom: 1.6cqw;
+    border: .45cqw solid color-mix(in srgb, var(--tone) 42%, transparent);
+    border-radius: 50%;
+    background: var(--fns-node);
+    color: var(--tone);
+    box-shadow: 0 1cqw 2.4cqw -1cqw var(--fns-shadow);
+}
+.fns-wf-dot svg { width: 5.4cqw; height: 5.4cqw; }
+.fns-wf-step b { font-size: 3.05cqw; font-weight: 600; line-height: 1.2; }
+.fns-wf-step small { margin-top: .5cqw; font-size: 2.45cqw; color: var(--text-muted); line-height: 1.25; }
+.fns-wf-ok {
+    position: absolute;
+    top: -1cqw;
+    right: -1.2cqw;
+    display: grid;
+    place-items: center;
+    width: 4.6cqw;
+    height: 4.6cqw;
+    border: .35cqw solid var(--fns-node);
+    border-radius: 50%;
+    background: #16a34a;
+    color: #ffffff;
+    transform: scale(0);
+    animation: fnsw-ok 9s ease-out infinite;
+}
+.fns-wf-ok svg { width: 2.6cqw; height: 2.6cqw; }
+.fns-wf-s1 .fns-wf-dot { animation: fnsw-n1 9s ease-out infinite; }
+.fns-wf-s2 .fns-wf-dot { animation: fnsw-n2 9s ease-out infinite; }
+.fns-wf-s3 .fns-wf-dot { animation: fnsw-n3 9s ease-out infinite; }
+.fns-wf-s4 .fns-wf-dot { animation: fnsw-n4 9s ease-out infinite; }
+
+/* Le fil se remplit de 6 % à 78 % du cycle ; chaque étape s'allume quand il
+   l'atteint (6, 30, 54, 78 %), tout reste allumé, puis s'éteint ensemble. */
+@keyframes fnsw-fill {
+    0%, 6% { width: 0; opacity: 1; }
+    78%, 93% { width: 100%; opacity: 1; }
+    98%, 100% { width: 100%; opacity: 0; }
+}
+@keyframes fnsw-token {
+    0%, 6% { left: 0; opacity: 0; }
+    9% { opacity: 1; }
+    74% { opacity: 1; }
+    78%, 100% { left: 100%; opacity: 0; }
+}
+@keyframes fnsw-n1 {
+    0%, 5% { background: var(--fns-node); color: var(--tone); transform: none; box-shadow: 0 1cqw 2.4cqw -1cqw var(--fns-shadow); }
+    8% { background: var(--tone); color: #fff; border-color: var(--tone); transform: scale(1.12); }
+    12%, 93% { background: var(--tone); color: #fff; border-color: var(--tone); transform: none; box-shadow: 0 0 0 1.5cqw color-mix(in srgb, var(--tone) 17%, transparent); }
+    98%, 100% { background: var(--fns-node); color: var(--tone); transform: none; }
+}
+@keyframes fnsw-n2 {
+    0%, 29% { background: var(--fns-node); color: var(--tone); transform: none; box-shadow: 0 1cqw 2.4cqw -1cqw var(--fns-shadow); }
+    32% { background: var(--tone); color: #fff; border-color: var(--tone); transform: scale(1.12); }
+    36%, 93% { background: var(--tone); color: #fff; border-color: var(--tone); transform: none; box-shadow: 0 0 0 1.5cqw color-mix(in srgb, var(--tone) 17%, transparent); }
+    98%, 100% { background: var(--fns-node); color: var(--tone); transform: none; }
+}
+@keyframes fnsw-n3 {
+    0%, 53% { background: var(--fns-node); color: var(--tone); transform: none; box-shadow: 0 1cqw 2.4cqw -1cqw var(--fns-shadow); }
+    56% { background: var(--tone); color: #fff; border-color: var(--tone); transform: scale(1.12); }
+    60%, 93% { background: var(--tone); color: #fff; border-color: var(--tone); transform: none; box-shadow: 0 0 0 1.5cqw color-mix(in srgb, var(--tone) 17%, transparent); }
+    98%, 100% { background: var(--fns-node); color: var(--tone); transform: none; }
+}
+@keyframes fnsw-n4 {
+    0%, 77% { background: var(--fns-node); color: var(--tone); transform: none; box-shadow: 0 1cqw 2.4cqw -1cqw var(--fns-shadow); }
+    80% { background: var(--tone); color: #fff; border-color: var(--tone); transform: scale(1.14); }
+    84%, 93% { background: var(--tone); color: #fff; border-color: var(--tone); transform: none; box-shadow: 0 0 0 1.5cqw color-mix(in srgb, var(--tone) 17%, transparent); }
+    98%, 100% { background: var(--fns-node); color: var(--tone); transform: none; }
+}
+@keyframes fnsw-ok {
+    0%, 81% { transform: scale(0); }
+    85% { transform: scale(1.25); }
+    88%, 93% { transform: scale(1); }
+    97%, 100% { transform: scale(0); }
+}
+
+/* ===================== Claude dans Office ===================== */
+.fns-xl {
+    --xl-green: #107c41;
+    --xl-claude: #d97757;
+    --fns-bg: linear-gradient(135deg, #ecf8f1 0%, #f7f7f5 50%, #fcefe8 100%);
+}
+:root:not([data-theme="light"]) .fns-xl,
+[data-theme="dark"] .fns-xl {
+    --fns-bg: linear-gradient(135deg,
+        color-mix(in srgb, #107c41 16%, var(--bg-sidebar)) 0%,
+        color-mix(in srgb, var(--text) 5%, var(--bg-sidebar)) 50%,
+        color-mix(in srgb, #d97757 14%, var(--bg-sidebar)) 100%);
+}
+[data-theme="light"] .fns-xl { --fns-bg: linear-gradient(135deg, #ecf8f1 0%, #f7f7f5 50%, #fcefe8 100%); }
+
+.fns-xl-win {
+    position: absolute;
+    inset: 4.2cqw 4.6cqw 4.2cqw;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    border: 1px solid color-mix(in srgb, var(--text) 10%, transparent);
+    border-radius: 2cqw;
+    background: var(--fns-node);
+    box-shadow: 0 2cqw 4.5cqw -2cqw var(--fns-shadow);
+}
+.fns-xl-bar {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 1.6cqw;
+    height: 5.6cqw;
+    padding: 0 1.8cqw;
+    background: var(--xl-green);
+    color: #ffffff;
+    font-size: 2.4cqw;
+    font-weight: 600;
+}
+.fns-xl-lights { display: inline-flex; gap: .9cqw; }
+.fns-xl-lights i { width: 1.3cqw; height: 1.3cqw; border-radius: 50%; background: rgba(255, 255, 255, .55); }
+.fns-xl-file { flex: 1; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fns-xl-apps .office-app-icons { display: inline-flex; gap: .6cqw; }
+.fns-xl-apps svg { width: 3.1cqw; height: 3.1cqw; }
+
+.fns-xl-body { flex: 1; min-height: 0; display: grid; grid-template-columns: 53% 47%; }
+.fns-xl-sheet {
+    display: flex;
+    flex-direction: column;
+    gap: 1.4cqw;
+    min-width: 0;
+    padding: 1.6cqw 1.8cqw 1.8cqw;
+    border-right: 1px solid color-mix(in srgb, var(--text) 10%, transparent);
+}
+.fns-xl-sheet table { width: 100%; border-collapse: collapse; font-size: 2.3cqw; font-variant-numeric: tabular-nums; }
+.fns-xl-sheet th,
+.fns-xl-sheet td {
+    padding: .5cqw .7cqw;
+    border-bottom: 1px solid color-mix(in srgb, var(--text) 8%, transparent);
+    text-align: right;
+    white-space: nowrap;
+}
+.fns-xl-sheet th:first-child,
+.fns-xl-sheet td:first-child { text-align: left; overflow: hidden; text-overflow: ellipsis; max-width: 0; width: 46%; }
+.fns-xl-sheet th { font-weight: 600; color: var(--text-muted); background: color-mix(in srgb, var(--xl-green) 9%, transparent); }
+.fns-xl-sheet tr.is-best td { animation: fnsx-row 10s ease-out infinite; }
+
+.fns-xl-chart {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    align-items: flex-end;
+    gap: 2.2cqw;
+    padding: 3.2cqw 1.2cqw 0;
+    border-bottom: 1px solid color-mix(in srgb, var(--text) 18%, transparent);
+}
+.fns-xl-col { position: relative; flex: 1; height: var(--h); }
+.fns-xl-col i {
+    display: block;
+    height: 100%;
+    border-radius: .8cqw .8cqw 0 0;
+    background: color-mix(in srgb, var(--xl-green) 45%, var(--fns-node));
+    transform-origin: 50% 100%;
+    animation: fnsx-bar 10s ease-out infinite both;
+    animation-delay: calc(var(--i) * .12s);
+}
+.fns-xl-col.is-best i { background: var(--xl-claude); }
+.fns-xl-col em {
+    position: absolute;
+    left: 50%;
+    bottom: calc(100% + .5cqw);
+    transform: translateX(-50%);
+    font-size: 2cqw;
+    font-style: normal;
+    font-weight: 600;
+    color: var(--text-muted);
+    white-space: nowrap;
+    animation: fnsx-label 10s ease-out infinite both;
+    animation-delay: calc(var(--i) * .12s);
+}
+.fns-xl-col.is-best em { color: var(--xl-claude); }
+
+.fns-xl-claude {
+    display: flex;
+    flex-direction: column;
+    gap: 1.3cqw;
+    min-width: 0;
+    padding: 1.6cqw 1.8cqw 1.8cqw;
+    background: color-mix(in srgb, var(--xl-claude) 5%, var(--fns-node));
+}
+.fns-xl-head { display: inline-flex; align-items: center; gap: 1cqw; font-size: 2.6cqw; font-weight: 600; }
+.fns-xl-logo {
+    display: grid;
+    place-items: center;
+    width: 3.6cqw;
+    height: 3.6cqw;
+    border-radius: .9cqw;
+    background: var(--xl-claude);
+    color: #ffffff;
+}
+.fns-xl-logo svg { width: 2.3cqw; height: 2.3cqw; }
+.fns-xl-q,
+.fns-xl-a { margin: 0; padding: 1.1cqw 1.6cqw; font-size: 2.35cqw; line-height: 1.32; }
+.fns-xl-q {
+    align-self: flex-end;
+    max-width: 92%;
+    border-radius: 1.8cqw 1.8cqw .5cqw 1.8cqw;
+    background: color-mix(in srgb, var(--text) 8%, var(--fns-node));
+    animation: fnsx-q 10s ease-out infinite;
+}
+.fns-xl-reply { display: grid; }
+.fns-xl-reply > * { grid-area: 1 / 1; align-self: start; }
+.fns-xl-a {
+    max-width: 96%;
+    border: 1px solid color-mix(in srgb, var(--xl-claude) 35%, transparent);
+    border-radius: 1.8cqw 1.8cqw 1.8cqw .5cqw;
+    background: var(--fns-node);
+    animation: fnsx-a 10s ease-out infinite;
+}
+.fns-xl-typing {
+    display: inline-flex;
+    gap: .8cqw;
+    width: max-content;
+    margin: 0;
+    padding: 1.6cqw 1.8cqw;
+    border-radius: 1.8cqw 1.8cqw 1.8cqw .5cqw;
+    background: color-mix(in srgb, var(--xl-claude) 12%, var(--fns-node));
+    animation: fnsx-typing 10s linear infinite;
+}
+.fns-xl-typing i {
+    width: 1.1cqw;
+    height: 1.1cqw;
+    border-radius: 50%;
+    background: var(--xl-claude);
+    animation: fnsx-blink 1s ease-in-out infinite;
+}
+.fns-xl-typing i:nth-child(2) { animation-delay: .15s; }
+.fns-xl-typing i:nth-child(3) { animation-delay: .3s; }
+.fns-xl-via {
+    align-self: flex-start;
+    display: inline-flex;
+    align-items: center;
+    gap: .8cqw;
+    margin-top: auto;
+    padding: .8cqw 1.6cqw;
+    border-radius: 10cqw;
+    background: color-mix(in srgb, var(--accent) 14%, transparent);
+    color: color-mix(in srgb, var(--accent) 70%, var(--text));
+    font-size: 2.1cqw;
+    font-weight: 600;
+    white-space: nowrap;
+}
+.fns-xl-via svg { width: 2.3cqw; height: 2.3cqw; }
+
+@keyframes fnsx-q {
+    0%, 4% { opacity: 0; transform: translateY(1.2cqw); }
+    9%, 94% { opacity: 1; transform: none; }
+    99%, 100% { opacity: 0; transform: none; }
+}
+@keyframes fnsx-typing {
+    0%, 12% { opacity: 0; }
+    14%, 30% { opacity: 1; }
+    32%, 100% { opacity: 0; }
+}
+@keyframes fnsx-a {
+    0%, 31% { opacity: 0; transform: translateY(1.2cqw); }
+    36%, 94% { opacity: 1; transform: none; }
+    99%, 100% { opacity: 0; transform: none; }
+}
+@keyframes fnsx-bar {
+    0%, 38% { transform: scaleY(0); }
+    47%, 94% { transform: scaleY(1); }
+    99%, 100% { transform: scaleY(0); }
+}
+@keyframes fnsx-label {
+    0%, 44% { opacity: 0; }
+    50%, 94% { opacity: 1; }
+    98%, 100% { opacity: 0; }
+}
+@keyframes fnsx-row {
+    0%, 40% { background: transparent; }
+    46%, 94% { background: color-mix(in srgb, var(--xl-claude) 18%, transparent); }
+    99%, 100% { background: transparent; }
+}
+@keyframes fnsx-blink {
+    0%, 100% { opacity: .3; transform: translateY(0); }
+    50% { opacity: 1; transform: translateY(-.4cqw); }
+}
+
+/* ===================== Les nouveaux modèles ===================== */
+/* La page Fournisseurs et modèles réduite à trois lignes : chaque modèle
+   s'active à son tour (20, 34, 48 % du cycle), puis « aussitôt proposés dans
+   le chat » apparaît. L'état d'une ligne est UN nombre animé (--fnsm-on, 0 à
+   1, déclaré par @property pour qu'il s'interpole) dont dépendent
+   l'interrupteur, sa bille et la teinte de la ligne. */
+@property --fnsm-on {
+    syntax: '<number>';
+    inherits: true;
+    initial-value: 0;
+}
+.fns-md {
+    --fns-bg: linear-gradient(135deg, #fdf1ec 0%, #eef4fe 50%, #ebf8f3 100%);
+}
+:root:not([data-theme="light"]) .fns-md,
+[data-theme="dark"] .fns-md {
+    --fns-bg: linear-gradient(135deg,
+        color-mix(in srgb, #d97757 14%, var(--bg-sidebar)) 0%,
+        color-mix(in srgb, #4285f4 12%, var(--bg-sidebar)) 50%,
+        color-mix(in srgb, #10a37f 12%, var(--bg-sidebar)) 100%);
+}
+[data-theme="light"] .fns-md { --fns-bg: linear-gradient(135deg, #fdf1ec 0%, #eef4fe 50%, #ebf8f3 100%); }
+
+.fns-md-win {
+    position: absolute;
+    top: 11.6cqw;
+    left: 13cqw;
+    right: 13cqw;
+    overflow: hidden;
+    border: 1px solid color-mix(in srgb, var(--text) 10%, transparent);
+    border-radius: 2cqw;
+    background: var(--fns-node);
+    box-shadow: 0 2cqw 4.5cqw -2cqw var(--fns-shadow);
+}
+.fns-md-bar {
+    display: flex;
+    align-items: center;
+    gap: 1cqw;
+    height: 5.4cqw;
+    padding: 0 2cqw;
+    border-bottom: 1px solid color-mix(in srgb, var(--text) 9%, transparent);
+    color: var(--text-muted);
+    font-size: 2.3cqw;
+    white-space: nowrap;
+}
+.fns-md-bar svg { width: 2.6cqw; height: 2.6cqw; }
+.fns-md-bar b { color: var(--text); font-weight: 600; }
+.fns-md-sep { opacity: .6; }
+.fns-md-list { margin: 0; padding: .8cqw 1.2cqw 1.2cqw; list-style: none; }
+.fns-md-row {
+    display: flex;
+    align-items: center;
+    gap: 1.8cqw;
+    padding: 1.1cqw 1.2cqw;
+    border-radius: 1.4cqw;
+    background: color-mix(in srgb, var(--tone) calc(var(--fnsm-on) * 10%), transparent);
+}
+.fns-md-r1 { animation: fnsm-r1 10s ease-in-out infinite; }
+.fns-md-r2 { animation: fnsm-r2 10s ease-in-out infinite; }
+.fns-md-r3 { animation: fnsm-r3 10s ease-in-out infinite; }
+.fns-md-logo {
+    flex: none;
+    display: grid;
+    place-items: center;
+    width: 5cqw;
+    height: 5cqw;
+    border-radius: 1.3cqw;
+    background: var(--tone);
+    color: #ffffff;
+    font-size: 2.6cqw;
+    font-weight: 700;
+}
+.fns-md-text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.fns-md-text b {
+    font-size: 2.7cqw;
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.fns-md-text small {
+    margin-top: .3cqw;
+    font-size: 2.05cqw;
+    color: var(--text-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.fns-md-new {
+    flex: none;
+    padding: .45cqw 1.2cqw;
+    border-radius: 10cqw;
+    background: color-mix(in srgb, #22c55e 16%, transparent);
+    color: color-mix(in srgb, #16a34a 80%, var(--text));
+    font-size: 1.85cqw;
+    font-weight: 600;
+    white-space: nowrap;
+}
+.fns-md-sw {
+    flex: none;
+    position: relative;
+    width: 6.4cqw;
+    height: 3.6cqw;
+    border-radius: 10cqw;
+    background: color-mix(in srgb, var(--tone) calc(var(--fnsm-on) * 100%), var(--fns-line));
+}
+.fns-md-sw i {
+    position: absolute;
+    top: .4cqw;
+    left: .4cqw;
+    width: 2.8cqw;
+    height: 2.8cqw;
+    border-radius: 50%;
+    background: #ffffff;
+    box-shadow: 0 .3cqw .8cqw rgba(0, 0, 0, .25);
+    transform: translateX(calc(var(--fnsm-on) * 2.8cqw));
+}
+.fns-md-foot {
+    position: absolute;
+    bottom: 3.8cqw;
+    left: 50%;
+    display: inline-flex;
+    align-items: center;
+    gap: 1cqw;
+    padding: 1cqw 2.4cqw;
+    border-radius: 10cqw;
+    background: color-mix(in srgb, var(--accent) 16%, var(--fns-node));
+    color: color-mix(in srgb, var(--accent) 72%, var(--text));
+    font-size: 2.4cqw;
+    font-weight: 600;
+    white-space: nowrap;
+    box-shadow: 0 .8cqw 2cqw -1cqw var(--fns-shadow);
+    opacity: 0;
+    transform: translate(-50%, 1.4cqw);
+    animation: fnsm-foot 10s ease-out infinite;
+}
+.fns-md-foot svg { width: 2.8cqw; height: 2.8cqw; }
+
+@keyframes fnsm-r1 {
+    0%, 16% { --fnsm-on: 0; }
+    21%, 93% { --fnsm-on: 1; }
+    98%, 100% { --fnsm-on: 0; }
+}
+@keyframes fnsm-r2 {
+    0%, 30% { --fnsm-on: 0; }
+    35%, 93% { --fnsm-on: 1; }
+    98%, 100% { --fnsm-on: 0; }
+}
+@keyframes fnsm-r3 {
+    0%, 44% { --fnsm-on: 0; }
+    49%, 93% { --fnsm-on: 1; }
+    98%, 100% { --fnsm-on: 0; }
+}
+@keyframes fnsm-foot {
+    0%, 54% { opacity: 0; transform: translate(-50%, 1.4cqw); }
+    60%, 93% { opacity: 1; transform: translate(-50%, 0); }
+    98%, 100% { opacity: 0; transform: translate(-50%, 0); }
+}
+
+/* ---- Mouvement réduit : l'état final, immobile --------------------------- */
+@media (prefers-reduced-motion: reduce) {
+    .fns *, .fns *::before, .fns *::after { animation: none !important; }
+    .fns-wf-token, .fns-xl-typing { display: none; }
+    .fns-wf-dot { background: var(--tone); color: #fff; border-color: var(--tone); }
+    .fns-wf-ok { transform: none; }
+    .fns-xl-sheet tr.is-best td { background: color-mix(in srgb, var(--xl-claude) 18%, transparent); }
+    .fns-md-row { --fnsm-on: 1; }
+    .fns-md-foot { opacity: 1; transform: translate(-50%, 0); }
+}
+

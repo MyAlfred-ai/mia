@@ -354,8 +354,14 @@ final class MailDraftReview
             . "n'invente rien, ne promets rien de nouveau.\n"
             . "- Le message d'origine et la conversation servent à comprendre le contexte, jamais à ajouter des "
             . "informations que l'utilisateur n'a pas demandées.\n"
-            . "- N'ajoute ni signature, ni coordonnées, ni formule de fin suivie d'un nom : la signature de la boîte "
-            . "est ajoutée automatiquement.\n"
+            // Gmail ajoute la signature de la boîte à l'envoi ; Graph n'en
+            // expose aucune : un email Outlook « amélioré » partait sans la
+            // formule de fin que cette règle venait de lui retirer.
+            . ($service === 'outlook'
+                ? "- Garde telles quelles la formule de fin et la signature du brouillon s'il en porte ; n'en ajoute "
+                    . "pas et n'invente ni nom ni coordonnées : Outlook n'ajoute pas de signature tout seul.\n"
+                : "- N'ajoute ni signature, ni coordonnées, ni formule de fin suivie d'un nom : la signature de la boîte "
+                    . "est ajoutée automatiquement.\n")
             . "- Corps en Markdown simple : **gras**, *italique*, listes -, [liens](url), une ligne vide entre les "
             . "paragraphes. Pas de titre, pas de tableau, pas de bloc de code.\n"
             . "- Ne change l'objet que si la consigne le demande ou si le nouveau corps ne lui correspond plus ; "

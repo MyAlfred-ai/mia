@@ -61,9 +61,12 @@
         switch (f.type) {
             case 'file':
                 var token = preset && preset.files && preset.files[f.key];
-                return label + help + '<div class="wf-drop' + (token ? ' has-file' : '') + '" data-drop="' + esc(f.key) + '"><span class="fi">' + ICONS.file + '</span><span data-drop-label>'
-                    + esc(token ? token.name : T('Déposez un fichier ici ou cliquez pour choisir')) + '</span>'
-                    + '<input type="file" name="file_' + esc(f.key) + '" id="' + id + '" accept="' + esc(modal.form.accept || '') + '"' + (token ? '' : req) + '>'
+                // Un document de référence est déjà fourni : déposer un autre fichier le remplace pour CE lancement.
+                var ref = f.reference || null;
+                if (ref) { help = '<small>' + esc(T('Fourni par le workflow : {nom}. Déposez un autre fichier pour le remplacer cette fois-ci.', { nom: ref.name })) + '</small>'; }
+                return label + help + '<div class="wf-drop' + (token || ref ? ' has-file' : '') + '" data-drop="' + esc(f.key) + '"><span class="fi">' + ICONS.file + '</span><span data-drop-label>'
+                    + esc(token ? token.name : (ref ? ref.name : T('Déposez un fichier ici ou cliquez pour choisir'))) + '</span>'
+                    + '<input type="file" name="file_' + esc(f.key) + '" id="' + id + '" accept="' + esc(modal.form.accept || '') + '"' + (token || ref ? '' : req) + '>'
                     + (token ? '<input type="hidden" name="token_' + esc(f.key) + '" value="' + esc(token.token) + '">' : '') + '</div></label>';
             case 'longtext':
                 return label + help + '<textarea class="wf-textarea" id="' + id + '" name="' + name + '"' + req + '>' + esc(val) + '</textarea></label>';
@@ -86,6 +89,49 @@
             return '<div class="ms" style="--hue:' + (HUES[k] || HUES.step) + '"><span class="wf-node-ic">' + (ICONS[k] || ICONS.step) + '</span><div>' + esc(l.title)
                 + (l.sub ? '<small>' + esc(l.sub) + '</small>' : '') + (l.review ? '<small style="color:' + HUES.gate + '">' + esc(T('puis vous relisez')) + '</small>' : '') + '</div></div>';
         }).join('') + '</div>';
+    }
+
+    /**
+     * Ce qu'il faut régler avant de lancer (WorkflowSpec::preflight, calculé
+     * par le serveur avec vos connexions du moment) : un compte à relier, un
+     * outil retiré. Tant qu'il en reste, « Lancer » ne part pas — rien n'est
+     * dépensé pour un workflow qui ne pourrait pas aller au bout.
+     */
+    // Typographie : « Gmail » ne se coupe pas après le guillemet (espace
+    // insécable), ni « : » en début de ligne. Textes du serveur ou traduits.
+    function glue(s) {
+        return String(s == null ? '' : s).replace(/« /g, '«\u00a0').replace(/ ([»:;?!])/g, '\u00a0$1');
+    }
+
+    function preflightHtml(items) {
+        if (!items || !items.length) { return ''; }
+        return '<div class="wf-preflight" role="alert"><b>' + esc(T('À régler avant de lancer')) + '</b>'
+            + '<p>' + esc(T('MIA a vérifié ce dont le workflow aura besoin : sans cela, il s’arrêterait en route.')) + '</p><ul>'
+            + items.map(function (i) {
+                return '<li><span>' + (i.brick ? '<b>' + esc(glue(i.brick)) + '</b> — ' : '') + esc(glue(i.text)) + '</span>'
+                    + (i.url ? '<a class="wf-btn sm" href="' + esc(i.url) + '" target="_blank" rel="noopener">' + esc(T('Relier')) + '</a>' : '') + '</li>';
+            }).join('') + '</ul>'
+            + '<button type="button" class="wf-btn sm ghost" data-recheck>' + esc(T('Vérifier à nouveau')) + '</button></div>';
+    }
+
+    function syncPreflight(items) {
+        if (!modal) { return; }
+        modal.form.preflight = items || [];
+        var host = modal.back.querySelector('[data-preflight]');
+        if (host) { host.innerHTML = preflightHtml(modal.form.preflight); }
+        var go = modal.back.querySelector('[data-go]');
+        if (go) { go.disabled = modal.form.preflight.length > 0; }
+    }
+
+    /** Relit le pré-contrôle (après avoir relié un compte dans un autre onglet). */
+    function recheck(btn) {
+        if (!modal || !modal.form.form_url) { return; }
+        btn.disabled = true;
+        btn.textContent = T('Vérification…');
+        fetch(modal.form.form_url, { headers: { Accept: 'application/json' } })
+            .then(function (r) { return r.json(); })
+            .then(function (j) { if (j.ok && modal) { syncPreflight(j.form.preflight); } })
+            .catch(function () { if (btn) { btn.disabled = false; btn.textContent = T('Vérifier à nouveau'); } });
     }
 
     function close() {
@@ -116,29 +162,51 @@
                 + (ev.kind === 'file'
                     ? '<div class="wf-drop" data-drop="__event"><span class="fi">' + ICONS.file + '</span><span data-drop-label>' + esc(T('Déposez un fichier ici ou cliquez pour choisir')) + '</span>'
                         + '<input type="file" name="file___event" accept="' + esc(form.accept || '') + '"></div>'
-                    : '<textarea class="wf-textarea" name="event_text" placeholder="' + esc(ev.name) + '"></textarea>')
+                    : ev.recent_url
+                        // Email : un de ses derniers emails, comme s'il venait
+                        // d'arriver (la liste est rendue par le serveur) ; coller
+                        // un texte reste possible, replié.
+                        ? '<div class="wf-recent"><div class="wf-recent-head"><b>' + esc(T('Choisir un de vos derniers emails')) + '</b>'
+                            + '<button type="button" class="wf-recent-reload" data-recent-reload>' + esc(T('Actualiser')) + '</button></div>'
+                            + '<div data-recent><p class="wf-recent-state">' + esc(T('Lecture de vos derniers emails…')) + '</p></div></div>'
+                            + '<details class="wf-event-paste"><summary>' + esc(T('Ou coller le texte d’un email')) + '</summary>'
+                            + '<textarea class="wf-textarea" name="event_text" placeholder="' + esc(ev.name) + '"></textarea></details>'
+                        : '<textarea class="wf-textarea" name="event_text" placeholder="' + esc(ev.name) + '"></textarea>')
                 + '</div>';
         }
         back.innerHTML = '<div class="wf-modal" role="dialog" aria-modal="true" aria-labelledby="wflTitle">'
-            + '<header><div><h2 id="wflTitle">' + esc(T('Lancer « {nom} »', { nom: form.name })) + '</h2>' + (form.objective ? '<p>' + esc(form.objective) + '</p>' : '') + '</div>'
+            + '<header><div><h2 id="wflTitle">' + esc(glue(T('Lancer « {nom} »', { nom: form.name }))) + '</h2>' + (form.objective ? '<p>' + esc(form.objective) + '</p>' : '') + '</div>'
             + '<button type="button" class="wf-tool" data-close aria-label="' + esc(T('Fermer')) + '">' + ICONS.x + '</button></header>'
+            + '<div data-preflight>' + preflightHtml(form.preflight) + '</div>'
             + '<form class="body" novalidate>'
             + '<section>' + (fields || '<p class="wf-hint">' + esc(T('Ce workflow démarre sans rien demander.')) + '</p>') + '</section>'
             + '<section><b style="font-size:12.5px">' + esc(T('Ce qui va se passer')) + '</b>' + stepsHtml(form.lines)
             + (gates ? '<p class="wf-hint">' + esc(window.tn ? window.tn(gates, 'Une validation vous attendra en route.', '{n} validations vous attendront en route.') : '') + '</p>' : '')
             + ((form.preview_fields || []).length ? '<div class="wf-lpreview" data-preview hidden></div>' : '')
-            + (form.estimate ? '<div class="wf-est"><b>' + esc(T('≈ {min} à {max} crédits', { min: form.estimate.min, max: form.estimate.max })) + '</b><span>' + esc(T('Estimé sur les réponses récentes des mêmes modèles.')) + '</span></div>' : '')
+            // Rendu par le serveur (WorkflowCatalog::estimateHtml), le même que l'éditeur.
+            + (form.estimate && form.estimate.html ? '<div data-estimate>' + form.estimate.html + '</div>' : '')
             + (form.notify ? '<p class="wf-hint">' + esc(T('Vous serez prévenu sur vos appareils quand il aura besoin de vous.')) + '</p>' : '')
             + '</section></form>'
             + '<footer><span class="err" role="alert"></span><button type="button" class="wf-btn ghost" data-close>' + esc(T('Annuler')) + '</button>'
-            + '<button type="button" class="wf-btn primary" data-go>' + esc(T('Lancer')) + '</button></footer></div>';
+            + '<button type="button" class="wf-btn primary" data-go' + ((form.preflight || []).length ? ' disabled' : '') + '>' + esc(T('Lancer')) + '</button></footer></div>';
         document.body.appendChild(back);
         modal.onKey = function (e) { if (e.key === 'Escape') { close(); } };
         document.addEventListener('keydown', modal.onKey);
         back.addEventListener('click', function (e) {
             if (e.target === back || e.target.closest('[data-close]')) { close(); return; }
             if (e.target.closest('[data-go]')) { launch(e.target.closest('[data-go]')); }
+            if (e.target.closest('[data-recheck]')) { recheck(e.target.closest('[data-recheck]')); }
+            if (e.target.closest('[data-recent-reload]')) { loadRecent(); }
         });
+        // Un texte collé remplace l'email choisi (le serveur prend l'email
+        // choisi d'abord : on le décoche pour que l'écran dise la vérité).
+        var pasted = back.querySelector('.wf-event-paste textarea');
+        if (pasted) {
+            pasted.addEventListener('input', function () {
+                if (pasted.value.trim() === '') { return; }
+                back.querySelectorAll('input[name="event_message"]').forEach(function (r) { r.checked = false; });
+            });
+        }
         back.querySelectorAll('[data-drop]').forEach(function (zone) {
             var input = zone.querySelector('input[type=file]');
             var label = zone.querySelector('[data-drop-label]');
@@ -154,10 +222,38 @@
             ['dragenter', 'dragover'].forEach(function (ev) { zone.addEventListener(ev, function () { zone.classList.add('is-over'); }); });
             ['dragleave', 'drop'].forEach(function (ev) { zone.addEventListener(ev, function () { zone.classList.remove('is-over'); }); });
         });
-        var first = back.querySelector('input:not([type=hidden]), textarea, select');
+        var first = Array.prototype.slice.call(back.querySelectorAll('input:not([type=hidden]), textarea, select'))
+            .filter(function (el) { return !el.closest('details:not([open])'); })[0];
         (first || back.querySelector('[data-go]')).focus();
+        if (form.event && form.event.recent_url) { loadRecent(); }
         // Un fichier déjà joint (depuis le chat) se compte tout de suite.
         if ((form.preview_fields || []).some(function (k) { return opts.files && opts.files[k]; })) { preview(); }
+    }
+
+    /**
+     * Les derniers emails de la boîte surveillée (workflow lancé par un
+     * email, essai à la main) : la liste vient du serveur, rendue et
+     * traduite ; rien n'est coché d'office.
+     */
+    function loadRecent() {
+        if (!modal || !modal.form.event || !modal.form.event.recent_url) { return; }
+        var box = modal.back.querySelector('[data-recent]');
+        if (!box) { return; }
+        var seq = (modal.recentSeq || 0) + 1;
+        modal.recentSeq = seq;
+        box.innerHTML = '<p class="wf-recent-state">' + esc(T('Lecture de vos derniers emails…')) + '</p>';
+        var fail = function (msg) {
+            if (!modal || modal.recentSeq !== seq) { return; }
+            box.innerHTML = '<p class="wf-recent-state is-warn">' + esc(msg || T('Vos derniers emails n’ont pas pu être lus.')) + '</p>';
+        };
+        fetch(modal.form.event.recent_url + '?tz=' + encodeURIComponent(tz()), { headers: { Accept: 'application/json' } })
+            .then(function (r) { return r.json().catch(function () { return { ok: false }; }); })
+            .then(function (j) {
+                if (!modal || modal.recentSeq !== seq) { return; }
+                if (!j.ok) { fail(j.error); return; }
+                box.innerHTML = j.html || '';
+            })
+            .catch(function () { fail(''); });
     }
 
     /**
@@ -168,7 +264,7 @@
     function preview() {
         if (!modal) { return; }
         var box = modal.back.querySelector('[data-preview]');
-        var est = modal.back.querySelector('.wf-est b');
+        var est = modal.back.querySelector('[data-estimate]');
         var seq = (modal.previewSeq || 0) + 1;
         modal.previewSeq = seq;
         modal.preview = null;
@@ -203,7 +299,8 @@
                 box.className = 'wf-lpreview';
                 box.innerHTML = html;
                 box.hidden = html === '';
-                if (est && j.estimate) { est.textContent = T('≈ {min} à {max} crédits', { min: j.estimate.min, max: j.estimate.max }); }
+                // Tours comptés dans le fichier joint : l'estimation recalculée.
+                if (est && j.estimate && j.estimate.html) { est.innerHTML = j.estimate.html; }
             })
             .catch(function () {
                 if (!modal || modal.previewSeq !== seq) { return; }
@@ -222,6 +319,16 @@
         // Beaucoup de tours : on le dit avant de lancer (le coût suit le nombre d'éléments).
         var big = ((modal.preview || {}).loops || []).filter(function (lp) { return lp.count > (modal.preview.confirm_over || 50); })[0];
         if (big && !window.confirm(T('« {titre} » va faire {n} tours, ≈ {max} crédits au plus. Lancer quand même ?', { titre: big.title, n: big.count, max: (modal.preview.estimate || {}).max || '?' }))) { return; }
+        // Workflow lancé par un évènement, essai à la main sans rien fournir :
+        // la pièce de l'évènement manquera — on le dit avant de lancer.
+        var ev = modal.form.event;
+        if (ev) {
+            var chosen = f.querySelector('input[name="event_message"]:checked');
+            var text = f.querySelector('textarea[name="event_text"]');
+            var file = f.querySelector('input[name="file___event"]');
+            var given = chosen || (text && text.value.trim() !== '') || (file && file.files && file.files.length);
+            if (!given && !window.confirm(T('Rien n’est fourni pour « {piece} » : le workflow démarrera sans. Lancer quand même ?', { piece: ev.name }))) { return; }
+        }
         var fd = new FormData(f);
         fd.append('trigger', modal.opts.trigger === 'chat' ? 'chat' : 'manual');
         fd.append('tz', tz());
@@ -234,11 +341,13 @@
                 if (!j.ok) {
                     btn.disabled = false;
                     btn.textContent = T('Lancer');
+                    if (j.preflight && j.preflight.length) { syncPreflight(j.preflight); return; }
                     err.textContent = j.error || T('Lancement impossible.');
                     return;
                 }
                 close();
-                if (onLaunched) { onLaunched(j); } else { window.location.href = j.url; }
+                // La discussion d'abord : l'exécution se suit dans sa conversation.
+                if (onLaunched) { onLaunched(j); } else { window.location.href = j.conversation_url || j.url; }
             })
             .catch(function () {
                 btn.disabled = false;
@@ -257,6 +366,137 @@
     }
 
     window.MiaWorkflowLaunch = { open: open, openWithForm: openWithForm, close: close };
+
+    // ------------------------------------------------------------------
+    // Suppression : UNE fenêtre de confirmation pour toutes les portes
+    // (corbeille d'une vignette, en-tête et Réglages de l'éditeur). Elle seule
+    // envoie `confirm=1` — sans lui, le serveur ne supprime rien.
+    // ------------------------------------------------------------------
+
+    var TRASH = SVG('<path d="M3 6h18"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>');
+    var confirmBox = null;
+
+    function closeDelete() {
+        if (!confirmBox) { return; }
+        confirmBox.back.remove();
+        document.removeEventListener('keydown', confirmBox.onKey, true);
+        if (confirmBox.opener && confirmBox.opener.focus && document.contains(confirmBox.opener)) { confirmBox.opener.focus(); }
+        confirmBox = null;
+    }
+
+    /**
+     * Ce que la suppression emporte, en phrases : le workflow et ses versions,
+     * l'historique de ses lancements (leurs conversations restent), les
+     * exécutions en cours qu'elle arrête. Forme pure, testée sous node.
+     * info : { name, runs, live, pausable }
+     */
+    function deleteLines(info) {
+        var runs = Math.max(0, parseInt(info.runs, 10) || 0);
+        var live = Math.max(0, parseInt(info.live, 10) || 0);
+        var tn = window.tn || function (n, un, plusieurs, v) { return T(n > 1 ? plusieurs : un, Object.assign({ n: n }, v || {})); };
+        var lines = [{ text: T('Le workflow, son brouillon et ses versions publiées sont supprimés.') }];
+        lines.push({
+            text: runs > 0
+                ? tn(runs, 'L’historique de son lancement disparaît aussi ; sa conversation reste dans votre historique.', 'L’historique de ses {n} lancements disparaît aussi ; leurs conversations restent dans votre historique.')
+                : T('Il n’a encore jamais été lancé.'),
+        });
+        if (live > 0) {
+            lines.push({ warn: true, text: tn(live, 'Son exécution en cours sera arrêtée, et ses validations en attente fermées.', 'Ses {n} exécutions en cours seront arrêtées, et leurs validations en attente fermées.') });
+        }
+        return lines;
+    }
+
+    /**
+     * Ouvre la fenêtre. info : { id, name, runs, live, pausable } ;
+     * opts.before() : appelé juste avant l'envoi (l'éditeur y retient son
+     * enregistrement automatique, qui reposterait sinon le brouillon d'un
+     * workflow supprimé).
+     */
+    function openDelete(info, opts) {
+        closeDelete();
+        opts = opts || {};
+        var back = document.createElement('div');
+        back.className = 'wf-modal-back wf-content';
+        var lines = deleteLines(info);
+        back.innerHTML = '<div class="wf-modal wf-confirm" role="alertdialog" aria-modal="true" aria-labelledby="wfdTitle" aria-describedby="wfdBody">'
+            + '<header><div class="wf-confirm-head"><span class="wf-confirm-ic">' + TRASH + '</span>'
+            + '<h2 id="wfdTitle">' + esc(glue(T('Supprimer « {nom} » ?', { nom: info.name || '' }))) + '</h2></div>'
+            + '<button type="button" class="wf-tool" data-close aria-label="' + esc(T('Fermer')) + '">' + ICONS.x + '</button></header>'
+            + '<div class="wf-confirm-body" id="wfdBody"><ul>'
+            + lines.map(function (l) { return '<li' + (l.warn ? ' class="is-warn"' : '') + '>' + esc(glue(l.text)) + '</li>'; }).join('')
+            + '</ul><p class="wf-confirm-final">' + esc(glue(T('Cette action est définitive : un workflow supprimé ne se récupère pas.'))) + '</p>'
+            + (info.pausable ? '<p class="wf-hint">' + esc(T('Pour l’arrêter seulement un temps, mettez-le plutôt en pause.')) + '</p>' : '')
+            + '</div>'
+            + '<footer><span class="err" role="alert"></span>'
+            + '<button type="button" class="wf-btn ghost" data-close>' + esc(T('Annuler')) + '</button>'
+            + '<button type="button" class="wf-btn danger-fill" data-confirm>' + TRASH + esc(T('Supprimer définitivement')) + '</button></footer></div>';
+        document.body.appendChild(back);
+        confirmBox = { back: back, opener: document.activeElement };
+        var cancelBtn = back.querySelector('footer [data-close]');
+        var goBtn = back.querySelector('[data-confirm]');
+        var err = back.querySelector('.err');
+
+        // Échap referme ; Tab reste dans la fenêtre. Entrée sur « Annuler »
+        // (focus d'arrivée) ne supprime rien : le geste destructeur se vise.
+        confirmBox.onKey = function (e) {
+            if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); if (!goBtn.disabled) { closeDelete(); } return; }
+            if (e.key !== 'Tab') { return; }
+            var f = Array.prototype.slice.call(back.querySelectorAll('button:not([disabled])'));
+            if (!f.length) { return; }
+            var i = f.indexOf(document.activeElement);
+            if (e.shiftKey && (i <= 0)) { e.preventDefault(); f[f.length - 1].focus(); }
+            else if (!e.shiftKey && (i === -1 || i === f.length - 1)) { e.preventDefault(); f[0].focus(); }
+        };
+        document.addEventListener('keydown', confirmBox.onKey, true);
+
+        back.addEventListener('click', function (e) {
+            if (goBtn.disabled) { return; }
+            if (e.target === back || e.target.closest('[data-close]')) { closeDelete(); return; }
+            if (!e.target.closest('[data-confirm]')) { return; }
+            goBtn.disabled = true;
+            cancelBtn.disabled = true;
+            err.textContent = '';
+            goBtn.lastChild.textContent = T('Suppression…');
+            if (typeof opts.before === 'function') { opts.before(); }
+            var body = new FormData();
+            body.append('confirm', '1');
+            body.append('csrf_token', csrf());
+            fetch('/workflows/' + encodeURIComponent(info.id) + '/delete', {
+                method: 'POST', body: body,
+                headers: { Accept: 'application/json', 'X-CSRF-Token': csrf() },
+            })
+                .then(function (r) { return r.json().catch(function () { return { ok: false }; }); })
+                .then(function (j) {
+                    if (j.ok) { window.location.href = j.url || '/workflows'; return; }
+                    throw new Error(j.error || '');
+                })
+                .catch(function (ex) {
+                    goBtn.disabled = false;
+                    cancelBtn.disabled = false;
+                    goBtn.lastChild.textContent = T('Supprimer définitivement');
+                    err.textContent = (ex && ex.message) || T('Suppression impossible : vérifiez votre connexion.');
+                });
+        });
+        cancelBtn.focus();
+    }
+
+    window.MiaWorkflowDelete = { open: openDelete, close: closeDelete, lines: deleteLines };
+
+    // Corbeille d'une vignette (liste) : un vrai formulaire, intercepté.
+    document.addEventListener('submit', function (e) {
+        var f = e.target.closest && e.target.closest('form[data-wf-delete]');
+        if (!f) { return; }
+        e.preventDefault();
+        var m = /\/workflows\/(\d+)\/delete/.exec(f.getAttribute('action') || '');
+        if (!m) { return; }
+        openDelete({
+            id: m[1],
+            name: f.getAttribute('data-name') || '',
+            runs: f.getAttribute('data-runs'),
+            live: f.getAttribute('data-live'),
+            pausable: f.getAttribute('data-pausable') === '1',
+        });
+    });
 
     // ------------------------------------------------------------------
     // Pages

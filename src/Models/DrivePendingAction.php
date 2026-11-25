@@ -188,6 +188,63 @@ class DrivePendingAction
     }
 
     /**
+     * Action d'une action GROUPÉE sur une table de travail (une par ligne) :
+     * tenue en réserve (`held`) au lieu d'attendre sa propre carte. Elle
+     * n'apparaît nulle part — ni carte, ni rechargement, ni statistiques des
+     * cartes (`auto_executed`) : c'est la carte du groupe que la personne
+     * tranche. Sa durée de vie est celle du groupe, rendue à l'accord
+     * (releaseHeld). Heure MySQL des deux côtés.
+     */
+    public static function hold(int $id, int $userId): void
+    {
+        Database::getInstance()->prepare(
+            'UPDATE drive_pending_actions SET status = \'held\', auto_executed = 1, expires_at = NOW() + INTERVAL 1 DAY
+             WHERE id = ? AND user_id = ? AND status = \'pending\''
+        )->execute([$id, $userId]);
+    }
+
+    /**
+     * Rend une action tenue en réserve à l'attente (held → pending), le temps
+     * d'être exécutée par le chemin d'un clic « Approuver » : le groupe vient
+     * d'être approuvé. False si elle n'est plus en réserve (déjà traitée,
+     * écartée) — une opération rejouée ne l'exécute pas deux fois.
+     */
+    public static function releaseHeld(int $id, int $userId, int $conversationId): bool
+    {
+        $stmt = Database::getInstance()->prepare(
+            'UPDATE drive_pending_actions SET status = \'pending\', expires_at = NOW() + INTERVAL 15 MINUTE
+             WHERE id = ? AND user_id = ? AND conversation_id = ? AND status = \'held\''
+        );
+        $stmt->execute([$id, $userId, $conversationId]);
+        return $stmt->rowCount() === 1;
+    }
+
+    /**
+     * Écarte des actions tenues en réserve sans les exécuter : groupe refusé,
+     * préparation interrompue, opération arrêtée avant la fin.
+     *
+     * @param list<int> $ids
+     * @return int nombre d'actions écartées
+     */
+    public static function cancelHeld(array $ids, int $userId, string $note): int
+    {
+        $ids = array_values(array_filter(array_map('intval', $ids), static fn(int $i): bool => $i > 0));
+        if ($ids === []) {
+            return 0;
+        }
+        $n = 0;
+        foreach (array_chunk($ids, 200) as $chunk) {
+            $stmt = Database::getInstance()->prepare(
+                'UPDATE drive_pending_actions SET status = \'cancelled\', error = ?, resolved_at = NOW()
+                 WHERE user_id = ? AND status = \'held\' AND id IN (' . implode(',', array_fill(0, count($chunk), '?')) . ')'
+            );
+            $stmt->execute(array_merge([mb_substr($note, 0, 500), $userId], $chunk));
+            $n += $stmt->rowCount();
+        }
+        return $n;
+    }
+
+    /**
      * Actions exécutées sans validation et rattachées à une réponse (une
      * exécution de tâche programmée) : « 3 actions effectuées » dans la
      * notification.

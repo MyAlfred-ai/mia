@@ -11,6 +11,8 @@
 #   version (1.2.0.139) ;
 # - les fichiers de secrets : acme.json, *.keystore, *.jks, .env, .env.*
 #   (sauf *.example), clés SSH id_*.
+# - les vidéos et les sons (dossier videos/, *.mp4, *.mov, *.webm, *.m4a, *.mp3,
+#   *.wav…) : les vidéos de présentation de MIA restent dans le dépôt privé.
 #
 # Les exemples du code, des tests et de la documentation utilisent
 # example.test et 192.0.2.0/24 (voir CONTRIBUTING.md).
@@ -64,6 +66,13 @@ while IFS= read -r f; do
 done < <(find . \( -path ./.git -o -path '*/node_modules' -o -path ./vendor \) -prune -o -type f \
            \( -name acme.json -o -name '*.keystore' -o -name '*.jks' -o -name .env \
               -o \( -name '.env.*' ! -name '*.example' \) -o \( -name 'id_*' ! -name '*.pub' \) \) -print)
+
+while IFS= read -r f; do
+  trouvailles+=("${f#./}:0:vidéo ou son réservé au dépôt privé")
+done < <(find . \( -path ./.git -o -path '*/node_modules' -o -path ./vendor \) -prune -o -type f \
+           \( -path ./videos/\* -o -iname '*.mp4' -o -iname '*.m4v' -o -iname '*.mov' -o -iname '*.webm' -o -iname '*.mkv' \
+              -o -iname '*.avi' -o -iname '*.m4a' -o -iname '*.mp3' -o -iname '*.wav' -o -iname '*.aac' -o -iname '*.ogg' \
+              -o -iname '*.flac' \) -print)
 
 if [ ${#trouvailles[@]} -gt 0 ]; then
   printf '%s\n' "${trouvailles[@]}"

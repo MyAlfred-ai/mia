@@ -86,8 +86,9 @@ final class ProviderToolLoopTest extends TestCase
         $this->assertTrue(LlmCatalog::supportsWebSearchWithTools('gemini', 'gemini-3.8-flash'));
         // Mistral : recherche par la Conversations API, outils par Chat Completions.
         $this->assertFalse(LlmCatalog::supportsWebSearchWithTools('mistral', 'mistral-large-latest'));
-        // Sans recherche native, la question ne se pose pas.
+        // DeepSeek : « other tools cannot be used together with deepseek_web_search … yet ».
         $this->assertFalse(LlmCatalog::supportsWebSearchWithTools('deepseek', 'deepseek-flash'));
+        $this->assertTrue(LlmCatalog::supportsWebSearch('deepseek', 'deepseek-flash'));
     }
 
     public function testLeDialecteDeChaqueFournisseurEstDeclare(): void
@@ -615,7 +616,7 @@ final class ProviderToolLoopTest extends TestCase
 
     public function testLaCaseDuLlmLocalEstCableeDeBoutEnBout(): void
     {
-        $gabarit = (string)file_get_contents(ROOT . '/templates/admin/llms/keys.php');
+        $gabarit = (string)file_get_contents(ROOT . '/templates/admin/llms/index.php');
         $this->assertMatchesRegularExpression('/id="localLlmForm".*name="tool_use"/s', $gabarit);
         $this->assertStringContainsString('LocalAdapter::toolUseEnabled()', $gabarit);
 

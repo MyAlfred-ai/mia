@@ -184,10 +184,11 @@ $renderStyleField = function (string $selectId, string $customId, string $select
 };
 ?>
 <div class="admin-content tools-page">
-    <div class="tools-head">
-        <div class="tools-head-text">
+    <?php require ROOT . '/templates/partials/admin-topbar.php'; ?>
+    <div class="tools-head page-head">
+        <div class="tools-head-text page-head-text">
             <h1><?= te('Outils de génération') ?></h1>
-            <p class="tools-intro">
+            <p class="tools-intro page-head-sub">
                 <?= teb('Chaque carte est un outil du chat : {b}images, vidéos, pages web, présentations, dictée vocale ou automatisations n8n{/b}. L\'interrupteur {b}Actif{/b} met l\'outil en service ; il n\'est proposé qu\'aux membres des {b}groupes qui l\'autorisent{/b} (Personnes → Groupes → Droits d\'accès → Outils), et aux administrateurs.') ?>
                 <?php /* La pastille d'exemple est posée APRÈS l'échappement, au milieu de la phrase. */ ?>
                 <?= str_replace(
@@ -200,7 +201,7 @@ $renderStyleField = function (string $selectId, string $customId, string $select
                 <?php require ROOT . '/templates/partials/autosave-hint.php'; ?>
             </p>
         </div>
-        <div class="tools-head-actions">
+        <div class="tools-head-actions page-head-actions">
             <span id="toolsTestGlobal"></span>
             <button type="button"
                     id="testAllToolsBtn"
@@ -209,7 +210,7 @@ $renderStyleField = function (string $selectId, string $customId, string $select
                 <?= te('Tester tous les outils') ?>
             </button>
             <?php if ($toolsCan['create']): ?>
-            <button type="button" id="addToolOpen" class="btn-primary tool-add-btn js-add-tool-open">
+            <button type="button" id="addToolOpen" class="btn-primary tool-add-btn js-add-tool-open page-head-primary">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
                 <?= te('Ajouter un outil') ?>
             </button>
@@ -679,14 +680,60 @@ $renderStyleField = function (string $selectId, string $customId, string $select
         $workflowsEnabled = Workflow::isEnabled();
         $workflowsAuto    = Workflow::autoAllowed();
         $workflowsLoopMax = Workflow::loopMax();
+        // Déclencheur « email reçu » en push : ce qui manque, par fournisseur.
+        $mailPushEnabled  = MailPush::isEnabled();
+        $mailPushBase     = MailPush::publicBase();
+        $mailPushTopic    = (string)Settings::get(MailPush::SETTING_GMAIL_TOPIC, '');
+        $mailPushGmailUrl = $mailPushBase !== null && MailPush::gmailTopic() !== '' ? MailPush::gmailUrl() : null;
+        $mailPushCounts   = MailPushSubscription::counts();
         // Suggestions de suite (FollowUpSuggestion) : cinquième carte intégrée,
         // même mécanique. Aucun prérequis : modèle de la conversation.
         $suggestionsEnabled = FollowUpSuggestion::isEnabled();
+        // Mémoire de MIA (UserMemory) : sixième carte intégrée, même mécanique.
+        // Coupée, rien n'est plus relu ni retenu ; rien n'est effacé.
+        $memoryEnabled = UserMemory::isEnabled();
+        $memoryQuestions = MemoryQuestions::isEnabled();
+        // Apprentissage automatique (MemoryLearner) : option de la carte, et le
+        // modèle qui relit les conversations, avec son coût estimé par relecture.
+        $memoryLearn      = MemoryLearner::isEnabled();
+        $memoryLlm        = trim((string)Settings::get(MemoryLearner::SETTING_LLM, ''));
+        $memoryDefaultLlm = LLMFactory::appDefault();
+        $memoryLlms       = [];
+        foreach (LLMFactory::available() as $slug => $label) {
+            if (LLMFactory::provider((string)$slug) === 'perplexity') {
+                continue;
+            }
+            $memoryLlms[(string)$slug] = [
+                'label'   => (string)$label,
+                'credits' => CreditEstimate::helperCall(UsageSource::MEMORY_LEARN, (string)$slug),
+            ];
+        }
+        $memoryLlmLabel = static function (array $m): string {
+            return $m['credits'] !== null
+                ? I18n::plural((int)$m['credits'], '{modele} · ≈ {n} crédit par relecture', '{modele} · ≈ {n} crédits par relecture', ['modele' => $m['label']])
+                : $m['label'];
+        };
         $hasOpenAiKey = isset($providersWithKey['openai']);
+        // Dictée : moteur choisi (OpenAI Realtime ou Voxtral) et moteur en
+        // vigueur d'après les clés (Dictation, source unique).
+        $hasMistralKey  = isset($providersWithKey['mistral']);
+        $micEngine      = Dictation::chosenEngine();
+        $micEffective   = Dictation::resolveEngine($micEngine, $hasOpenAiKey, $hasMistralKey);
+        // Conversation vocale : même diagnostic que le bouton du chat, dit à
+        // quelqu'un qui peut le régler.
+        $voiceChatIssue = $voiceChatEnabled
+            ? SpeechSynthesizer::conversationIssue($micEffective, $hasOpenAiKey, true)
+            : null;
+        // Voix de lecture (SpeechSynthesizer, source unique) : choisie, en
+        // vigueur d'après les clés et le jour, et l'arrêt annoncé de la voix
+        // d'origine (gpt-4o-mini-tts).
+        $speechChosen    = SpeechSynthesizer::chosenEngine();
+        $speechEffective = SpeechSynthesizer::resolveEngine($speechChosen, $hasOpenAiKey, $hasMistralKey);
+        $speechLegacyEnd = SpeechSynthesizer::retirement(SpeechSynthesizer::ENGINE_LEGACY);
         // Lien vers les clés des fournisseurs, posé APRÈS l'échappement des
         // phrases qui le citent ({lien}) : la phrase reste entière au dictionnaire.
         $llmsLink     = '<a href="/admin/llms">' . te('Gestion LLMs') . '</a>';
-        $toolCount    = count($tools) + 5; // + dictée vocale, conversation vocale, suggestions de suite, tâches programmées et workflows intégrés
+        $toolCount    = count($tools) + 6; // + dictée vocale, conversation vocale, suggestions de suite, mémoire, tâches programmées et workflows intégrés
     ?>
     <div class="tools-list-head">
         <h2><?= te('Outils disponibles') ?></h2>
@@ -698,7 +745,7 @@ $renderStyleField = function (string $selectId, string $customId, string $select
     <div class="connector-grid tools-grid">
 
             <!-- Carte outil intégré : Dictée vocale (micro) -->
-            <div class="connector-card tool-card tool-card-builtin<?= (!$hasOpenAiKey || !$micEnabled) ? ' is-off' : '' ?>"
+            <div class="connector-card tool-card tool-card-builtin<?= ($micEffective === null || !$micEnabled) ? ' is-off' : '' ?>"
                  id="builtinMicCard"
                  data-builtin-key="mic_enabled"
                  style="--tool-accent:#2dd4bf">
@@ -712,14 +759,14 @@ $renderStyleField = function (string $selectId, string $customId, string $select
                         </svg>
                     </div>
                     <div class="connector-title">
-                        <h3><?= te('Dictée vocale') ?></h3>
+                        <h3><?= te('Dictée vocale') ?><?= AdminAttention::itemDot('builtin:mic') ?></h3>
                         <div class="connector-caps">
                             <span class="tool-type-chip"><?= te('Intégré') ?></span>
-                            <span class="badge badge-gray">OpenAI · Whisper</span>
+                            <span class="badge badge-gray"><?= htmlspecialchars(Dictation::engineLabel($micEffective ?? $micEngine)) ?></span>
                         </div>
                     </div>
                     <div class="connector-switch">
-                        <?php if ($hasOpenAiKey): ?>
+                        <?php if ($micEffective !== null): ?>
                             <span class="tool-state" title="<?= te('Actif = le bouton micro est proposé à tous les utilisateurs dans le chat.') ?>">
                                 <span class="tool-state-label"><?= $micEnabled ? te('Actif') : te('Inactif') ?></span>
                                 <span class="tool-state-sub"><?= $micEnabled ? te('Utilisable par tous') : te('Masqué du chat') ?></span>
@@ -739,11 +786,34 @@ $renderStyleField = function (string $selectId, string $customId, string $select
                 <div class="connector-meta">
                     <span><strong><?= te('Micro dans la zone de message') ?></strong></span>
                     <span class="connector-dot">•</span>
-                    <span><?= te('parole transcrite en texte, en temps réel') ?></span>
+                    <span><?= $micEffective === Dictation::ENGINE_MISTRAL ? te('parole transcrite en texte, phrase par phrase') : te('parole transcrite en texte, en temps réel') ?></span>
                 </div>
 
-                <?php if (!$hasOpenAiKey): ?>
-                    <p class="connector-warn">⚠ <?= str_replace('{lien}', $llmsLink, te('Renseignez la clé API OpenAI dans {lien} pour activer la dictée vocale.')) ?></p>
+                <label class="tool-builtin-option tool-builtin-option-select">
+                    <span>
+                        <strong><?= te('Moteur de transcription') ?></strong>
+                        <span class="tool-builtin-option-hint">
+                            <?= te('OpenAI écrit le texte au fil de la parole. Voxtral (Mistral) l\'écrit phrase par phrase, à chaque pause. Voxtral n\'est retenu qu\'après un essai réussi de la clé Mistral.') ?>
+                        </span>
+                    </span>
+                    <select class="tool-builtin-option-choice" data-builtin-key="<?= htmlspecialchars(Dictation::SETTING_ENGINE) ?>"
+                            data-reload="1"
+                            data-pending-label="<?= te('Essai de la clé Mistral…') ?>"
+                            aria-label="<?= te('Moteur de transcription de la dictée') ?>">
+                        <option value="<?= Dictation::ENGINE_OPENAI ?>"<?= $micEngine === Dictation::ENGINE_OPENAI ? ' selected' : '' ?><?= $hasOpenAiKey ? '' : ' disabled' ?>>
+                            <?= te('OpenAI Realtime') ?><?= $hasOpenAiKey ? '' : ' — ' . te('clé requise') ?>
+                        </option>
+                        <option value="<?= Dictation::ENGINE_MISTRAL ?>"<?= $micEngine === Dictation::ENGINE_MISTRAL ? ' selected' : '' ?><?= $hasMistralKey ? '' : ' disabled' ?>>
+                            <?= te('Mistral Voxtral') ?><?= $hasMistralKey ? '' : ' — ' . te('clé requise') ?>
+                        </option>
+                    </select>
+                    <span class="tool-builtin-option-state" aria-live="polite"></span>
+                </label>
+
+                <?php if ($micEffective === null): ?>
+                    <p class="connector-warn">⚠ <?= str_replace('{lien}', $llmsLink, te('Renseignez la clé API OpenAI ou Mistral dans {lien} pour activer la dictée vocale.')) ?></p>
+                <?php elseif ($micEngine === Dictation::ENGINE_MISTRAL && $micEffective !== Dictation::ENGINE_MISTRAL): ?>
+                    <p class="connector-warn">⚠ <?= str_replace('{lien}', $llmsLink, te('Voxtral est choisi, mais la clé Mistral n\'est plus renseignée dans {lien} : la dictée passe par OpenAI.')) ?></p>
                 <?php endif; ?>
 
                 <p class="connector-note tool-no-trigger">
@@ -757,19 +827,21 @@ $renderStyleField = function (string $selectId, string $customId, string $select
                  data-builtin-key="<?= htmlspecialchars(SpeechSynthesizer::SETTING_ENABLED) ?>"
                  style="--tool-accent:#0ea5e9">
                 <div class="connector-top">
-                    <div class="connector-icon" aria-hidden="true">
+                    <?php $voiceCardDot = $voiceChatEnabled && (!$hasOpenAiKey || $voiceChatIssue !== null); ?>
+                    <div class="connector-icon<?= $voiceCardDot ? ' has-voice-issue' : '' ?>" aria-hidden="true">
                         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
                             <path d="M4 14v-3a8 8 0 0 1 16 0v3"/>
                             <rect x="2" y="13" width="5" height="7" rx="2"/>
                             <rect x="17" y="13" width="5" height="7" rx="2"/>
                             <path d="M19.5 20v1a2 2 0 0 1-2 2H13"/>
                         </svg>
+                        <?php if ($voiceCardDot): ?><span class="voice-issue-dot"></span><?php endif; ?>
                     </div>
                     <div class="connector-title">
-                        <h3><?= te('Conversation vocale') ?></h3>
+                        <h3><?= te('Conversation vocale') ?><?= AdminAttention::itemDot('builtin:voice') ?></h3>
                         <div class="connector-caps">
                             <span class="tool-type-chip"><?= te('Intégré') ?></span>
-                            <span class="badge badge-gray"><?= te('OpenAI · Realtime + synthèse vocale') ?></span>
+                            <span class="badge badge-gray"><?= htmlspecialchars(t('Écoute OpenAI · lecture {voix}', ['voix' => SpeechSynthesizer::engineLabel($speechEffective ?? SpeechSynthesizer::ENGINE_OPENAI)])) ?></span>
                         </div>
                     </div>
                     <div class="connector-switch">
@@ -796,12 +868,53 @@ $renderStyleField = function (string $selectId, string $customId, string $select
                     <span><?= te('l\'utilisateur parle, MIA répond et lit sa réponse à voix haute') ?></span>
                 </div>
 
-                <?php if (!$hasOpenAiKey): ?>
+                <label class="tool-builtin-option tool-builtin-option-select">
+                    <span>
+                        <strong><?= te('Voix de lecture') ?></strong>
+                        <span class="tool-builtin-option-hint">
+                            <?= te('La voix qui lit les réponses à voix haute. OpenAI Realtime et Voxtral (Mistral) ne sont retenues qu\'après un essai réussi de la clé. Facturée à la minute lue (OpenAI) ou au caractère lu (Voxtral).') ?>
+                        </span>
+                    </span>
+                    <select class="tool-builtin-option-choice" data-builtin-key="<?= htmlspecialchars(SpeechSynthesizer::SETTING_ENGINE) ?>"
+                            data-reload="1"
+                            data-pending-label="<?= te('Essai de la voix…') ?>"
+                            data-pending-values="<?= SpeechSynthesizer::ENGINE_OPENAI ?> <?= SpeechSynthesizer::ENGINE_MISTRAL ?>"
+                            aria-label="<?= te('Voix de lecture de la conversation vocale') ?>">
+                        <?php foreach (SpeechSynthesizer::ENGINES as $speechEngine => $speechInfo):
+                            $speechEnd   = SpeechSynthesizer::retirement($speechEngine);
+                            $speechKeyOk = $speechInfo['provider'] === 'mistral' ? $hasMistralKey : $hasOpenAiKey;
+                            $speechOff   = !$speechKeyOk || ($speechEnd['retired'] ?? false);
+                            $speechNote  = !$speechKeyOk ? te('clé requise')
+                                : ($speechEnd === null ? '' : (($speechEnd['retired'] ?? false)
+                                    ? te('arrêtée par OpenAI')
+                                    : htmlspecialchars(t('arrêt le {date}', ['date' => Format::dateFr($speechEnd['date'])]))));
+                        ?>
+                            <option value="<?= htmlspecialchars($speechEngine) ?>"<?= ($speechEffective ?? $speechChosen) === $speechEngine ? ' selected' : '' ?><?= $speechOff ? ' disabled' : '' ?>>
+                                <?= htmlspecialchars(SpeechSynthesizer::engineLabel($speechEngine)) ?><?= $speechNote !== '' ? ' — ' . $speechNote : '' ?>
+                            </option>
+                        <?php endforeach; ?>
+                    </select>
+                    <span class="tool-builtin-option-state" aria-live="polite"></span>
+                </label>
+
+                <?php if ($voiceChatIssue !== null): ?>
+                    <p class="connector-warn">⚠ <?= htmlspecialchars($voiceChatIssue['message']) ?></p>
+                <?php elseif (!$hasOpenAiKey): ?>
                     <p class="connector-warn">⚠ <?= str_replace('{lien}', $llmsLink, te('Renseignez la clé API OpenAI dans {lien} pour activer la conversation vocale.')) ?></p>
+                <?php endif; ?>
+                <?php if ($speechEffective === SpeechSynthesizer::ENGINE_LEGACY && $speechLegacyEnd !== null): ?>
+                    <p class="connector-warn">⚠ <?= htmlspecialchars(t('La voix de lecture gpt-4o-mini-tts s\'arrête le {date} : choisissez-en une autre ci-dessus. Sans choix, la lecture passera d\'elle-même sur OpenAI Realtime ce jour-là.', ['date' => Format::dateFr($speechLegacyEnd['date'])])) ?></p>
+                <?php elseif ($speechChosen === SpeechSynthesizer::ENGINE_MISTRAL && $speechEffective !== SpeechSynthesizer::ENGINE_MISTRAL && $speechEffective !== null): ?>
+                    <p class="connector-warn">⚠ <?= str_replace('{lien}', $llmsLink, htmlspecialchars(t('Voxtral est choisi pour la lecture, mais la clé Mistral n\'est plus renseignée dans {lien} : la lecture passe par {voix}.', ['voix' => SpeechSynthesizer::engineLabel($speechEffective)]))) ?></p>
+                <?php elseif ($speechChosen === SpeechSynthesizer::ENGINE_LEGACY && $speechEffective === SpeechSynthesizer::ENGINE_OPENAI && $speechLegacyEnd !== null): ?>
+                    <p class="connector-note tool-no-trigger"><?= htmlspecialchars(t('gpt-4o-mini-tts n\'est plus servi depuis le {date} : la lecture passe par OpenAI Realtime.', ['date' => Format::dateFr($speechLegacyEnd['date'])])) ?></p>
+                <?php endif; ?>
+                <?php if ($hasOpenAiKey && ($micEffective === Dictation::ENGINE_MISTRAL || $speechEffective === SpeechSynthesizer::ENGINE_MISTRAL)): ?>
+                    <p class="connector-note tool-no-trigger"><?= te('Quel que soit le moteur de la dictée ou de la lecture, la conversation vocale écoute par OpenAI, donc la voix de l\'utilisateur part chez OpenAI.') ?></p>
                 <?php endif; ?>
 
                 <p class="connector-note tool-no-trigger">
-                    <?= $balises(teb('Outil {b}intégré{/b} : rien à configurer, rien à tester. Chaque tour passe par l\'assistant, les bases et les connecteurs de la conversation, comme un message écrit. Facturé à la minute écoutée (ligne {i}Dictée{/i}) et à la minute lue (ligne {i}Lecture à voix haute{/i}) de Tarifs & crédits, dans le quota de l\'utilisateur.')) ?>
+                    <?= $balises(teb('Outil {b}intégré{/b} : rien à configurer, rien à tester. Chaque tour passe par l\'assistant, les bases et les connecteurs de la conversation, comme un message écrit. Facturé à la minute écoutée (ligne {i}Dictée{/i}) et à la lecture (ligne {i}Lecture à voix haute{/i}) de Tarifs & crédits, dans le quota de l\'utilisateur.')) ?>
                 </p>
             </div>
             <!-- Carte outil intégré : Suggestions de suite (zone de saisie, Tab) -->
@@ -849,6 +962,98 @@ $renderStyleField = function (string $selectId, string $customId, string $select
 
                 <p class="connector-note tool-no-trigger">
                     <?= $balises(teb('Outil {b}intégré{/b} : rien à configurer. Une suggestion par réponse, calculée par le modèle de la conversation et gardée avec elle — quelques centaines de tokens, ligne {i}Suggestions de suite{/i} de la Consommation, dans le quota de l\'utilisateur. Rien n\'est envoyé sans que la personne la relise et valide.')) ?>
+                </p>
+            </div>
+            <!-- Carte outil intégré : Mémoire (Réglages → Mémoire) -->
+            <div class="connector-card tool-card tool-card-builtin<?= $memoryEnabled ? '' : ' is-off' ?>"
+                 id="builtinMemoryCard"
+                 data-builtin-key="<?= htmlspecialchars(UserMemory::SETTING_ENABLED) ?>"
+                 style="--tool-accent:#14b8a6">
+                <div class="connector-top">
+                    <div class="connector-icon" aria-hidden="true">
+                        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>
+                    </div>
+                    <div class="connector-title">
+                        <h3><?= te('Mémoire') ?></h3>
+                        <div class="connector-caps">
+                            <span class="tool-type-chip"><?= te('Intégré') ?></span>
+                            <span class="badge badge-gray"><?= te('Propre à chaque personne') ?></span>
+                        </div>
+                    </div>
+                    <div class="connector-switch">
+                        <span class="tool-state" title="<?= te('Actif = MIA relit ce qu\'elle sait de chaque personne au début de ses conversations, et retient ce qu\'on lui demande de retenir.') ?>">
+                            <span class="tool-state-label"><?= $memoryEnabled ? te('Actif') : te('Inactif') ?></span>
+                            <span class="tool-state-sub"><?= $memoryEnabled ? te('Utilisable par tous') : te('Coupée pour tous') ?></span>
+                        </span>
+                        <label class="ios-switch">
+                            <input type="checkbox" class="tool-active-toggle"
+                                   <?= $memoryEnabled ? 'checked' : '' ?>
+                                   aria-label="<?= te('Utiliser la mémoire de MIA, pour tous les utilisateurs') ?>">
+                            <span class="ios-switch-slider"></span>
+                        </label>
+                    </div>
+                </div>
+
+                <div class="connector-meta">
+                    <span><strong><?= te('Réglages → Mémoire') ?></strong></span>
+                    <span class="connector-dot">•</span>
+                    <span><?= te('ce que MIA sait de chaque personne, visible et modifiable par elle seule') ?></span>
+                </div>
+
+                <?php /* Option de la carte, enregistrée à la volée comme l'interrupteur
+                         (sa propre clé, data-builtin-key sur la case). */ ?>
+                <label class="tool-builtin-option">
+                    <input type="checkbox" class="tool-builtin-option-toggle"
+                           data-builtin-key="<?= htmlspecialchars(MemoryQuestions::SETTING_ENABLED) ?>"
+                           <?= $memoryQuestions ? 'checked' : '' ?>>
+                    <span>
+                        <strong><?= te('Poser des questions de temps en temps') ?></strong>
+                        <span class="tool-builtin-option-hint">
+                            <?= te('Sous une réponse terminée, une courte question à choix (la forme préférée, la façon de travailler, les outils), au plus une par jour pendant que MIA fait connaissance, puis une par semaine. La réponse est enregistrée sans appel au modèle ; chacun peut régler le rythme ou les refuser.') ?>
+                        </span>
+                    </span>
+                    <span class="tool-builtin-option-state" aria-live="polite"></span>
+                </label>
+
+                <label class="tool-builtin-option">
+                    <input type="checkbox" class="tool-builtin-option-toggle"
+                           data-builtin-key="<?= htmlspecialchars(MemoryLearner::SETTING_ENABLED) ?>"
+                           <?= $memoryLearn ? 'checked' : '' ?>>
+                    <span>
+                        <strong><?= te('Apprendre des conversations') ?></strong>
+                        <span class="tool-builtin-option-hint">
+                            <?= te('Quelques minutes après une conversation où la personne parle d\'elle ou de ses préférences, MIA relit ses derniers messages et retient ce qu\'elle y a dit ; ce qu\'elle déduit attend un « oui ». Une carte prévient chacun avant tout apprentissage, et chacun peut le refuser. Hors quota, compté au budget IA ; en pause dès que le budget est en alerte.') ?>
+                        </span>
+                    </span>
+                    <span class="tool-builtin-option-state" aria-live="polite"></span>
+                </label>
+
+                <label class="tool-builtin-option tool-builtin-option-select">
+                    <span>
+                        <strong><?= te('Modèle de l\'apprentissage') ?></strong>
+                        <span class="tool-builtin-option-hint">
+                            <?= te('Une relecture = un appel court. Un modèle économique suffit ; il sert à chaque personne dont les groupes permettent un modèle du même fournisseur, le modèle par défaut aux autres.') ?>
+                        </span>
+                    </span>
+                    <select class="tool-builtin-option-choice" data-builtin-key="<?= htmlspecialchars(MemoryLearner::SETTING_LLM) ?>"
+                            aria-label="<?= te('Modèle de l\'apprentissage') ?>">
+                        <option value=""<?= $memoryLlm === '' || !isset($memoryLlms[$memoryLlm]) ? ' selected' : '' ?>><?=
+                            htmlspecialchars($memoryDefaultLlm !== null && isset($memoryLlms[$memoryDefaultLlm])
+                                ? t('Modèle par défaut — {modele}', ['modele' => $memoryLlmLabel($memoryLlms[$memoryDefaultLlm])])
+                                : t('Modèle par défaut'))
+                        ?></option>
+                        <?php foreach ($memoryLlms as $slug => $m): ?>
+                            <option value="<?= htmlspecialchars($slug) ?>"<?= $memoryLlm === $slug ? ' selected' : '' ?>><?= htmlspecialchars($memoryLlmLabel($m)) ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                    <span class="tool-builtin-option-state" aria-live="polite"><?=
+                        $memoryLlm !== '' && !isset($memoryLlms[$memoryLlm])
+                            ? te('Le modèle choisi n\'est plus proposé : le modèle par défaut le remplace.')
+                            : '' ?></span>
+                </label>
+
+                <p class="connector-note tool-no-trigger">
+                    <?= $balises(teb('Outil {b}intégré{/b} : chaque personne relit, corrige et retire ses souvenirs dans Réglages → Mémoire ; un administrateur ne les voit pas, et ils ne partent pas dans la sauvegarde de l\'instance. Coupée, la mémoire n\'est plus relue ni enrichie, mais rien n\'est effacé.')) ?>
                 </p>
             </div>
             <!-- Carte outil intégré : Tâches programmées (Espaces → Tâches programmées) -->
@@ -972,6 +1177,77 @@ $renderStyleField = function (string $selectId, string $customId, string $select
                     <span class="tool-builtin-option-state" aria-live="polite"></span>
                 </label>
 
+                <label class="tool-builtin-option">
+                    <input type="checkbox" class="tool-builtin-option-toggle"
+                           data-builtin-key="<?= htmlspecialchars(MailPush::SETTING_ENABLED) ?>"
+                           <?= $mailPushEnabled ? 'checked' : '' ?>>
+                    <span>
+                        <strong><?= te('Démarrer dès qu\'un email arrive (notifications instantanées)') ?></strong>
+                        <span class="tool-builtin-option-hint">
+                            <?= te('Un workflow qui démarre sur un email est prévenu par Gmail ou Outlook à l\'arrivée du message ; une vérification de secours passe encore toutes les heures. Décoché, ou impossible (voir ci-dessous), la boîte est vérifiée chaque minute.') ?>
+                        </span>
+                    </span>
+                    <span class="tool-builtin-option-state" aria-live="polite"></span>
+                </label>
+
+                <div class="tool-mail-push" id="mail-push">
+                    <?php
+                    $mailPushLines = [];
+                    foreach (['outlook' => 'Outlook', 'gmail' => 'Gmail'] as $mpKey => $mpName) {
+                        $mpReason = MailPush::unavailableReason($mpKey);
+                        $mpCount = $mailPushCounts[$mpKey] ?? [];
+                        $mailPushLines[] = [$mpName, $mpReason, (int)($mpCount['active'] ?? 0), (int)($mpCount['error'] ?? 0)];
+                    }
+                    ?>
+                    <ul class="tool-mail-push-state">
+                        <?php foreach ($mailPushLines as [$mpName, $mpReason, $mpActive, $mpError]): ?>
+                            <li class="<?= $mpReason === null ? 'is-ok' : 'is-off' ?>">
+                                <strong><?= htmlspecialchars($mpName) ?></strong> —
+                                <?= $mpReason === null ? te('prêt') : htmlspecialchars($mpReason) ?>
+                                <?php if ($mpActive > 0 || $mpError > 0): ?>
+                                    · <?= htmlspecialchars(I18n::plural($mpActive, '{n} boîte prévient MIA', '{n} boîtes préviennent MIA')) ?>
+                                    <?php if ($mpError > 0): ?>· <?= htmlspecialchars(I18n::plural($mpError, '{n} en erreur', '{n} en erreur')) ?><?php endif; ?>
+                                <?php endif; ?>
+                            </li>
+                        <?php endforeach; ?>
+                    </ul>
+                    <?php if ($mailPushBase === null): ?>
+                        <p class="tool-builtin-option-hint"><?= te('Les notifications exigent une adresse publique en HTTPS (APP_URL) : Google et Microsoft doivent pouvoir joindre MIA depuis Internet.') ?></p>
+                    <?php endif; ?>
+                    <p class="tool-builtin-option-hint"><?= te('Outlook : rien à régler, la permission de lecture des emails du connecteur suffit.') ?></p>
+                    <details class="tool-mail-push-gmail"<?= $mailPushTopic === '' ? '' : ' open' ?>>
+                        <summary><?= te('Gmail : relier un topic Google Cloud Pub/Sub') ?></summary>
+                        <ol class="tool-builtin-option-hint">
+                            <li><?= teb('Dans le projet Google Cloud de la connexion Google de MIA, activez {b}Cloud Pub/Sub{/b} et créez un topic.') ?></li>
+                            <li><?= teb('Donnez au compte {b}gmail-api-push@system.gserviceaccount.com{/b} le rôle « Pub/Sub Publisher » sur ce topic.') ?></li>
+                            <li><?= teb('Créez un abonnement {b}push{/b} du topic vers l\'adresse ci-dessous (elle apparaît une fois le topic enregistré).') ?></li>
+                            <li><?= te('Collez le nom complet du topic ici, puis « Tester le topic » : MIA l\'essaie sur votre propre boîte Gmail.') ?></li>
+                        </ol>
+                        <form method="post" action="/admin/tools/mail-push" class="tool-mail-push-form">
+                            <?= Csrf::field() ?>
+                            <label>
+                                <span><?= te('Topic Pub/Sub') ?></span>
+                                <input type="text" name="gmail_push_topic" value="<?= htmlspecialchars($mailPushTopic) ?>"
+                                       placeholder="projects/mon-projet/topics/mia-gmail" autocomplete="off" spellcheck="false">
+                            </label>
+                            <?php if ($mailPushGmailUrl !== null): ?>
+                                <label>
+                                    <span><?= te('Adresse de l\'abonnement push (secrète)') ?></span>
+                                    <input type="text" readonly value="<?= htmlspecialchars($mailPushGmailUrl) ?>" onclick="this.select()">
+                                </label>
+                            <?php endif; ?>
+                            <div class="tool-mail-push-actions">
+                                <button type="submit" name="mail_push_action" value="test" class="btn btn-primary btn-sm"><?= te('Tester le topic') ?></button>
+                                <button type="submit" name="mail_push_action" value="save" class="btn btn-secondary btn-sm"><?= te('Appliquer sans tester') ?></button>
+                                <?php if ($mailPushGmailUrl !== null): ?>
+                                    <button type="submit" name="mail_push_action" value="renew" class="btn btn-secondary btn-sm"
+                                            onclick='return confirm(<?= tj('L\'adresse actuelle cessera de fonctionner : il faudra reporter la nouvelle dans Google Cloud. Continuer ?') ?>);'><?= te('Changer d\'adresse') ?></button>
+                                <?php endif; ?>
+                            </div>
+                        </form>
+                    </details>
+                </div>
+
                 <p class="connector-note tool-no-trigger">
                     <?= teb('Outil {b}intégré{/b} : chaque étape est un message ordinaire mené par MIA ou un assistant, dans le quota de la personne qui lance le workflow. Seule la version publiée s\'exécute ; {n} workflows au plus par personne. Désactivé, plus rien ne démarre : les workflows restent enregistrés, une exécution en cours se met en pause à sa prochaine étape.', ['n' => (int)Workflow::MAX_PER_USER]) ?>
                 </p>
@@ -1062,7 +1338,7 @@ $renderStyleField = function (string $selectId, string $customId, string $select
                 <div class="connector-top">
                     <div class="connector-icon" aria-hidden="true"><?= $typeIcons[$tool['type']] ?? $typeIcons['image'] ?></div>
                     <div class="connector-title">
-                        <h3><?= htmlspecialchars($tool['name']) ?></h3>
+                        <h3><?= htmlspecialchars($tool['name']) ?><?= AdminAttention::itemDot('tool:' . (int)$tool['id']) ?></h3>
                         <div class="connector-caps">
                             <span class="tool-type-chip"><?= htmlspecialchars($typeLabel) ?></span>
                             <?php if (ChatTool::isBetaType((string)$tool['type'])): ?>
@@ -1314,6 +1590,29 @@ $renderStyleField = function (string $selectId, string $customId, string $select
                                 <option value="4:3">4:3</option>
                                 <option value="3:4">3:4</option>
                             </select>
+                        </div>
+                    </div>
+                    <!-- Options de l'image (ImageOptions) : fond, format du fichier,
+                         orientation. Chaque réglage n'apparaît que si le MODÈLE
+                         choisi l'accepte (IMAGE_MODEL_CAPS, lu au catalogue) ;
+                         un réglage masqué est désactivé, donc jamais posté. -->
+                    <div id="eImgOptions" class="tool-img-options" style="display:none;margin-top:12px">
+                        <div class="tool-img-options-title"><?= te('Options de l’image') ?>
+                            <?= $tip(t('Valent pour toutes les images de cet outil. Un assistant qui s’en sert, ou une brique de workflow, peut les préciser pour lui-même.')) ?></div>
+                        <label class="tool-img-transparent" id="eCfgTransparentWrap">
+                            <input type="checkbox" name="config_transparent" value="1" id="eCfgTransparent">
+                            <span><?= te('Fond transparent') ?> <span class="tool-img-preview" id="eCfgTransparentPreview" hidden>(<?= te('en aperçu chez le fournisseur') ?>)</span></span>
+                        </label>
+                        <p class="tool-img-hint" id="eCfgTransparentHint"><?= te('Le sujet se détache sur un fond vide : logo, pictogramme, produit détouré. Le fichier passe en PNG (ou WebP), seuls formats qui gardent la transparence.') ?></p>
+                        <div style="display:flex;gap:12px;flex-wrap:wrap">
+                            <div class="form-group" style="margin:0;flex:0 0 200px" id="eCfgOutputFormatWrap">
+                                <label><?= te('Format du fichier') ?></label>
+                                <select name="config_output_format" id="eCfgOutputFormat" class="form-select"></select>
+                            </div>
+                            <div class="form-group" style="margin:0;flex:0 0 200px" id="eCfgFormatWrap">
+                                <label><?= te('Format') ?> <?= $tip(t('Orientation de l’image. Non spécifié : la taille ou le rapport réglés plus haut, sinon le choix du modèle.')) ?></label>
+                                <select name="config_format" id="eCfgFormat" class="form-select"></select>
+                            </div>
                         </div>
                     </div>
                     <div class="form-group" style="margin-top:12px">
@@ -1620,6 +1919,10 @@ foreach (array_keys(ToolCatalog::models('image', 'openai')) as $imgModelId) {
 }
 ?>
 const OPENAI_IMAGE_MODEL_OPTIONS = <?= json_encode($imageModelOptions, JSON_UNESCAPED_UNICODE) ?>;
+// Fond, format du fichier, orientation acceptés par chaque modèle image
+// (ImageOptions::catalogCapabilities — même lecture que le générateur).
+const IMAGE_MODEL_CAPS = <?= json_encode(ImageOptions::catalogCapabilities(), JSON_UNESCAPED_UNICODE) ?>;
+const IMAGE_OPTIONS_TEXT = <?= json_encode(ImageOptions::labels(), JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) ?>;
 
 /**
  * Libellés lisibles d'une taille ou d'une qualité (les valeurs restent celles
@@ -2193,7 +2496,69 @@ function updateEditImageOptions(cfg) {
     setSectionDisabled('eOptsImgOai', isGem || isOpenAiNative);
     setSectionDisabled('eOptsImgOaiNative', isGem || !isOpenAiNative);
     setSectionDisabled('eOptsImgImagen', !isImagen);
+
+    updateEditImageExtraOptions(isGem ? 'gemini' : 'openai', isGem ? gemModel : oaiModel, cfg);
 }
+
+/**
+ * Fond transparent, format du fichier, orientation : seulement ce que le
+ * modèle accepte (IMAGE_MODEL_CAPS). Un réglage absent est masqué ET
+ * désactivé — jamais posté, donc jamais enregistré pour un modèle qui le
+ * refuserait. Fond transparent coché : PNG par défaut, JPEG impossible.
+ */
+function updateEditImageExtraOptions(provider, model, cfg) {
+    const caps = (IMAGE_MODEL_CAPS[provider] || {})[model] || { transparent: false, transparent_preview: false, output_formats: [], formats: [] };
+    const wrap = document.getElementById('eImgOptions');
+    const cb   = document.getElementById('eCfgTransparent');
+    const out  = document.getElementById('eCfgOutputFormat');
+    const fmt  = document.getElementById('eCfgFormat');
+    if (!wrap || !cb || !out || !fmt) return;
+    const T = IMAGE_OPTIONS_TEXT;
+    const esc = (v) => String(v).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+    const curTransparent = cfg ? cfg.background === 'transparent' : cb.checked;
+    const curOut = cfg ? String(cfg.output_format || '') : out.value;
+    const curFmt = cfg ? String(cfg.format || '') : fmt.value;
+
+    const outs = caps.output_formats || [];
+    out.innerHTML = [''].concat(outs).map(v => `<option value="${esc(v)}">${esc(T.output_formats[v] || v)}</option>`).join('');
+    out.value = outs.includes(curOut) ? curOut : '';
+    const fmts = caps.formats || [];
+    fmt.innerHTML = [''].concat(fmts).map(v => `<option value="${esc(v)}">${esc(T.formats[v] || v)}</option>`).join('');
+    fmt.value = fmts.includes(curFmt) ? curFmt : '';
+    cb.checked = !!caps.transparent && curTransparent;
+
+    const show = (id, on) => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.style.display = on ? '' : 'none';
+        el.querySelectorAll('input, select').forEach(c => { c.disabled = !on; });
+    };
+    show('eCfgTransparentWrap', !!caps.transparent);
+    document.getElementById('eCfgTransparentHint').style.display = caps.transparent ? '' : 'none';
+    document.getElementById('eCfgTransparentPreview').hidden = !caps.transparent_preview;
+    show('eCfgOutputFormatWrap', outs.length > 0);
+    show('eCfgFormatWrap', fmts.length > 0);
+    wrap.style.display = (caps.transparent || outs.length || fmts.length) ? '' : 'none';
+    syncTransparentFormat();
+}
+
+/** Fond transparent : seuls PNG et WebP le gardent — PNG s'enclenche, JPEG se grise. */
+function syncTransparentFormat() {
+    const cb  = document.getElementById('eCfgTransparent');
+    const out = document.getElementById('eCfgOutputFormat');
+    if (!cb || !out) return;
+    const on = cb.checked && !cb.disabled;
+    [...out.options].forEach(o => { o.disabled = on && (o.value === 'jpeg' || o.value === ''); });
+    if (on && (out.value === '' || out.value === 'jpeg')) {
+        const keep = [...out.options].find(o => o.value === 'png') || [...out.options].find(o => o.value === 'webp');
+        if (keep) {
+            out.value = keep.value;
+            out.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+    }
+}
+document.getElementById('eCfgTransparent')?.addEventListener('change', syncTransparentFormat);
 
 function closeEditModal() {
     const form = document.getElementById('editForm');
@@ -2586,6 +2951,10 @@ document.addEventListener('click', function (e) {
             const pill   = window.MiaAutosave;
             select.disabled = true;
             if (pill) pill.paint('saving', txt('saving'));
+            // Choix vérifié côté serveur (moteur de la dictée, voix de lecture :
+            // essai réel de la clé) : on le dit pendant l'attente.
+            const pendingFor = (select.dataset.pendingValues || 'mistral').split(' ');
+            if (state) state.textContent = (pendingFor.includes(wanted) && select.dataset.pendingLabel) || '';
             const body = new FormData();
             body.append(key, wanted);
             fetch('/admin/tools/builtin', {
@@ -2595,14 +2964,20 @@ document.addEventListener('click', function (e) {
             })
             .then(r => r.json().catch(() => ({ ok: false })))
             .then(data => {
-                if (!data || !data.ok) throw new Error();
+                if (!data || !data.ok) {
+                    const refusal = new Error();
+                    refusal.reason = (data && data.error) || '';
+                    throw refusal;
+                }
                 current = wanted;
-                if (state) state.textContent = '';
+                if (state) state.textContent = data.message || '';
                 if (pill) pill.paint('saved', txt('saved'));
+                // La carte dépend du choix (badge, interrupteur) : rendue à nouveau.
+                if (select.dataset.reload) setTimeout(() => location.reload(), 900);
             })
-            .catch(() => {
+            .catch((e) => {
                 select.value = current;
-                if (state) state.textContent = txt('retry');
+                if (state) state.textContent = (e && e.reason) || txt('retry');
                 if (pill) pill.paint('error', txt('settingNotChanged'));
             })
             .finally(() => { select.disabled = false; });

@@ -91,6 +91,17 @@ montre le rendu.
 Chaque fournisseur porte un bouton **Tester les identifiants** : il vérifie l'annuaire, l'ID client et
 le secret **sans ouvrir d'écran de connexion et sans rien enregistrer**. Les erreurs sont nommées.
 
+## Combien de temps on reste connecté
+
+Une fois connectée, une personne le reste tant qu'elle revient dans MIA au moins une fois tous les
+**30 jours**. Une mise à jour de MIA ne déconnecte personne. Un compte désactivé, lui, est déconnecté
+à la page suivante.
+
+Quand une personne doit se reconnecter, c'est Google ou Microsoft qui décide s'il redemande son mot de
+passe : MIA demande seulement de choisir le compte. Si le mot de passe revient trop souvent, la règle
+est chez eux — par exemple la **fréquence de connexion** d'une stratégie d'accès conditionnel Microsoft
+Entra.
+
 ## On ne peut pas se verrouiller dehors
 
 Si un enregistrement devait ne laisser **aucun** moyen de connexion utilisable, MIA réactive d'office

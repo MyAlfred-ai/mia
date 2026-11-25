@@ -8,6 +8,7 @@
 <body class="admin-page">
 <?php require ROOT . '/templates/partials/admin-nav.php'; ?>
 <div class="admin-content">
+    <?php require ROOT . '/templates/partials/admin-topbar.php'; ?>
     <?php $ongletsGroupe = AdminTabs::DIAGNOSTIC; require ROOT . '/templates/partials/admin-tabs.php'; ?>
 <?php
     $puce = [
@@ -53,17 +54,17 @@
         if ($c['remede']  !== '') { $rapport .= "        → " . $c['remede'] . "\n"; }
     }
 ?>
-    <div class="lg-header">
-        <div>
+    <div class="lg-header page-head">
+        <div class="page-head-text">
             <h1 style="margin-bottom:4px"><?= te('Diagnostic') ?></h1>
-            <p style="color:var(--text-muted);font-size:13px;margin:0">
+            <p class="page-head-sub">
                 <?= strtr(te('État réel de l\'installation. Les mêmes contrôles sont disponibles en ligne de commande ({commande}) et sous forme de sonde ({sonde}).'), [
                     '{commande}' => '<code>php scripts/doctor.php</code>',
                     '{sonde}'    => '<code>/healthz</code>',
                 ]) ?>
             </p>
         </div>
-        <div style="display:flex;gap:8px;align-items:center">
+        <div class="page-head-actions">
             <button type="button" class="btn-secondary" id="btnCopierRapport"><?= te('Copier le rapport') ?></button>
             <a href="/admin/diagnostics" class="btn-secondary">↻ <?= te('Actualiser') ?></a>
         </div>
@@ -92,6 +93,7 @@
                 <div class="diag-issue-head">
                     <span style="color:<?= $couleur ?>"><?= $symbole ?></span>
                     <strong><?= htmlspecialchars($c['libelle']) ?></strong>
+                    <?= AdminAttention::itemDot('diag:' . (string)($c['id'] ?? '')) ?>
                     <span class="diag-issue-value"><?= htmlspecialchars($c['valeur']) ?></span>
                     <span class="diag-issue-cat"><?= htmlspecialchars(Diagnostics::libelleCategorie((string)($c['categorie'] ?? ''))) ?></span>
                 </div>

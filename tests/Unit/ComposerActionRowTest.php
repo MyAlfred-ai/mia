@@ -129,7 +129,7 @@ final class ComposerActionRowTest extends TestCase
         $js = (string)file_get_contents(ROOT . '/public/assets/js/chat.js');
         $start = strpos($js, 'function syncConnectorSummary() {');
         $this->assertNotFalse($start);
-        $fn = substr($js, (int)$start, 3000);
+        $fn = substr($js, (int)$start, 4500);
         $this->assertStringContainsString("connChip.dataset.more = '+' + others;", $fn);
         $this->assertStringContainsString('delete connChip.dataset.more;', $fn);
         $this->assertStringContainsString('btn.dataset.count = String(', $fn);

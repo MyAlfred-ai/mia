@@ -43,6 +43,10 @@ class ImageGenerator
         }
 
         $config   = json_decode($tool['config_json'] ?? '{}', true) ?: [];
+        // Fond, format de fichier, orientation (outil, assistant, workflow —
+        // cf. ImageOptions) : ramenés à ce que CE modèle accepte, l'orientation
+        // traduite en taille ou en rapport largeur:hauteur.
+        $config   = ImageOptions::resolve((string)$provider, (string)$model, is_array($config) ? $config : []);
 
         // Clé dédiée à l'outil en priorité, sinon clé globale du fournisseur
         $apiKey = !empty($tool['api_key_enc'])
@@ -132,38 +136,19 @@ class ImageGenerator
         return false;
     }
 
-    /** Rapport largeur:hauteur d'un format d'image (Imagen, aspect_ratio). */
-    private const FORMAT_RATIOS = ['square' => '1:1', 'landscape' => '16:9', 'portrait' => '9:16'];
-
     /**
      * L'outil réglé pour un FORMAT d'image (`square`, `landscape`,
-     * `portrait` ; autre valeur : l'outil tel quel) : la plus petite taille
-     * de cette orientation parmi celles que le modèle ACCEPTE (catalogue — la
-     * moins chère, une valeur hors liste serait refusée), et le rapport
-     * largeur:hauteur pour les modèles qui le prennent. Ne change rien d'autre
-     * de l'outil. Pure (lit le catalogue).
+     * `portrait` ; autre valeur : l'outil tel quel) — cf. ImageOptions::orient :
+     * une taille que le modèle ACCEPTE et le rapport largeur:hauteur pour les
+     * modèles qui le prennent. Ne change rien d'autre de l'outil. Pure.
      */
     public static function orientedTool(array $tool, string $format): array
     {
-        if (!isset(self::FORMAT_RATIOS[$format])) {
+        if (!isset(ImageOptions::FORMAT_RATIOS[$format])) {
             return $tool;
         }
         $config = json_decode((string)($tool['config_json'] ?? ''), true);
-        $config = is_array($config) ? $config : [];
-        $provider = (string)($tool['provider'] ?? '');
-        $model    = (string)($tool['model'] ?? '');
-        if ($provider === 'openai') {
-            $sizes = self::usesResponsesImageTool($model)
-                ? (ToolCatalog::options('image', 'openai', 'responses_sizes') ?: ['auto', '1024x1024', '1024x1536', '1536x1024'])
-                : self::sizesFor($model);
-            $size = self::sizeFor($sizes, $format);
-            if ($size !== null) {
-                $config['size'] = $size;
-            }
-        }
-        if (in_array(self::FORMAT_RATIOS[$format], ToolCatalog::modelOptions('image', $provider, $model, 'aspect_ratios'), true)) {
-            $config['aspect_ratio'] = self::FORMAT_RATIOS[$format];
-        }
+        $config = ImageOptions::orient((string)($tool['provider'] ?? ''), (string)($tool['model'] ?? ''), is_array($config) ? $config : [], $format);
         $tool['config_json'] = (string)json_encode($config, JSON_UNESCAPED_UNICODE);
         return $tool;
     }
@@ -270,6 +255,9 @@ class ImageGenerator
         if ($quality !== '' && in_array($quality, self::qualitiesFor($model), true)) {
             $payloadArr['quality'] = $quality;
         }
+        // Fond et format de fichier : déjà ramenés à ce que le modèle
+        // accepte (ImageOptions::resolve) ; rien = le défaut d'OpenAI.
+        $payloadArr += self::outputFields($config);
         $payload = json_encode($payloadArr);
 
         $ctx = stream_context_create(['http' => [
@@ -301,7 +289,7 @@ class ImageGenerator
         // Selon le modèle : b64_json (gpt-image-*) ou url (dall-e-2/3, défaut sans response_format).
         $item = $data['data'][0] ?? [];
         if (!empty($item['b64_json'])) {
-            $filename = self::saveImage(base64_decode((string)$item['b64_json']), 'png');
+            $filename = self::saveImage(base64_decode((string)$item['b64_json']), self::outputExtension($data, $config));
         } elseif (!empty($item['url'])) {
             $dl = self::downloadImageFromUrl((string)$item['url']);
             if ($dl === null) {
@@ -323,6 +311,8 @@ class ImageGenerator
             // GPT Image ; la qualité « auto » y est résolue), sinon la config.
             'size'           => (string)($data['size']    ?? $config['size']    ?? '1024x1024'),
             'quality'        => (string)($data['quality'] ?? $config['quality'] ?? 'standard'),
+            'background'     => (string)($data['background'] ?? $config['background'] ?? ''),
+            'output_format'  => (string)($data['output_format'] ?? $config['output_format'] ?? ''),
             // Consommation facturée par OpenAI : sert au coût réel quand
             // l'outil n'a pas de prix renseigné (tarif au million de tokens).
             'usage'          => is_array($data) ? self::usageFromResponse($data) : null,
@@ -403,6 +393,7 @@ class ImageGenerator
         if (in_array($quality, self::qualitiesFor($model), true)) {
             $fields['quality'] = $quality;
         }
+        $fields += self::outputFields($config);
 
         $boundary = 'mia' . bin2hex(random_bytes(16));
         $body = '';
@@ -447,7 +438,7 @@ class ImageGenerator
 
         $item = $data['data'][0] ?? [];
         if (!empty($item['b64_json'])) {
-            $filename = self::saveImage(base64_decode((string)$item['b64_json']), 'png');
+            $filename = self::saveImage(base64_decode((string)$item['b64_json']), self::outputExtension($data, $config));
         } elseif (!empty($item['url'])) {
             $dl = self::downloadImageFromUrl((string)$item['url']);
             if ($dl === null) {
@@ -467,6 +458,8 @@ class ImageGenerator
             'model'          => $model,
             'size'           => (string)($data['size']    ?? $fields['size']    ?? ($config['size']    ?? '')),
             'quality'        => (string)($data['quality'] ?? $fields['quality'] ?? ($config['quality'] ?? '')),
+            'background'     => (string)($data['background'] ?? $config['background'] ?? ''),
+            'output_format'  => (string)($data['output_format'] ?? $config['output_format'] ?? ''),
             'usage'          => is_array($data) ? self::usageFromResponse($data) : null,
         ];
     }
@@ -501,6 +494,9 @@ class ImageGenerator
         if (!empty($config['quality']) && is_string($config['quality']) && in_array($config['quality'], $allowedQualities, true)) {
             $tool['quality'] = $config['quality'];
         }
+        // Fond et format : options de l'outil `image_generation`, mêmes
+        // valeurs que l'API images (ImageOptions::resolve les a filtrées).
+        $tool += self::outputFields($config);
 
         // Images source en TÊTE du content : meilleure attention du modèle
         // sur les images (le texte qui suit décrit alors les modifications).
@@ -585,13 +581,17 @@ class ImageGenerator
             if (isset($image['b64'])) {
                 $binary = base64_decode((string)$image['b64'], true);
                 if ($binary !== false && $binary !== '') {
-                    $filename = self::saveImage($binary, (string)($image['ext'] ?? 'png'));
+                    $filename = self::saveImage($binary, !empty($config['output_format'])
+                        ? ImageOptions::extension((string)$config['output_format'])
+                        : (string)($image['ext'] ?? 'png'));
                     return [
                         'ok' => true,
                         'image_url' => '/assets/img/generated/' . $filename,
                         'model'   => $model,
                         'size'    => $sizeUsed,
                         'quality' => $qualityUsed,
+                        'background'    => (string)($config['background'] ?? ''),
+                        'output_format' => (string)($config['output_format'] ?? ''),
                         'usage'   => $imageUsage,
                     ];
                 }
@@ -856,7 +856,7 @@ class ImageGenerator
         return preg_replace('/[^a-z0-9]/', '', $ext) ?: 'png';
     }
 
-    private static function usesResponsesImageTool(string $model): bool
+    public static function usesResponsesImageTool(string $model): bool
     {
         // Source de vérité : config/tools_catalog.php (routing par modèle).
         $routing = ToolCatalog::routing('image', 'openai', $model);
@@ -896,7 +896,7 @@ class ImageGenerator
             }
             return self::generateImagen($apiKey, $model, $prompt, $config);
         }
-        return self::generateGeminiContent($apiKey, $model, $prompt, $sources);
+        return self::generateGeminiContent($apiKey, $model, $prompt, $sources, (string)($config['aspect_ratio'] ?? ''));
     }
 
     /**
@@ -906,7 +906,7 @@ class ImageGenerator
      *
      * @param list<array{b64:string, mime:string}> $sources
      */
-    private static function generateGeminiContent(string $apiKey, string $model, string $prompt, array $sources = []): array
+    private static function generateGeminiContent(string $apiKey, string $model, string $prompt, array $sources = [], string $aspectRatio = ''): array
     {
         $parts = [['text' => $prompt]];
         foreach ($sources as $src) {
@@ -920,7 +920,10 @@ class ImageGenerator
 
         $payload = json_encode([
             'contents'         => [['parts' => $parts]],
-            'generationConfig' => ['responseModalities' => ['TEXT', 'IMAGE']],
+            'generationConfig' => self::geminiGenerationConfig($model, $aspectRatio),
+            // Requête non conservée chez Google (même règle que GeminiAdapter :
+            // un projet payant récent la garderait 55 jours par défaut).
+            'store'            => false,
         ]);
 
         // L'API native Gemini requiert ?key= dans l'URL, pas un header Authorization
@@ -964,6 +967,49 @@ class ImageGenerator
 
         error_log('[ImageGenerator] Gemini generateContent — aucune image dans la réponse. model=' . $model . ' | réponse=' . $res);
         return ['error' => 'Aucune image reçue depuis Gemini (Nano Banana).'];
+    }
+
+    /**
+     * `generationConfig` d'un appel Nano Banana : l'orientation passe par
+     * `imageConfig.aspectRatio` (référence generateContent, relue le
+     * 2026-11-03) — seulement un rapport que le modèle accepte au catalogue :
+     * l'API refuse le bloc entier sinon. Ni fond ni format de fichier chez
+     * Gemini. Pure.
+     */
+    public static function geminiGenerationConfig(string $model, string $aspectRatio): array
+    {
+        $cfg = ['responseModalities' => ['TEXT', 'IMAGE']];
+        if ($aspectRatio !== '' && in_array($aspectRatio, ToolCatalog::modelOptions('image', 'gemini', $model, 'aspect_ratios'), true)) {
+            $cfg['imageConfig'] = ['aspectRatio' => $aspectRatio];
+        }
+        return $cfg;
+    }
+
+    /**
+     * Champs `background` et `output_format` à envoyer à OpenAI (API images
+     * et outil de la Responses API) : seulement ceux que la configuration
+     * porte — ImageOptions::resolve ne laisse que ce que le modèle accepte.
+     * Pure.
+     *
+     * @return array<string, string>
+     */
+    public static function outputFields(array $config): array
+    {
+        $out = [];
+        if (($config['background'] ?? '') === 'transparent') {
+            $out['background'] = 'transparent';
+        }
+        if (in_array($config['output_format'] ?? '', ImageOptions::OUTPUT_FORMATS, true)) {
+            $out['output_format'] = (string)$config['output_format'];
+        }
+        return $out;
+    }
+
+    /** Extension du fichier : le format renvoyé par OpenAI, sinon demandé, sinon PNG. Pure. */
+    private static function outputExtension(array $data, array $config): string
+    {
+        $format = (string)($data['output_format'] ?? $config['output_format'] ?? '');
+        return ImageOptions::extension(in_array($format, ImageOptions::OUTPUT_FORMATS, true) ? $format : '');
     }
 
     /** Imagen via endpoint :predict */

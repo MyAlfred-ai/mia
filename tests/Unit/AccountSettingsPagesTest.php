@@ -8,10 +8,10 @@ use PHPUnit\Framework\TestCase;
  * Pages du compte (Paramètres) : trois décisions de répartition prises le
  * 2026-10-01, chacune gardée ici parce qu'un retour en arrière serait muet.
  *
- *  1. « MIA pour vous » n'a qu'UNE porte : la carte vit sur Préférences IA,
- *     sous « Votre contexte » ; Mon profil y RENVOIE au lieu de dupliquer
- *     l'éditeur (deux exemplaires obligeaient la doc à expliquer « deux
- *     portes, une seule liste »).
+ *  1. La mémoire n'a qu'UNE porte : sa page, Réglages → Mémoire (« Votre
+ *     contexte » et les souvenirs, 2026-11-03) ; Mon profil et Préférences IA
+ *     y RENVOIENT au lieu de dupliquer l'éditeur (deux exemplaires
+ *     obligeaient la doc à expliquer « deux portes, une seule liste »).
  *  2. La langue de l'interface se règle aussi dans Mon profil, par le MÊME
  *     chemin que le sélecteur flottant (POST /settings/lang, rechargement,
  *     comportement dans user-menu.js) — et hors du formulaire auto-enregistré,
@@ -31,26 +31,36 @@ final class AccountSettingsPagesTest extends TestCase
 
     public function testLaMemoireNaQuUnePorteEtMonProfilYRenvoie(): void
     {
-        $partial = 'templates/settings/partials/memory-card.php';
+        $page    = self::lire('templates/settings/memory.php');
         $profil  = self::lire('templates/settings/profile.php');
         $prefs   = self::lire('templates/settings/ai.php');
 
-        $this->assertStringNotContainsString($partial, $profil, 'Mon profil ne rend plus la carte mémoire.');
-        $this->assertStringContainsString($partial, $prefs, 'La carte mémoire vit sur Préférences IA.');
-        $this->assertStringContainsString('href="/settings/ai#contexte"', $profil, 'Mon profil renvoie vers la section « Ce que MIA sait de vous ».');
+        // L'ancienne carte partagée n'existe plus : la page Mémoire porte tout.
+        $this->assertFileDoesNotExist(dirname(__DIR__, 2) . '/templates/settings/partials/memory-card.php');
+        foreach ([$profil, $prefs] as $gabarit) {
+            $this->assertStringNotContainsString('memory-card.php', $gabarit);
+            $this->assertStringContainsString('href="/settings/memory"', $gabarit, 'Mon profil et Préférences IA renvoient vers la page Mémoire.');
+            $this->assertStringContainsString("te('Ouvrir la mémoire')", $gabarit);
+        }
         $this->assertStringContainsString("te('Ce que MIA sait de vous')", $profil);
-        $this->assertStringContainsString("te('Ouvrir les Préférences IA')", $profil);
+        // « Votre contexte » a déménagé avec les souvenirs.
+        $this->assertStringContainsString('name="ai_user_context"', $page);
+        $this->assertStringNotContainsString('name="ai_user_context"', $prefs);
 
-        // Le contrôleur ne charge plus les souvenirs pour Mon profil.
+        // Le contrôleur ne charge plus les souvenirs pour Mon profil ni pour
+        // Préférences IA.
         $ctrl  = self::lire('src/Controllers/UserSettingsController.php');
         $debut = strpos($ctrl, 'public function profile(): void');
         $this->assertIsInt($debut);
         $corps = substr($ctrl, $debut, (int) strpos($ctrl, 'public function creations') - $debut);
         $this->assertStringNotContainsString('UserMemory::allForUser', $corps);
+        $this->assertStringNotContainsString('UserMemory::', $ctrl);
 
         // Les prompts renvoient vers la seule porte qui reste.
         foreach (['src/Models/UserMemory.php', 'src/Controllers/ChatController.php'] as $source) {
-            $this->assertStringContainsString('Préférences IA → « MIA pour vous »', self::lire($source), $source);
+            $code = self::lire($source);
+            $this->assertStringContainsString('Réglages → Mémoire', $code, $source);
+            $this->assertStringNotContainsString('MIA pour vous', $code, $source);
         }
     }
 

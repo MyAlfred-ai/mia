@@ -66,6 +66,11 @@ final class UsageMeter
         // Sessions de conteneur de code (cf. CreditService) : sur la MÊME
         // ligne que les jetons de l'appel, qu'elles accompagnent toujours.
         $containers = max(0, (int)($tokens['containers'] ?? 0));
+        // Écriture de cache d'une heure et multiplicateur de prix du
+        // fournisseur (mode rapide, inférence localisée) : rapportés par la
+        // passerelle Office, qui relaie des requêtes qu'elle n'a pas écrites.
+        $cacheWr1h = max(0, (int)($tokens['input_cache_write_1h'] ?? 0));
+        $factor    = self::priceFactor($tokens);
 
         $result = self::EMPTY;
         // Une opération = plusieurs lignes possibles (réponse, autres modèles
@@ -74,7 +79,7 @@ final class UsageMeter
         $op = ['billed' => 0.0, 'credits' => 0];
         if ($in + $out > 0) {
             $credits = CreditService::computeLlmCredits($llmKey, $in, $out, $cached, $cacheWr, $reason,
-                CreditService::longContextPart($llmKey, $tokens), $containers);
+                CreditService::longContextPart($llmKey, $tokens), $containers, $cacheWr1h, $factor);
             $op = ['billed' => (float)$credits['billed_eur'], 'credits' => (int)$credits['total_credits']];
             [$provider, $model] = CreditService::splitLlmKey($llmKey);
             $usageId = self::persistLlm([
@@ -116,6 +121,7 @@ final class UsageMeter
                 'input_cache_write' => (int)($extra['input_cache_write'] ?? 0),
                 'output_reasoning'  => (int)($extra['output_reasoning'] ?? 0),
                 'rounds'            => is_array($extra['rounds'] ?? null) ? $extra['rounds'] : [],
+                'price_factor'      => $factor,
             ], $source, $ctx, $op);
             $result['total_credits'] += (int)$line['total_credits'];
             $result['cost_eur']       = round($result['cost_eur'] + (float)$line['cost_eur'], 6);
@@ -124,7 +130,7 @@ final class UsageMeter
         }
 
         if ($searches > 0) {
-            $ws = self::webSearchLine($llmKey, $searches, $ctx, $op);
+            $ws = self::webSearchLine($llmKey, $searches, $ctx, $op, UsageSource::searchSourceFor($source));
             $result['web_searches']        = $searches;
             $result['web_search_credits']  = (int)$ws['total_credits'];
             $result['total_credits']      += (int)$ws['total_credits'];
@@ -136,6 +142,20 @@ final class UsageMeter
         }
 
         return $result;
+    }
+
+    /**
+     * Multiplicateur de prix rapporté avec les jetons (`price_factor`) :
+     * borné entre 1 et 10 — une valeur absente, nulle ou aberrante vaut 1,
+     * jamais une remise. Pure.
+     */
+    public static function priceFactor(array $tokens): float
+    {
+        $f = $tokens['price_factor'] ?? 1.0;
+        if (!is_numeric($f) || (float)$f < 1.0) {
+            return 1.0;
+        }
+        return min(10.0, (float)$f);
     }
 
     /**
@@ -156,7 +176,7 @@ final class UsageMeter
         $cacheWr = max(0, (int)($tokens['input_cache_write'] ?? 0));
         $reason  = max(0, (int)($tokens['output_reasoning'] ?? 0));
         $credits = CreditService::computeLlmCredits($llmKey, $in, $out, $cached, $cacheWr, $reason,
-            CreditService::longContextPart($llmKey, $tokens));
+            CreditService::longContextPart($llmKey, $tokens), 0, 0, self::priceFactor($tokens));
         $credits['total_credits'] = CreditService::additionalCredits($op, $credits);
         [$provider, $model] = CreditService::splitLlmKey($llmKey);
         $usageId = self::persistLlm([
@@ -203,7 +223,7 @@ final class UsageMeter
      *
      * @param array{billed:float, credits:int} $op
      */
-    private static function webSearchLine(string $llmKey, int $searches, array $ctx, array &$op): array
+    private static function webSearchLine(string $llmKey, int $searches, array $ctx, array &$op, string $source = UsageSource::WEB_SEARCH): array
     {
         $searches = max(0, $searches);
         if ($searches <= 0) {
@@ -219,8 +239,8 @@ final class UsageMeter
             'credits_used' => (int)$credits['total_credits'],
             'cost_eur'     => (float)$credits['cost_eur'],
             'priced'       => (bool)$credits['priced'],
-            'source'       => UsageSource::WEB_SEARCH,
-        ], $ctx, UsageSource::WEB_SEARCH);
+            'source'       => $source,
+        ], $ctx, $source);
 
         return [
             'total_credits'      => (int)$credits['total_credits'],
@@ -270,20 +290,22 @@ final class UsageMeter
     }
 
     /**
-     * Dictée vocale : minutes d'audio transcrites (durée rapportée par le
-     * navigateur à la fin d'une session Realtime).
+     * Dictée vocale : minutes d'audio transcrites — durée rapportée par le
+     * navigateur à la fin d'une session OpenAI Realtime, ou mesurée par
+     * Mistral pour un morceau transcrit par Voxtral (`$provider` = mistral).
      *
      * @return array{total_credits:int, cost_eur:float, priced:bool, logged:bool, web_searches:int, web_search_credits:int, usage_id:?int}
      */
-    public static function transcription(string $model, float $seconds, array $ctx = []): array
+    public static function transcription(string $model, float $seconds, array $ctx = [], string $provider = 'openai'): array
     {
         $minutes = round(max(0.0, $seconds) / 60.0, 4);
         if ($minutes <= 0) {
             return self::EMPTY;
         }
-        $credits = CreditService::computeTranscriptionCredits($model, $minutes);
+        $provider = strtolower(trim($provider)) ?: 'openai';
+        $credits = CreditService::computeTranscriptionCredits($model, $minutes, $provider);
         $usageId = self::persistLlm([
-            'llm_provider' => 'openai::' . trim($model),
+            'llm_provider' => $provider . '::' . trim($model),
             'model'        => trim($model) !== '' ? trim($model) : null,
             'quantity'     => $minutes,
             'credits_used' => (int)$credits['total_credits'],
@@ -305,19 +327,23 @@ final class UsageMeter
 
     /**
      * Lecture à voix haute (conversation vocale) : minutes d'audio produites
-     * par la synthèse vocale, mesurées côté serveur sur l'audio reçu.
+     * par la voix de lecture, mesurées côté serveur sur l'audio reçu, et
+     * caractères lus (Voxtral, facturé au texte, cf.
+     * CreditService::computeSpeechCredits). La quantité du grand livre reste
+     * la minute lue, quelle que soit la voix.
      *
      * @return array{total_credits:int, cost_eur:float, priced:bool, logged:bool, web_searches:int, web_search_credits:int, usage_id:?int}
      */
-    public static function speech(string $model, float $seconds, array $ctx = []): array
+    public static function speech(string $model, float $seconds, array $ctx = [], string $provider = 'openai', int $chars = 0): array
     {
         $minutes = round(max(0.0, $seconds) / 60.0, 4);
         if ($minutes <= 0) {
             return self::EMPTY;
         }
-        $credits = CreditService::computeSpeechCredits($model, $minutes);
+        $provider = strtolower(trim($provider)) ?: 'openai';
+        $credits = CreditService::computeSpeechCredits($model, $minutes, $provider, max(0, $chars));
         $usageId = self::persistLlm([
-            'llm_provider' => 'openai::' . trim($model),
+            'llm_provider' => $provider . '::' . trim($model),
             'model'        => trim($model) !== '' ? trim($model) : null,
             'quantity'     => $minutes,
             'credits_used' => (int)$credits['total_credits'],

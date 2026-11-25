@@ -25,6 +25,8 @@ final class WorkflowNotifier
     public const NOTE    = 'note';
     /** Une surveillance (boîte mail, dossier) ne peut plus être faite. */
     public const WATCH   = 'watch';
+    /** Un lancement (programmé, évènement) refusé par le pré-contrôle. */
+    public const NOT_STARTED = 'not_started';
 
     public static function tag(int $runId): string
     {
@@ -36,6 +38,12 @@ final class WorkflowNotifier
     {
         try {
             if (!$force && empty($run['definition']['notify'])) {
+                return;
+            }
+            // Exécution APPELÉE par un autre workflow : sa fin, son arrêt, son
+            // échec sont annoncés par l'appelante (une notification, pas deux).
+            // Ce qui demande la personne (relecture, actions) reste annoncé ici.
+            if (!empty($run['caller_step_id']) && in_array($event, [self::DONE, self::ENDED, self::STOPPED, self::FAILED, self::PAUSED], true)) {
                 return;
             }
             $userId = (int)$run['user_id'];
@@ -84,6 +92,7 @@ final class WorkflowNotifier
                 : t('Le workflow s’est terminé, sans livrable.'),
             self::NOTE    => mb_substr($detail, 0, 240),
             self::WATCH   => t('La surveillance ne peut plus être faite : {cause}', ['cause' => $detail]),
+            self::NOT_STARTED => mb_substr($detail, 0, 240),
             default       => null,
         };
         if ($body === null) {
@@ -93,10 +102,26 @@ final class WorkflowNotifier
     }
 
     /**
+     * Un lancement programmé ou déclenché par un évènement n'a pas démarré :
+     * le pré-contrôle a trouvé un point à régler (compte à relier…). Le lien
+     * mène à l'éditeur, où « À régler » le montre.
+     */
+    public static function notStarted(array $workflow, string $cause): void
+    {
+        self::toOwner($workflow, self::NOT_STARTED, $cause, 'mia-workflow-start-' . (int)($workflow['id'] ?? 0));
+    }
+
+    /**
      * Une surveillance de workflow est tombée (connexion révoquée, dossier
      * introuvable) : prévenir son propriétaire, une fois par panne.
      */
     public static function watchBroken(array $workflow, string $cause): void
+    {
+        self::toOwner($workflow, self::WATCH, $cause, 'mia-workflow-watch-' . (int)($workflow['id'] ?? 0));
+    }
+
+    /** Notification au propriétaire d'un workflow, hors exécution. */
+    private static function toOwner(array $workflow, string $event, string $cause, string $tag): void
     {
         try {
             $userId = (int)$workflow['user_id'];
@@ -108,16 +133,16 @@ final class WorkflowNotifier
             $locale = I18n::locale();
             I18n::use(I18n::forUser($user));
             try {
-                $message = self::message((string)$workflow['name'], 0, self::WATCH, $cause);
+                $message = self::message((string)$workflow['name'], 0, $event, $cause);
             } finally {
                 I18n::use($locale);
             }
             if ($message !== null) {
                 $message['url'] = '/workflows/' . (int)$workflow['id'] . '/edit';
-                PushSubscription::recordResults(WebPush::send($devices, $message, 'mia-workflow-watch-' . (int)$workflow['id']));
+                PushSubscription::recordResults(WebPush::send($devices, $message, $tag));
             }
         } catch (\Throwable $e) {
-            error_log('[Push] surveillance du workflow #' . (int)($workflow['id'] ?? 0) . ' : ' . $e->getMessage());
+            error_log('[Push] workflow #' . (int)($workflow['id'] ?? 0) . ' (' . $event . ') : ' . $e->getMessage());
         }
     }
 }

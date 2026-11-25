@@ -80,55 +80,41 @@ final class KbListFiltersTest extends TestCase
 
     // ============ Barre d'outils de la liste ============
 
-    public function testLaBarreDOutilsEstCableeDansLeGabarit(): void
+    public function testLaRechercheEtLesFiltresSontCablesDansLeGabarit(): void
     {
+        // Piste D : une grande recherche, la portée (Tout / Bases / Tables) et
+        // la visibilité (Privées / Communes / Publiques), sur les lignes RENDUES.
         $tpl = $this->fichier('templates/admin/knowledge-bases.php');
-
-        foreach (['kb-listbar', 'kb-srcfilter', 'id="kbSort"', 'id="kbFilter"', 'id="kbNoMatch"'] as $marqueur) {
-            $this->assertStringContainsString($marqueur, $tpl, 'Barre d\'outils : ' . $marqueur . ' manquant.');
+        foreach (['id="kbListSearch"', 'data-scope="all"', 'data-scope="base"', 'data-scope="table"', 'data-vis-filter=', 'id="kbListNone"', 'data-group="base"', 'data-group="table"'] as $marqueur) {
+            $this->assertStringContainsString($marqueur, $tpl, 'Liste : ' . $marqueur . ' manquant.');
         }
-
-        // Les cartes portent les clés de tri : le tri se fait sur les nœuds
-        // rendus, jamais sur un second rendu qui dériverait des droits.
-        foreach (['data-src=', 'data-size=', 'data-docs=', 'data-usage=', 'data-lastused=', 'data-assistants=', 'data-created='] as $attr) {
-            $this->assertStringContainsString($attr, $tpl, 'Attribut de tri ' . $attr . ' manquant sur la carte.');
+        foreach (['data-search=', 'data-vis=', 'data-kb-row='] as $attr) {
+            $this->assertStringContainsString($attr, $tpl, 'Attribut ' . $attr . ' manquant sur la ligne.');
         }
+        $this->assertStringContainsString('<script src="/assets/js/kb-list.js', $tpl);
     }
 
-    public function testChaqueTriProposeAUnComparateur(): void
+    public function testLaRechercheIgnoreAccentsEtCasseEtVeutTousLesMots(): void
     {
-        $tpl = $this->fichier('templates/admin/knowledge-bases.php');
-
-        preg_match('/\$kbSorts = \[(.*?)\];/s', $tpl, $m);
-        $this->assertNotEmpty($m, 'Liste des tris ($kbSorts) introuvable.');
-        preg_match_all("/'([a-z_]+)'\s*=>/", $m[1], $cles);
-        $this->assertNotEmpty($cles[1]);
-
-        preg_match('/const KB_COMPARATORS = \{(.*?)\n    \};/s', $tpl, $c);
-        $this->assertNotEmpty($c, 'Table des comparateurs JS introuvable.');
-
-        foreach ($cles[1] as $cle) {
-            $this->assertMatchesRegularExpression(
-                '/\b' . preg_quote($cle, '/') . '\s*:/',
-                $c[1],
-                'Le tri « ' . $cle . " » est proposé sans comparateur : il ne trierait rien."
-            );
-        }
+        $js = $this->fichier('public/assets/js/kb-list.js');
+        $this->assertStringContainsString(".normalize('NFD').replace(/[\\u0300-\\u036f]/g, '').toLowerCase()", $js);
+        $this->assertStringContainsString('words.every((w) => row.dataset.fold.includes(w))', $js);
+        // « / » met le curseur dans la recherche, jamais quand on écrit déjà.
+        $this->assertStringContainsString("if (e.key !== '/' || e.metaKey || e.ctrlKey || e.altKey) return;", $js);
+        $this->assertDoesNotMatchRegularExpression('/[éèêàùçÉÈÀ]/u', preg_replace('#//[^\n]*|/\*.*?\*/#s', '', $js), 'Aucun libellé dans le script.');
     }
 
-    public function testLaSourceDUneCarteVientDUneSeuleFonction(): void
+    public function testLaVisibiliteDUneLigneVientDUneSeuleRegle(): void
     {
         $tpl = $this->fichier('templates/admin/knowledge-bases.php');
-
-        // Compteurs des puces et attribut de la carte doivent classer une base
-        // à l'identique, sinon une puce annoncerait 3 bases et en montrerait 2.
-        $this->assertSame(1, substr_count($tpl, '$kbSourceKey = static function'));
-        $this->assertSame(2, substr_count($tpl, '$kbSourceKey('));
-
-        // Une seule table de fournisseurs (puces, pastille de la carte, fiche
-        // et schéma) : KbDiagram::SOURCES, jamais recopiée dans la liste.
-        $this->assertSame(1, substr_count($tpl, '$syncProviderMeta = KbDiagram::SOURCES;'));
-        $this->assertStringNotContainsString('$syncProviderMeta = [', $tpl);
+        // Le compteur d'un filtre et l'attribut de la ligne classent une base à
+        // l'identique : une seule lecture de KnowledgeBase::visibility().
+        $this->assertSame(1, substr_count($tpl, 'KnowledgeBase::visibility($kb)'));
+        $this->assertStringContainsString('$visCnt[$vKey]++;', $tpl);
+        $this->assertStringContainsString("'vis'    => \$vKey,", $tpl);
+        // Icône, nom et phrase : KbPages, partagé avec la consultation et la fiche.
+        $this->assertStringContainsString('KbPages::visibilityIcon($r[\'vis\'])', $tpl);
+        $this->assertStringContainsString('KbPages::visibility($vKey', $tpl);
     }
 
     public function testUneCarteMasqueeEstReellementMasquee(): void
@@ -143,13 +129,15 @@ final class KbListFiltersTest extends TestCase
         }
     }
 
-    public function testLesPreferencesDeListeSontCloisonneesParUtilisateur(): void
+    public function testLaRechercheCouvreLesNomsDesDocuments(): void
     {
+        // « Où est le contrat Durand ? » : les noms des documents de chaque base
+        // sont lus en UNE requête et rejoignent le texte cherché de sa ligne.
+        $ctrl = $this->fichier('src/Controllers/AdminController.php');
+        $this->assertStringContainsString('KnowledgeBaseDocument::namesByKb(', $ctrl);
         $tpl = $this->fichier('templates/admin/knowledge-bases.php');
-        $this->assertMatchesRegularExpression(
-            "/KB_PREFS_KEY = 'kbListPrefs:<\?= \(int\)\(\\\$currentUser\['id'\] \?\? 0\) \?>'/",
-            $tpl,
-            'Navigateur partagé : la préférence de filtre doit être scopée à l\'utilisateur.'
-        );
+        $this->assertStringContainsString("(string)(\$docNamesByKb[\$kbId] ?? ''),", $tpl);
+        $model = $this->fichier('src/Models/KnowledgeBaseDocument.php');
+        $this->assertStringContainsString('public static function namesByKb(array $kbIds): array', $model);
     }
 }

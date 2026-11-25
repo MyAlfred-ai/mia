@@ -28,7 +28,12 @@ declare(strict_types=1);
  *   step      — un assistant (ou MIA) lit des pièces et en REMET une ;
  *               write: none | approve | auto (ce qu'il peut faire dans les outils) ;
  *               review: la personne relit la pièce avant la suite ;
- *               on_error: {retries, then: stop | skip}.
+ *               on_error: {retries, then: stop | skip}. Sa pièce peut aussi
+ *               être une CRÉATION (`output.form` ∈ CREATE_KINDS : image, page,
+ *               carte) faite par un outil du chat (`output.tool_id`,
+ *               `output.options`) : l'étape PRÉPARE la demande (avec son
+ *               assistant, ses sources), puis l'outil la fabrique — le même
+ *               job qu'une brique Création (WorkflowCreations).
  *   action    — agir dans un outil (email, agenda, tâches, Slack, Drive, n8n, Gamma) ;
  *               write: approve | auto ; ne remet aucune pièce.
  *   create    — CRÉER avec un outil du chat ouvert à la personne : une image,
@@ -52,6 +57,14 @@ declare(strict_types=1);
  *               renvoyer à l'étape avec une remarque, arrêter).
  *   wait      — attendre une durée, ou jusqu'à la date d'un champ de Fiche.
  *   notify    — prévenir la personne (appareils, conversation), sans IA.
+ *   call      — APPELER UN AUTRE WORKFLOW de la personne (`workflow_id`) : ses
+ *               paramètres (`params` : champ du départ de l'appelé → valeur,
+ *               un texte qui cite le dossier ; un champ Fichier reçoit une
+ *               pièce) remplissent son départ ; l'exécution attend qu'il se
+ *               termine et REMET une pièce — une pièce de son livrable, sous
+ *               sa forme (`output.from`), ou tout son livrable en un texte.
+ *               `on_stop` : l'appelé s'arrête avant son livrable → ce workflow
+ *               s'arrête aussi, ou continue sans la pièce (WorkflowCall).
  * Une voie ou un corps de boucle ne porte ni condition, ni décision, ni boucle
  * (INNER_TYPES). Une étape ou une action porte des FILTRES (WorkflowFilters) :
  * ce que ses recherches d'emails et de fichiers voient, à qui ses emails
@@ -60,7 +73,8 @@ declare(strict_types=1);
  * Pièces (`form`) : text, list, table, fiche (champs nommés), document
  * (Word, PDF, PowerPoint, Excel ou Markdown, fabriqué au téléchargement), file
  * (un fichier reçu au départ), et celles d'une création : image, page (page
- * web), map (itinéraire). Une consigne cite une pièce par `@{clé}` ; un
+ * web), map (itinéraire) — remises par une brique Création ou par une étape
+ * dont la pièce est une création. Une consigne cite une pièce par `@{clé}` ; un
  * texte de livraison cite aussi un champ de Fiche par `@{clé.champ}`.
  *
  * Livraisons du livrable (`end.deliveries`) : email (Gmail, Outlook), Drive,
@@ -93,7 +107,7 @@ final class WorkflowSpec
     public const MAX_NODES       = 15;
     public const MAX_FIELDS      = 12;
     public const MAX_FICHE       = 12;
-    public const MAX_RULE_ITEMS  = 3;
+    public const MAX_RULE_ITEMS  = 8;
     public const MAX_OPTIONS     = 12;
     public const MAX_SOURCES     = 8;
     public const MAX_KBS         = 3;
@@ -123,14 +137,16 @@ final class WorkflowSpec
     public const TYPE_ROUTE     = 'route';
     /** « Arrêter le workflow » : termine l'exécution proprement, dans une voie. */
     public const TYPE_STOP      = 'stop';
+    /** « Appeler un workflow » : un autre workflow de la personne, avec ses paramètres (WorkflowCall). */
+    public const TYPE_CALL      = 'call';
     public const TYPES = [
         self::TYPE_STEP, self::TYPE_ACTION, self::TYPE_CREATE, self::TYPE_CONDITION, self::TYPE_ROUTE, self::TYPE_LOOP,
-        self::TYPE_GATE, self::TYPE_WAIT, self::TYPE_NOTIFY,
+        self::TYPE_GATE, self::TYPE_WAIT, self::TYPE_NOTIFY, self::TYPE_CALL,
     ];
     /** Briques qui ouvrent des voies (branchesOf). */
     public const BRANCHING_TYPES = [self::TYPE_CONDITION, self::TYPE_ROUTE];
     /** Briques d'une voie ou d'un corps de boucle : ni condition, ni décision, ni boucle. */
-    public const INNER_TYPES = [self::TYPE_STEP, self::TYPE_ACTION, self::TYPE_CREATE, self::TYPE_GATE, self::TYPE_WAIT, self::TYPE_NOTIFY];
+    public const INNER_TYPES = [self::TYPE_STEP, self::TYPE_ACTION, self::TYPE_CREATE, self::TYPE_GATE, self::TYPE_WAIT, self::TYPE_NOTIFY, self::TYPE_CALL];
     /**
      * Briques d'une voie de condition ou de décision : celles d'un corps de
      * boucle, plus « Arrêter le workflow ». Sur le rail, elle s'exécuterait
@@ -142,7 +158,7 @@ final class WorkflowSpec
     public const STOP_DONE    = 'done';
     public const STOP_STOPPED = 'stopped';
     /** Briques qui REMETTENT une pièce au dossier (et peuvent être relues, refaites). */
-    public const PRODUCING_TYPES = [self::TYPE_STEP, self::TYPE_CREATE];
+    public const PRODUCING_TYPES = [self::TYPE_STEP, self::TYPE_CREATE, self::TYPE_CALL];
 
     // Création
     /**
@@ -191,7 +207,16 @@ final class WorkflowSpec
      * SANS voies (elle continue le tour, passe à l'élément suivant ou arrête
      * le workflow).
      */
-    public const BODY_TYPES = [self::TYPE_STEP, self::TYPE_ACTION, self::TYPE_CREATE, self::TYPE_CONDITION, self::TYPE_GATE, self::TYPE_WAIT, self::TYPE_NOTIFY];
+    public const BODY_TYPES = [self::TYPE_STEP, self::TYPE_ACTION, self::TYPE_CREATE, self::TYPE_CONDITION, self::TYPE_GATE, self::TYPE_WAIT, self::TYPE_NOTIFY, self::TYPE_CALL];
+
+    // Appel d'un autre workflow (WorkflowCall)
+    /** Valeur d'un paramètre (caractères) : un texte qui peut citer le dossier. */
+    public const CALL_PARAM_MAX = 2000;
+    /** L'appelé s'arrête avant son livrable : ce workflow s'arrête aussi, ou continue sans la pièce. */
+    public const CALL_STOP_STOP     = 'stop';
+    public const CALL_STOP_CONTINUE = 'continue';
+    /** Formes que peut prendre la pièce récupérée : celles du livrable de l'appelé. */
+    public const CALL_FORMS = ['text', 'list', 'table', 'fiche', 'document', 'file', 'image', 'page', 'map'];
 
     // Attente
     public const WAIT_UNITS = ['minutes' => 60, 'hours' => 3600, 'days' => 86400];
@@ -224,18 +249,28 @@ final class WorkflowSpec
     ];
 
     // Livraison du livrable
-    public const DELIVERY_TYPES = ['email', 'drive', 'slack', 'kb'];
+    public const DELIVERY_TYPES = ['email', 'drive', 'slack', 'kb', 'table'];
     public const MAX_DELIVERIES = 5;
     /** Email : carte à approuver, brouillon créé, ou envoi — les deux derniers sans validation. */
     public const MAIL_MODES = ['approve', 'draft', 'send'];
     public const DELIVERY_MODES = ['approve', 'auto'];
 
+    /** Formes rédigées d'une pièce d'étape ; elle peut aussi être une création (CREATE_KINDS). */
     public const FORMS = ['text', 'list', 'table', 'fiche', 'document'];
     /** Champs du formulaire de départ. */
     public const FIELD_TYPES = ['text', 'longtext', 'number', 'date', 'choice', 'email', 'yesno', 'file'];
     /** Champs d'une Fiche remise par une étape. */
     public const FICHE_TYPES = ['text', 'number', 'date', 'email', 'yesno', 'list'];
+    /** Documents rédigés (Markdown ou tableau) : la liste « Documents » de l'éditeur. */
     public const DOC_FORMATS = ['docx', 'pdf', 'pptx', 'xlsx', 'md'];
+    /**
+     * Autres fichiers proposés par l'éditeur (brique « Fichier » du menu
+     * Créer) : leur contenu est écrit tel quel par le modèle, puis recopié.
+     * Toute autre extension de fichier texte s'accepte aussi (docFormat).
+     */
+    public const FILE_FORMATS = ['py', 'js', 'ts', 'json', 'csv', 'html', 'css', 'sql', 'sh', 'yaml', 'xml', 'txt', 'php', 'ps1', 'ics', 'tex'];
+    /** Formats qu'habille le modèle Word ou PowerPoint de l'entreprise. */
+    public const TEMPLATE_FORMATS = ['docx', 'pdf', 'pptx'];
 
     public const WRITE_NONE    = 'none';
     public const WRITE_APPROVE = 'approve';
@@ -259,6 +294,26 @@ final class WorkflowSpec
         'n8n'        => 'tool:n8n',
         'gamma'      => 'tool:gamma',
     ];
+
+    /**
+     * Brique Slack : elle PUBLIE ou elle LIT — l'un ou l'autre, jamais les
+     * deux (normalizeSlack). Publier : dans un canal ou à une personne
+     * (message direct), un texte et/ou des pièces du dossier jointes en
+     * fichiers ; la destination et les fichiers sont IMPOSÉS par le serveur,
+     * le modèle n'écrit que le texte. Lire : un canal, la conversation avec
+     * une personne ou une recherche, sur une période ; les messages sont lus
+     * par le serveur avant le tour, et la brique remet une pièce, comme une
+     * étape (isReadingAction, producesPiece).
+     */
+    public const SLACK_POST    = 'post';
+    public const SLACK_READ    = 'read';
+    public const SLACK_CHANNEL = 'channel';
+    public const SLACK_PERSON  = 'person';
+    public const SLACK_SEARCH  = 'search';
+    public const SLACK_DAYS_DEFAULT = 7;
+    public const SLACK_DAYS_MAX = 90;
+    public const SLACK_REF_MAX = 300;
+    public const SLACK_ATTACH_MAX = 10;
 
     public const RULE_OPS = ['eq', 'ne', 'gt', 'gte', 'lt', 'lte', 'contains', 'empty', 'notempty', 'yes', 'no'];
     public const DOUBT_ASK = 'ask';
@@ -400,6 +455,18 @@ final class WorkflowSpec
                 'pieces'  => $keys($raw['pieces'] ?? []),
                 'mode'    => $mode(self::DELIVERY_MODES),
             ],
+            // Une table permanente (WorkflowTables) : ajouter les lignes, mettre
+            // à jour celles dont la clé se retrouve, ou tout remplacer.
+            'table' => [
+                'type'        => 'table',
+                'kb_id'       => self::posInt($raw['kb_id'] ?? null),
+                'pieces'      => $keys($raw['pieces'] ?? []),
+                'write'       => in_array($raw['write'] ?? '', WorkflowTables::WRITE_MODES, true) ? (string)$raw['write'] : KbTableWrite::MODE_APPEND,
+                'key'         => self::text($raw['key'] ?? '', self::LABEL_MAX),
+                'key_source'  => self::text($raw['key_source'] ?? '', self::LABEL_MAX),
+                'add_missing' => self::bool($raw['add_missing'] ?? false),
+                'mode'        => $mode(self::DELIVERY_MODES),
+            ],
             default => [
                 'type'    => 'kb',
                 'kb_id'   => self::posInt($raw['kb_id'] ?? null),
@@ -407,6 +474,30 @@ final class WorkflowSpec
                 'replace' => array_key_exists('replace', $raw) ? self::bool($raw['replace']) : true,
             ],
         };
+    }
+
+    /** Nom d'un document de référence enregistré par l'éditeur (dans UPLOAD_DIR). */
+    public const REFERENCE_PATTERN = '/^wfref_[a-f0-9]{32}(?:\.[a-z0-9]{1,8})?$/';
+
+    /**
+     * Document de référence d'un champ Fichier : {ref, name, type, size},
+     * ou null. `ref` = nom du fichier sur le disque, jamais un chemin.
+     */
+    public static function referenceFile(mixed $raw): ?array
+    {
+        if (!is_array($raw)) {
+            return null;
+        }
+        $ref = is_scalar($raw['ref'] ?? null) ? (string)$raw['ref'] : '';
+        if (!preg_match(self::REFERENCE_PATTERN, $ref)) {
+            return null;
+        }
+        return [
+            'ref'  => $ref,
+            'name' => self::text($raw['name'] ?? '', 200) ?: $ref,
+            'type' => self::text($raw['type'] ?? '', 120),
+            'size' => max(0, (int)($raw['size'] ?? 0)),
+        ];
     }
 
     /** Référence d'un champ de Fiche « pièce.champ », ou ''. */
@@ -428,7 +519,13 @@ final class WorkflowSpec
             $key = self::uniqueKey((string)($f['key'] ?? ''), $label !== '' ? $label : 'champ', $used);
             $options = [];
             if ($type === 'choice') {
-                foreach (self::listOf($f['options'] ?? []) as $o) {
+                // Une ligne « Rouge, Vert » (éditeur d'avant ce correctif encore
+                // ouvert dans un onglet) se lit comme la liste qu'elle décrit.
+                $rawOptions = $f['options'] ?? [];
+                if (is_string($rawOptions)) {
+                    $rawOptions = explode(',', $rawOptions);
+                }
+                foreach (self::listOf($rawOptions) as $o) {
                     $o = self::text($o, self::LABEL_MAX);
                     if ($o !== '' && !in_array($o, $options, true) && count($options) < self::MAX_OPTIONS) {
                         $options[] = $o;
@@ -436,7 +533,12 @@ final class WorkflowSpec
                 }
             }
             $default = $type === 'file' ? '' : self::text($f['default'] ?? '', 2000, $type === 'longtext');
-            $fields[] = [
+            // Un Choix ne vaut que ses options : une autre valeur par défaut
+            // serait refusée au lancement (« Choisissez une des options »).
+            if ($type === 'choice' && !in_array($default, $options, true)) {
+                $default = '';
+            }
+            $field = [
                 'key'      => $key,
                 'label'    => $label,
                 'type'     => $type,
@@ -445,6 +547,14 @@ final class WorkflowSpec
                 'default'  => $default,
                 'help'     => self::text($f['help'] ?? '', self::HELP_MAX),
             ];
+            // Un champ Fichier peut porter un DOCUMENT DE RÉFÉRENCE fourni
+            // d'office à chaque lancement (un modèle, un texte de loi, nos
+            // références) : la pièce existe toujours, on la cite avec @.
+            $ref = $type === 'file' ? self::referenceFile($f['reference'] ?? null) : null;
+            if ($ref !== null) {
+                $field['reference'] = $ref;
+            }
+            $fields[] = $field;
         }
 
         $schedule = null;
@@ -506,8 +616,9 @@ final class WorkflowSpec
 
     /**
      * Filtres d'un déclencheur : la seule partie qui a un sens pour lui
-     * (emails : expéditeur, objet, mots, pièce jointe ; fichiers : nature,
-     * nom). Pas de citation du dossier : il n'existe pas encore.
+     * (emails : expéditeur, sauf de, adressé à, objet, mots, pièce jointe ;
+     * fichiers : nature, nom). Pas de citation du dossier : il n'existe pas
+     * encore.
      */
     private static function eventFilters(mixed $raw, string $part): array
     {
@@ -516,7 +627,8 @@ final class WorkflowSpec
         $out = $blank;
         if ($part === 'mail') {
             $out['mail'] = ['from' => self::withoutMentions($f['mail']['from']), 'subject' => self::withoutMentions($f['mail']['subject']),
-                'words' => self::withoutMentions($f['mail']['words']), 'attachment' => $f['mail']['attachment'], 'unread' => false, 'days' => 0];
+                'words' => self::withoutMentions($f['mail']['words']), 'attachment' => $f['mail']['attachment'], 'unread' => false, 'days' => 0,
+                'exclude' => self::withoutMentions($f['mail']['exclude']), 'to' => self::withoutMentions($f['mail']['to'])];
         } else {
             $out['drive'] = ['folder' => '', 'name' => self::withoutMentions($f['drive']['name']), 'kind' => $f['drive']['kind'], 'days' => 0];
         }
@@ -574,14 +686,26 @@ final class WorkflowSpec
                     'filters'     => WorkflowFilters::normalize($raw['filters'] ?? null),
                     'on_error'    => self::normalizeOnError($raw['on_error'] ?? null, true),
                 ];
+                if ($node['target'] === 'slack') {
+                    $node['slack'] = self::normalizeSlack(is_array($raw['slack'] ?? null) ? $raw['slack'] : []);
+                    if ($node['slack']['mode'] === self::SLACK_READ) {
+                        // Lire : rien n'est écrit, une pièce est remise —
+                        // rédigée, jamais une création.
+                        $node['write'] = self::WRITE_NONE;
+                        $node['auto_send_mail'] = false;
+                        $out = is_array($raw['output'] ?? null) ? $raw['output'] : [];
+                        if (self::isCreationForm((string)($out['form'] ?? ''))) {
+                            $out['form'] = 'text';
+                        }
+                        $node['output'] = self::normalizeOutput($out, $title, $used);
+                    }
+                }
                 break;
 
             case self::TYPE_CREATE:
                 $kind = array_key_exists((string)($raw['kind'] ?? ''), self::CREATE_KINDS) ? (string)$raw['kind'] : 'image';
                 $outRaw = is_array($raw['output'] ?? null) ? $raw['output'] : [];
                 $outName = self::text($outRaw['name'] ?? '', self::LABEL_MAX);
-                $opts = is_array($raw['options'] ?? null) ? $raw['options'] : [];
-                $format = (string)($opts['format'] ?? '');
                 $node += [
                     'kind'        => $kind,
                     'tool_id'     => self::posInt($raw['tool_id'] ?? null),
@@ -589,11 +713,7 @@ final class WorkflowSpec
                     'reads'       => self::keyList($raw['reads'] ?? []),
                     // Réglages propres à la nature : le format d'une image, le
                     // style des illustrations d'une page.
-                    'options'     => match ($kind) {
-                        'image' => ['format' => in_array($format, self::IMAGE_FORMATS, true) ? $format : ''],
-                        'page'  => ['style' => self::text($opts['style'] ?? '', self::STYLE_MAX)],
-                        default => [],
-                    },
+                    'options'     => self::creationOptions($kind, is_array($raw['options'] ?? null) ? $raw['options'] : []),
                     'review'      => self::bool($raw['review'] ?? false),
                     // La pièce remise a la forme de ce qui est créé.
                     'output'      => [
@@ -610,6 +730,10 @@ final class WorkflowSpec
                     'mode'     => ($raw['mode'] ?? '') === 'rule' ? 'rule' : 'question',
                     'question' => self::text($raw['question'] ?? '', self::QUESTION_MAX, true),
                     'reads'    => self::keyList($raw['reads'] ?? []),
+                    // Bases de connaissances consultées pour répondre (question
+                    // à MIA) : « correspond-il à notre offre ? » exige de savoir
+                    // ce qu'est notre offre (retour du 2026-11-04).
+                    'kb_ids'   => array_slice(self::intList($raw['kb_ids'] ?? []), 0, self::MAX_KBS),
                     'rule'     => self::normalizeRule(is_array($raw['rule'] ?? null) ? $raw['rule'] : []),
                     'doubt'    => ($raw['doubt'] ?? '') === self::DOUBT_NO ? self::DOUBT_NO : self::DOUBT_ASK,
                     'on_error' => self::normalizeOnError($raw['on_error'] ?? null, false),
@@ -685,6 +809,7 @@ final class WorkflowSpec
                 $node += [
                     'instruction' => self::text($raw['instruction'] ?? '', self::CRITERIA_MAX, true),
                     'reads'       => self::keyList($raw['reads'] ?? []),
+                    'kb_ids'      => array_slice(self::intList($raw['kb_ids'] ?? []), 0, self::MAX_KBS),
                     'routes'      => $routes,
                     'fallback'    => isset($laneKeys[$fallback]) ? $fallback : self::FALLBACK_ASK,
                     'on_error'    => self::normalizeOnError($raw['on_error'] ?? null, false),
@@ -785,6 +910,31 @@ final class WorkflowSpec
                 ];
                 break;
 
+            case self::TYPE_CALL:
+                // Paramètres : clé d'un champ du départ de l'appelé (ou
+                // « evenement », ce qui tient lieu de son évènement) → valeur.
+                $params = [];
+                foreach (is_array($raw['params'] ?? null) ? $raw['params'] : [] as $pk => $pv) {
+                    $pk = (string)$pk;
+                    if (count($params) > self::MAX_FIELDS || !preg_match('/^[a-z0-9_]{1,' . self::KEY_MAX . '}$/', $pk)) {
+                        continue;
+                    }
+                    $pv = self::text($pv, self::CALL_PARAM_MAX, true);
+                    if ($pv !== '') {
+                        $params[$pk] = $pv;
+                    }
+                }
+                $node += [
+                    'workflow_id' => self::posInt($raw['workflow_id'] ?? null),
+                    'params'      => $params,
+                    'on_stop'     => ($raw['on_stop'] ?? '') === self::CALL_STOP_CONTINUE ? self::CALL_STOP_CONTINUE : self::CALL_STOP_STOP,
+                    'output'      => self::normalizeCallOutput(is_array($raw['output'] ?? null) ? $raw['output'] : [], $title, $used),
+                    // Les pannes passagères sont réessayées par les briques de
+                    // l'appelé : ici, seulement « arrêter » ou « ignorer ».
+                    'on_error'    => ['retries' => 0, 'then' => self::normalizeOnError($raw['on_error'] ?? null, true)['then']],
+                ];
+                break;
+
             case self::TYPE_GATE:
                 $days = (int)($raw['days'] ?? self::GATE_DAYS_DEFAULT);
                 $node += [
@@ -828,6 +978,7 @@ final class WorkflowSpec
         }
         $from = (string)($raw['from'] ?? '');
         $fromAllowed = match (true) {
+            $kind === LoopSources::ROWS                         => [LoopSources::FROM_PIECE, LoopSources::FROM_DRIVE, LoopSources::FROM_TABLE],
             in_array($kind, LoopSources::DRIVE_FILE_KINDS, true) => [LoopSources::FROM_PIECE, LoopSources::FROM_DRIVE],
             $kind === LoopSources::ATTACHMENTS                  => [LoopSources::FROM_PIECE, LoopSources::FROM_SEARCH],
             $kind === LoopSources::FILES                        => [LoopSources::FROM_DRIVE],
@@ -859,6 +1010,10 @@ final class WorkflowSpec
             $out['file_kind'] = in_array($fileKind, WorkflowFilters::DRIVE_KINDS, true) ? $fileKind : '';
         }
         if ($kind === LoopSources::ROWS) {
+            // Une table permanente : son identifiant (base de connaissances) et
+            // son nom, pour le dire sans la relire.
+            $out['table_id'] = $out['from'] === LoopSources::FROM_TABLE ? self::posInt($raw['table_id'] ?? null) : null;
+            $out['table']    = $out['from'] === LoopSources::FROM_TABLE ? self::text($raw['table'] ?? '', self::LABEL_MAX) : '';
             $out['sheet']   = self::text($raw['sheet'] ?? '', self::LABEL_MAX);
             $out['header']  = max(0, min(50, (int)($raw['header'] ?? 0)));
             $out['columns'] = self::normalizeColumns($raw['columns'] ?? [], LoopSources::MAX_COLUMNS);
@@ -905,9 +1060,88 @@ final class WorkflowSpec
         return $out;
     }
 
+    /**
+     * Réglages d'une brique Slack. Tous les champs restent, quel que soit le
+     * mode : passer de « Publier » à « Lire » et revenir ne perd rien.
+     */
+    private static function normalizeSlack(array $raw): array
+    {
+        $mode = ($raw['mode'] ?? '') === self::SLACK_READ ? self::SLACK_READ : self::SLACK_POST;
+        $where = (string)($raw['where'] ?? '');
+        $allowed = $mode === self::SLACK_READ
+            ? [self::SLACK_CHANNEL, self::SLACK_PERSON, self::SLACK_SEARCH]
+            : [self::SLACK_CHANNEL, self::SLACK_PERSON];
+        $days = filter_var($raw['days'] ?? null, FILTER_VALIDATE_INT);
+        return [
+            'mode'    => $mode,
+            'where'   => in_array($where, $allowed, true) ? $where : self::SLACK_CHANNEL,
+            'channel' => self::text($raw['channel'] ?? '', self::SLACK_REF_MAX),
+            'person'  => self::text($raw['person'] ?? '', self::SLACK_REF_MAX),
+            'query'   => self::text($raw['query'] ?? '', self::SLACK_REF_MAX),
+            'days'    => $days === false ? self::SLACK_DAYS_DEFAULT : max(1, min(self::SLACK_DAYS_MAX, (int)$days)),
+            'attach'  => array_slice(self::keyList($raw['attach'] ?? []), 0, self::SLACK_ATTACH_MAX),
+        ];
+    }
+
+    /** Le texte cite-t-il un champ Email d'une Fiche (`@{clé.champ}`) ? */
+    private static function citesEmailField(string $text, array $pieces): bool
+    {
+        preg_match_all('/@\{([a-z0-9_]{1,' . self::KEY_MAX . '})\.([a-z0-9_]{1,' . self::KEY_MAX . '})\}/', $text, $m, PREG_SET_ORDER);
+        foreach ($m as $hit) {
+            foreach ($pieces[$hit[1]]['fields'] ?? [] as $f) {
+                if ($f['key'] === $hit[2] && $f['type'] === 'email') {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /** Une action qui LIT (brique Slack en mode « Lire ») : elle remet une pièce et n'écrit rien. */
+    public static function isReadingAction(array $node): bool
+    {
+        return ($node['type'] ?? '') === self::TYPE_ACTION && ($node['target'] ?? '') === 'slack'
+            && (($node['slack']['mode'] ?? self::SLACK_POST) === self::SLACK_READ);
+    }
+
+    /** La brique remet-elle une pièce au dossier : étape, création, action qui lit ? */
+    public static function producesPiece(array $node): bool
+    {
+        return in_array($node['type'] ?? '', self::PRODUCING_TYPES, true) || self::isReadingAction($node);
+    }
+
+    /**
+     * Textes d'une brique Slack qui peuvent citer le dossier (`@{clé.champ}`) :
+     * ceux de SON mode et de SA destination seulement — un champ laissé là par
+     * un autre réglage ne compte pas.
+     *
+     * @return list<string>
+     */
+    public static function slackTexts(array $node): array
+    {
+        $s = $node['slack'] ?? null;
+        if (($node['type'] ?? '') !== self::TYPE_ACTION || ($node['target'] ?? '') !== 'slack' || !is_array($s)) {
+            return [];
+        }
+        return match ($s['where']) {
+            self::SLACK_PERSON => [(string)$s['person']],
+            self::SLACK_SEARCH => [(string)$s['query']],
+            default            => [(string)$s['channel']],
+        };
+    }
+
+    /** Pièces jointes d'une brique Slack qui publie. @return list<string> */
+    public static function slackAttach(array $node): array
+    {
+        $s = $node['slack'] ?? null;
+        return ($node['type'] ?? '') === self::TYPE_ACTION && ($node['target'] ?? '') === 'slack'
+            && is_array($s) && $s['mode'] === self::SLACK_POST ? (array)$s['attach'] : [];
+    }
+
     private static function normalizeOutput(array $raw, string $title, array &$used): array
     {
-        $form = in_array($raw['form'] ?? '', self::FORMS, true) ? (string)$raw['form'] : 'text';
+        $form = in_array($raw['form'] ?? '', self::FORMS, true) || self::isCreationForm((string)($raw['form'] ?? ''))
+            ? (string)$raw['form'] : 'text';
         $name = self::text($raw['name'] ?? '', self::LABEL_MAX);
         $out = [
             'key'  => self::uniqueKey((string)($raw['key'] ?? ''), $name !== '' ? $name : ($title !== '' ? $title : 'piece'), $used),
@@ -941,10 +1175,73 @@ final class WorkflowSpec
             $out['fields'] = $fields;
         }
         if ($form === 'document') {
-            $out['format']   = in_array($raw['format'] ?? '', self::DOC_FORMATS, true) ? (string)$raw['format'] : 'docx';
-            $out['template'] = array_key_exists('template', $raw) ? self::bool($raw['template']) : true;
+            $out['format']   = self::docFormat($raw['format'] ?? '');
+            $out['template'] = in_array($out['format'], self::TEMPLATE_FORMATS, true)
+                && (array_key_exists('template', $raw) ? self::bool($raw['template']) : true);
+        }
+        if (self::isCreationForm($form)) {
+            // Une création : l'outil qui la fabrique, ses réglages (comme une brique Création).
+            $out['tool_id'] = self::posInt($raw['tool_id'] ?? null);
+            $out['options'] = self::creationOptions($form, is_array($raw['options'] ?? null) ? $raw['options'] : []);
         }
         return $out;
+    }
+
+    /**
+     * La pièce que remet l'appel d'un workflow. `from` : la pièce du livrable
+     * de l'appelé à récupérer — la forme (champs d'une Fiche, format d'un
+     * document) est RECOPIÉE ici par l'éditeur, pour que ce workflow sache ce
+     * qu'il lira sans relire l'autre ; « À régler » signale un écart
+     * (WorkflowCall). `from` vide : tout le livrable, en un texte.
+     */
+    private static function normalizeCallOutput(array $raw, string $title, array &$used): array
+    {
+        $from = is_scalar($raw['from'] ?? null) && preg_match('/^[a-z0-9_]{1,' . self::KEY_MAX . '}$/', (string)$raw['from']) ? (string)$raw['from'] : '';
+        $form = $from !== '' && in_array($raw['form'] ?? '', self::CALL_FORMS, true) ? (string)$raw['form'] : 'text';
+        $out = self::normalizeOutput(['form' => $form === 'file' ? 'text' : $form] + $raw, $title, $used);
+        // Aucun outil de création ni modèle d'entreprise ici : la pièce arrive faite.
+        unset($out['tool_id'], $out['options'], $out['template']);
+        $out['form'] = $form;
+        $out['from'] = $from;
+        return $out;
+    }
+
+    /**
+     * Format d'une pièce Document : un document (DOC_FORMATS) ou n'importe
+     * quel fichier texte (.py, .json, .csv…) — l'extension propre de
+     * FileFormats, jamais une que MIA ne sait pas fabriquer depuis du texte
+     * (image, archive, ancien format Office). Sinon : Word.
+     */
+    public static function docFormat(mixed $raw): string
+    {
+        $f = FileFormats::normalizeExtension(is_scalar($raw) ? (string)$raw : '');
+        return $f !== '' && FileFormats::unsupported($f) === null ? $f : 'docx';
+    }
+
+    /** Une forme de pièce que fabrique un outil de création (image, page, carte) ? */
+    public static function isCreationForm(string $form): bool
+    {
+        return isset(self::CREATE_KINDS[$form]);
+    }
+
+    /**
+     * Réglages d'une création, selon sa nature : le format, le fond et le
+     * format du fichier d'une image (ImageOptions — ce que l'outil n'accepte
+     * pas est écarté à la génération), le style des illustrations d'une page.
+     */
+    private static function creationOptions(string $kind, array $opts): array
+    {
+        $format = (string)($opts['format'] ?? '');
+        $image  = ImageOptions::normalize($opts);
+        return match ($kind) {
+            'image' => [
+                'format'        => in_array($format, self::IMAGE_FORMATS, true) ? $format : '',
+                'background'    => $image['background'],
+                'output_format' => $image['output_format'],
+            ],
+            'page'  => ['style' => self::text($opts['style'] ?? '', self::STYLE_MAX)],
+            default => [],
+        };
     }
 
     private static function normalizeRule(array $raw): array
@@ -990,7 +1287,10 @@ final class WorkflowSpec
                     'fields' => [], 'producer' => self::START_KEY, 'branch' => null,
                 ];
             } else {
-                $ficheFields[] = ['key' => $f['key'], 'label' => $f['label'], 'type' => self::ficheTypeOfField($f['type'])];
+                $ficheFields[] = ['key' => $f['key'], 'label' => $f['label'], 'type' => self::ficheTypeOfField($f['type'])]
+                    // Un Choix garde ses options : la règle d'une condition
+                    // propose ces valeurs, et signale celle qui n'en est pas une.
+                    + ($f['type'] === 'choice' ? ['options' => array_values((array)$f['options'])] : []);
             }
         }
         if ($ficheFields !== []) {
@@ -1092,14 +1392,21 @@ final class WorkflowSpec
      * Clé de la pièce qu'une boucle rassemble : `collect` si c'est une pièce du
      * corps, sinon celle de la dernière étape. Une boucle « jusqu'à » suit
      * aussi une création (sa dernière version) ; « pour chaque » ne rassemble
-     * que des étapes — une image par élément sert aux briques de son tour.
+     * que des pièces rédigées — une image (ou une page, une carte) par
+     * élément, qu'elle vienne d'une brique Création ou d'une étape, sert aux
+     * briques de son tour.
      */
     public static function loopCollect(array $loop): ?string
     {
         $outputs = [];
         foreach ($loop['body'] ?? [] as $child) {
-            if ($child['type'] === self::TYPE_STEP
-                || ($child['type'] === self::TYPE_CREATE && ($loop['mode'] ?? '') === self::LOOP_UNTIL)) {
+            if (!self::producesPiece($child)) {
+                continue;
+            }
+            $form = (string)($child['output']['form'] ?? '');
+            // Un fichier récupéré d'un workflow appelé, comme une création : un
+            // par élément, il sert aux briques de son tour.
+            if ((!self::isCreationForm($form) && $form !== 'file') || ($loop['mode'] ?? '') === self::LOOP_UNTIL) {
                 $outputs[] = $child['output']['key'];
             }
         }
@@ -1112,7 +1419,7 @@ final class WorkflowSpec
 
     private static function collectPieces(array $node, ?string $branch, array &$out): void
     {
-        if (!in_array($node['type'], self::PRODUCING_TYPES, true)) {
+        if (!self::producesPiece($node)) {
             return;
         }
         $o = $node['output'];
@@ -1461,6 +1768,12 @@ final class WorkflowSpec
                 $keys = array_merge($keys, self::mentions($text));
             }
         }
+        // Brique Slack : la destination (ou la source) qui cite un champ, et
+        // les pièces jointes au message.
+        foreach (self::slackTexts($node) as $text) {
+            $keys = array_merge($keys, self::mentions($text));
+        }
+        $keys = array_merge($keys, self::slackAttach($node));
         if ($node['type'] === self::TYPE_CONDITION && $node['mode'] === 'rule') {
             foreach ($node['rule']['items'] as $it) {
                 $keys[] = $it['piece'];
@@ -1476,6 +1789,12 @@ final class WorkflowSpec
         }
         if ($node['type'] === self::TYPE_WAIT && $node['mode'] === 'date') {
             $keys[] = $node['piece'];
+        }
+        // Appel d'un workflow : les pièces citées par ses paramètres.
+        if ($node['type'] === self::TYPE_CALL) {
+            foreach ($node['params'] as $value) {
+                $keys = array_merge($keys, self::mentions((string)$value));
+            }
         }
         $out = [];
         foreach ($keys as $k) {
@@ -1529,8 +1848,11 @@ final class WorkflowSpec
         } else {
             $available = self::available($def, $key);
         }
+        // Un appel de workflow ne se refait pas d'après une remarque : son
+        // travail est celui d'un autre workflow, relu par ses propres validations.
         $steps = static function (string $producer) use ($def): bool {
-            return in_array(self::node($def, $producer)['type'] ?? '', self::PRODUCING_TYPES, true);
+            $n = self::node($def, $producer) ?? [];
+            return self::producesPiece($n) && ($n['type'] ?? '') !== self::TYPE_CALL;
         };
         $choice = (string)($gate['returns_to'] ?? '');
         if ($choice !== '' && $steps($choice)) {
@@ -1552,7 +1874,7 @@ final class WorkflowSpec
     /**
      * Silhouette du rail principal : une nature par brique, du départ au
      * livrable (`c` condition, `a` décision de MIA, `l` boucle, `g` validation, `x` action, `w`
-     * attente, `n` prévenir, `k` création, `s` étape ; une étape ou une
+     * attente, `n` prévenir, `k` création, `p` appel d'un workflow, `s` étape ; une étape ou une
      * création relue ajoute `g`). Sert aux vignettes de la liste et aux cartes du chat.
      */
     public static function silhouette(array $def): string
@@ -1568,6 +1890,7 @@ final class WorkflowSpec
                 self::TYPE_WAIT      => 'w',
                 self::TYPE_NOTIFY    => 'n',
                 self::TYPE_STOP      => 'q',
+                self::TYPE_CALL      => 'p',
                 self::TYPE_CREATE    => !empty($node['review']) ? 'kg' : 'k',
                 default              => !empty($node['review']) ? 'sg' : 's',
             };
@@ -1578,7 +1901,7 @@ final class WorkflowSpec
     /** Comptes affichés : étapes, actions, créations, conditions, boucles, validations, attentes, pièces. */
     public static function counts(array $def): array
     {
-        $c = ['steps' => 0, 'actions' => 0, 'creations' => 0, 'conditions' => 0, 'routes' => 0, 'loops' => 0, 'gates' => 0, 'waits' => 0, 'notifies' => 0, 'stops' => 0,
+        $c = ['steps' => 0, 'actions' => 0, 'creations' => 0, 'conditions' => 0, 'routes' => 0, 'loops' => 0, 'gates' => 0, 'waits' => 0, 'notifies' => 0, 'stops' => 0, 'calls' => 0,
               'pieces' => count(self::pieces($def)), 'deliveries' => count($def['end']['deliveries'] ?? [])];
         foreach (self::flatNodes($def) as $n) {
             match ($n['type']) {
@@ -1592,6 +1915,7 @@ final class WorkflowSpec
                 self::TYPE_WAIT      => $c['waits']++,
                 self::TYPE_NOTIFY    => $c['notifies']++,
                 self::TYPE_STOP      => $c['stops']++,
+                self::TYPE_CALL      => $c['calls']++,
             };
             if (!empty($n['review'])) {
                 $c['gates']++;
@@ -1630,7 +1954,7 @@ final class WorkflowSpec
     /** La brique écrit-elle dans des outils (étape avec mode, action) ? */
     public static function writes(array $node): bool
     {
-        return ($node['type'] === self::TYPE_ACTION)
+        return ($node['type'] === self::TYPE_ACTION && !self::isReadingAction($node))
             || ($node['type'] === self::TYPE_STEP && ($node['write'] ?? self::WRITE_NONE) !== self::WRITE_NONE);
     }
 
@@ -1649,8 +1973,10 @@ final class WorkflowSpec
     public static function issues(array $def, array $ctx): array
     {
         $issues = [];
-        $add = static function (string $node, string $target, string $level, string $text) use (&$issues): void {
-            $issues[] = ['node' => $node, 'target' => $target, 'level' => $level, 'text' => $text];
+        // $connect : le connecteur à relier pour régler le point (lien vers
+        // Réglages → Comptes connectés, et pré-contrôle du lancement).
+        $add = static function (string $node, string $target, string $level, string $text, string $connect = '') use (&$issues): void {
+            $issues[] = ['node' => $node, 'target' => $target, 'level' => $level, 'text' => $text] + ($connect !== '' ? ['connect' => $connect] : []);
         };
         $pieces = self::pieces($def);
 
@@ -1658,7 +1984,7 @@ final class WorkflowSpec
             $add(self::START_KEY, 'nodes', self::LEVEL_BLOCK, t('Ajoutez au moins une étape.'));
         }
         $counts = self::counts($def);
-        $producers = $counts['steps'] + $counts['creations'];
+        $producers = count(array_filter(self::flatNodes($def), static fn(array $n): bool => self::producesPiece($n)));
         if ($producers === 0 && ($def['nodes'] ?? []) !== []) {
             $add(self::START_KEY, 'nodes', self::LEVEL_WARN, t('Aucune étape ne remet de pièce : le workflow ne produira rien à relire.'));
         }
@@ -1679,7 +2005,7 @@ final class WorkflowSpec
         }
         if ($start['schedule'] !== null) {
             foreach ($start['fields'] as $f) {
-                if ($f['required'] && ($f['type'] === 'file' || $f['default'] === '')) {
+                if ($f['required'] && empty($f['reference']) && ($f['type'] === 'file' || $f['default'] === '')) {
                     $add(self::START_KEY, 'schedule', self::LEVEL_BLOCK, $f['type'] === 'file'
                         ? t('Un workflow programmé ne peut pas exiger de fichier : « {nom} » n’aura personne pour le fournir.', ['nom' => $f['label']])
                         : t('Programmé, le workflow démarre seul : donnez une valeur par défaut à « {nom} » ou rendez-le facultatif.', ['nom' => $f['label']]));
@@ -1723,8 +2049,8 @@ final class WorkflowSpec
             }
 
             match ($node['type']) {
-                self::TYPE_STEP      => self::stepIssues($node, $ctx, $names, $add),
-                self::TYPE_ACTION    => self::actionIssues($node, $ctx, $add),
+                self::TYPE_STEP      => self::stepIssues($def, $node, $ctx, $names, $add),
+                self::TYPE_ACTION    => self::actionIssues($def, $node, $ctx, $names, $available, $add),
                 self::TYPE_CREATE    => self::createIssues($def, $node, $ctx, $names, $add),
                 self::TYPE_CONDITION => self::conditionIssues($def, $node, $available, $add),
                 self::TYPE_ROUTE     => self::routeIssues($def, $node, $available, $pieces, $add),
@@ -1732,6 +2058,7 @@ final class WorkflowSpec
                 self::TYPE_GATE      => self::gateIssues($def, $node, $available, $add),
                 self::TYPE_WAIT      => self::waitIssues($node, $available, $add),
                 self::TYPE_NOTIFY    => self::notifyIssues($node, $add),
+                self::TYPE_CALL      => WorkflowCall::issues($def, $node, $ctx, $names, $available, $add),
                 self::TYPE_STOP      => null,
             };
         }
@@ -1795,7 +2122,7 @@ final class WorkflowSpec
                 if (isset($ctx['sources']) && !isset($ctx['sources'][$conn])) {
                     $add(self::START_KEY, 'event', self::LEVEL_BLOCK, t('Ce connecteur n’est pas proposé sur cette instance.'));
                 } elseif (isset($ctx['sources'][$conn]) && empty($ctx['sources'][$conn]['connected'])) {
-                    $add(self::START_KEY, 'event', self::LEVEL_BLOCK, t('Reliez d’abord « {nom} » dans Réglages → Comptes connectés.', ['nom' => $label($conn)]));
+                    $add(self::START_KEY, 'event', self::LEVEL_BLOCK, t('Reliez d’abord « {nom} » dans Réglages → Comptes connectés.', ['nom' => $label($conn)]), (string)$conn);
                 }
                 break;
             case 'file':
@@ -1805,7 +2132,7 @@ final class WorkflowSpec
                 if (isset($ctx['sources']) && !isset($ctx['sources']['drive'])) {
                     $add(self::START_KEY, 'event', self::LEVEL_BLOCK, t('Ce connecteur n’est pas proposé sur cette instance.'));
                 } elseif (isset($ctx['sources']['drive']) && empty($ctx['sources']['drive']['connected'])) {
-                    $add(self::START_KEY, 'event', self::LEVEL_BLOCK, t('Reliez d’abord « {nom} » dans Réglages → Comptes connectés.', ['nom' => $label('drive')]));
+                    $add(self::START_KEY, 'event', self::LEVEL_BLOCK, t('Reliez d’abord « {nom} » dans Réglages → Comptes connectés.', ['nom' => $label('drive')]), 'drive');
                 }
                 break;
             case 'workflow':
@@ -1926,7 +2253,17 @@ final class WorkflowSpec
             if (!isset($ctx['sources'][$connector])) {
                 $add($k, 'source', self::LEVEL_BLOCK, t('Ce connecteur n’est pas proposé sur cette instance.'));
             } elseif (empty($ctx['sources'][$connector]['connected'])) {
-                $add($k, 'source', self::LEVEL_BLOCK, t('Reliez d’abord « {nom} » dans Réglages → Comptes connectés.', ['nom' => (string)($ctx['sources'][$connector]['label'] ?? $connector)]));
+                $add($k, 'source', self::LEVEL_BLOCK, t('Reliez d’abord « {nom} » dans Réglages → Comptes connectés.', ['nom' => (string)($ctx['sources'][$connector]['label'] ?? $connector)]), (string)$connector);
+            }
+        }
+        if (($source['from'] ?? '') === LoopSources::FROM_TABLE) {
+            $tableId = (int)($source['table_id'] ?? 0);
+            if ($tableId <= 0) {
+                $add($k, 'source', self::LEVEL_BLOCK, t('Choisissez la table à parcourir.'));
+            } elseif (isset($ctx['kbs']) && empty($ctx['kbs'][$tableId]['table'])) {
+                $add($k, 'source', self::LEVEL_BLOCK, t('Cette table n’existe plus ou ne vous est plus partagée : choisissez-en une autre.'));
+            } elseif (isset($ctx['kbs'][$tableId]) && (int)($ctx['kbs'][$tableId]['rows'] ?? 0) === 0) {
+                $add($k, 'source', self::LEVEL_WARN, t('La table « {nom} » est vide : la boucle n’aura rien à parcourir.', ['nom' => (string)$ctx['kbs'][$tableId]['name']]));
             }
         }
         if (($source['from'] ?? '') === LoopSources::FROM_DRIVE && trim((string)($source['drive'] ?? '')) === '') {
@@ -1941,7 +2278,9 @@ final class WorkflowSpec
             $add($k, 'source', self::LEVEL_WARN, t('Sans recherche ni période, les emails les plus récents de la boîte de réception sont parcourus.'));
         }
         if ($kind === LoopSources::ROWS && ($source['columns'] ?? []) === []) {
-            $add($k, 'source', self::LEVEL_WARN, t('Aucune colonne déclarée : chaque tour reçoit la ligne entière, sans champ à citer ni à filtrer. Lisez les colonnes sur un fichier exemple.'));
+            $add($k, 'source', self::LEVEL_WARN, ($source['from'] ?? '') === LoopSources::FROM_TABLE
+                ? t('Aucune colonne déclarée : chaque tour reçoit la ligne entière, sans champ à citer ni à filtrer. Reprenez les colonnes de la table.')
+                : t('Aucune colonne déclarée : chaque tour reçoit la ligne entière, sans champ à citer ni à filtrer. Lisez les colonnes sur un fichier exemple.'));
         }
         foreach (['instruction', 'query', 'drive'] as $f) {
             foreach (self::mentions((string)($source[$f] ?? '')) as $m) {
@@ -2009,7 +2348,7 @@ final class WorkflowSpec
                 if (isset($ctx['sources']) && !isset($ctx['sources'][$source])) {
                     $add(self::END_KEY, $t, self::LEVEL_BLOCK, t('Ce connecteur n’est pas proposé sur cette instance.'));
                 } elseif (isset($ctx['sources'][$source]) && empty($ctx['sources'][$source]['connected'])) {
-                    $add(self::END_KEY, $t, self::LEVEL_BLOCK, t('Reliez d’abord « {nom} » dans Réglages → Comptes connectés.', ['nom' => (string)$ctx['sources'][$source]['label']]));
+                    $add(self::END_KEY, $t, self::LEVEL_BLOCK, t('Reliez d’abord « {nom} » dans Réglages → Comptes connectés.', ['nom' => (string)$ctx['sources'][$source]['label']]), (string)$source);
                 }
             }
             if (in_array($d['mode'] ?? '', ['draft', 'send', 'auto'], true) && empty($ctx['auto'])) {
@@ -2080,6 +2419,18 @@ final class WorkflowSpec
                 case 'slack':
                     if (trim($d['channel']) === '') {
                         $add(self::END_KEY, $t, self::LEVEL_BLOCK, t('Indiquez le canal Slack.'));
+                    } elseif (!UserSlackService::isPlausibleChannelRef($d['channel'])) {
+                        // « Canal Slack » : une description, pas un canal — la
+                        // livraison échouerait à chaque exécution, à la fin.
+                        $add(self::END_KEY, $t, self::LEVEL_BLOCK, t('« {canal} » n’est pas un nom de canal Slack (il ne contient jamais d’espace) : écrivez-le comme dans Slack, par exemple #general.', ['canal' => trim($d['channel'])]));
+                    }
+                    // Une action qui publie déjà dans Slack : la livraison
+                    // ajoute un SECOND message, ce qu'on ne voit pas sur le rail.
+                    foreach (self::flatNodes($def) as $n) {
+                        if ($n['type'] === self::TYPE_ACTION && ($n['target'] ?? '') === 'slack' && !self::isReadingAction($n)) {
+                            $add(self::END_KEY, $t, self::LEVEL_WARN, t('L’action « {titre} » publie déjà dans Slack : cette livraison publiera un second message. Gardez l’une ou l’autre.', ['titre' => $n['title'] !== '' ? $n['title'] : t('Action')]));
+                            break;
+                        }
                     }
                     if (trim($d['message']) === '' && $d['pieces'] === []) {
                         $add(self::END_KEY, $t, self::LEVEL_BLOCK, t('Écrivez le message à publier, ou choisissez une pièce.'));
@@ -2087,6 +2438,9 @@ final class WorkflowSpec
                     foreach ($images($d['pieces']) as $name) {
                         $add(self::END_KEY, $t, self::LEVEL_WARN, t('Slack ne reçoit ici que du texte : l’image « {nom} » sera laissée de côté.', ['nom' => $name]));
                     }
+                    break;
+                case 'table':
+                    self::tableDeliveryIssues($d, $available, $ctx, $t, $add);
                     break;
                 case 'kb':
                     if ($d['kb_id'] === null || (isset($ctx['delivery_kbs']) && !isset($ctx['delivery_kbs'][$d['kb_id']]))) {
@@ -2097,6 +2451,57 @@ final class WorkflowSpec
                     }
                     break;
             }
+        }
+    }
+
+    /** Livraison dans une table permanente : la table, les pièces, la clé d'une mise à jour. */
+    private static function tableDeliveryIssues(array $d, array $available, array $ctx, string $t, callable $add): void
+    {
+        $tables = $ctx['delivery_tables'] ?? null;
+        $target = $d['kb_id'] !== null && is_array($tables) ? ($tables[$d['kb_id']] ?? null) : null;
+        if ($d['kb_id'] === null) {
+            $add(self::END_KEY, $t, self::LEVEL_BLOCK, t('Choisissez la table où écrire.'));
+        } elseif (is_array($tables) && $target === null) {
+            $add(self::END_KEY, $t, self::LEVEL_BLOCK, t('Cette table n’existe plus, vous ne la gérez plus, ou elle est en lecture seule pour MIA (réglage de sa fiche).'));
+        }
+        if ($d['pieces'] === []) {
+            $add(self::END_KEY, $t, self::LEVEL_BLOCK, t('Choisissez la pièce dont les lignes vont dans la table : un Tableau ou une Fiche.'));
+        }
+        foreach ($d['pieces'] as $k) {
+            $p = $available[$k] ?? null;
+            if ($p !== null && !in_array($p['form'], ['table', 'fiche'], true) && !($p['form'] === 'document' && ($p['format'] ?? '') === 'xlsx')) {
+                $add(self::END_KEY, $t, self::LEVEL_BLOCK, t('« {nom} » ne s’écrit pas dans une table : choisissez un Tableau, une Fiche ou un classeur Excel.', ['nom' => $p['name']]));
+            }
+        }
+        if ($d['write'] === KbTableWrite::MODE_UPDATE) {
+            if (trim($d['key']) === '') {
+                $add(self::END_KEY, $t, self::LEVEL_BLOCK, t('Choisissez la colonne de la table qui identifie une ligne (email, nom, référence).'));
+            } elseif ($target !== null) {
+                $found = false;
+                foreach ((array)($target['columns'] ?? []) as $c) {
+                    $found = $found || WorkTableOps::fold((string)$c['label']) === WorkTableOps::fold($d['key']) || (string)$c['key'] === WorkTableOps::slug($d['key']);
+                }
+                if (!$found) {
+                    $add(self::END_KEY, $t, self::LEVEL_BLOCK, t('La colonne « {colonne} » n’est plus dans la table : choisissez-en une autre.', ['colonne' => $d['key']]));
+                }
+            }
+            // Une Fiche : son champ doit porter le nom de la colonne clé.
+            $keyName = trim($d['key_source']) !== '' ? $d['key_source'] : $d['key'];
+            foreach ($d['pieces'] as $k) {
+                $p = $available[$k] ?? null;
+                if ($p === null || $p['form'] !== 'fiche' || trim($keyName) === '') {
+                    continue;
+                }
+                $has = false;
+                foreach ((array)($p['fields'] ?? []) as $f) {
+                    $has = $has || WorkTableOps::fold((string)$f['label']) === WorkTableOps::fold($keyName);
+                }
+                if (!$has) {
+                    $add(self::END_KEY, $t, self::LEVEL_BLOCK, t('La Fiche « {nom} » n’a pas de champ « {champ} » : la ligne à mettre à jour ne se retrouverait pas.', ['nom' => $p['name'], 'champ' => $keyName]));
+                }
+            }
+        } elseif ($d['write'] === KbTableWrite::MODE_REPLACE) {
+            $add(self::END_KEY, $t, self::LEVEL_WARN, t('Chaque exécution remplace TOUT le contenu de la table (son historique permet de revenir en arrière).'));
         }
     }
 
@@ -2127,7 +2532,27 @@ final class WorkflowSpec
         return ['valid' => array_values(array_unique($valid)), 'invalid' => $invalid];
     }
 
-    private static function stepIssues(array $node, array $ctx, array &$names, callable $add): void
+    /**
+     * Étape réglée pour agir sans rien qui la nourrisse ni rien où agir :
+     * aucun connecteur, aucun outil, ni assistant ni Internet. Un assistant
+     * apporte ses propres bases, documents et outils, et Internet nourrit
+     * la pièce qu'elle rédige : l'avertir alors ferait chercher un réglage
+     * qui ne manque pas.
+     */
+    public static function writesWithNothing(array $node): bool
+    {
+        if (($node['type'] ?? self::TYPE_STEP) !== self::TYPE_STEP
+            || ($node['write'] ?? self::WRITE_NONE) === self::WRITE_NONE) {
+            return false;
+        }
+        if (($node['profile_id'] ?? null) !== null) {
+            return false;
+        }
+        $sources = (array)($node['sources'] ?? []);
+        return $sources === [] && (array)($node['tool_ids'] ?? []) === [];
+    }
+
+    private static function stepIssues(array $def, array $node, array $ctx, array &$names, callable $add): void
     {
         $k = $node['key'];
         if (trim($node['instruction']) === '') {
@@ -2150,17 +2575,21 @@ final class WorkflowSpec
         if ($o['form'] === 'fiche' && ($o['fields'] ?? []) === []) {
             $add($k, 'output', self::LEVEL_BLOCK, t('Une Fiche demande au moins un champ.'));
         }
+        if (self::isCreationForm($o['form'])) {
+            // L'étape prépare, l'outil de création fabrique : il doit être là.
+            self::creationToolIssues($def, $node, $o['form'], $o['tool_id'] ?? null, $ctx, $add, 'form');
+        }
         foreach ($node['sources'] as $s) {
             if (isset($ctx['sources']) && !isset($ctx['sources'][$s])) {
                 $add($k, 'sources', self::LEVEL_WARN, t('Une source n’est plus proposée et sera ignorée.'));
             } elseif (isset($ctx['sources'][$s]) && empty($ctx['sources'][$s]['connected'])) {
-                $add($k, 'sources', self::LEVEL_WARN, t('« {nom} » n’est pas relié à votre compte : l’étape ne pourra pas le consulter.', ['nom' => $ctx['sources'][$s]['label']]));
+                $add($k, 'sources', self::LEVEL_WARN, t('« {nom} » n’est pas relié à votre compte : l’étape ne pourra pas le consulter.', ['nom' => $ctx['sources'][$s]['label']]), (string)$s);
             }
         }
         if ($node['write'] === self::WRITE_AUTO && empty($ctx['auto'])) {
             $add($k, 'write', self::LEVEL_BLOCK, t('« Agir sans validation » n’est pas autorisé par l’administrateur.'));
         }
-        if ($node['write'] !== self::WRITE_NONE && array_filter($node['sources'], static fn($s) => $s !== 'web') === [] && $node['tool_ids'] === []) {
+        if (self::writesWithNothing($node)) {
             $add($k, 'write', self::LEVEL_WARN, t('L’étape peut agir, mais aucun outil n’est relié : choisissez une source à laquelle écrire.'));
         }
         $needsTools = $node['write'] !== self::WRITE_NONE || array_filter($node['sources'], static fn($s) => $s !== 'web') !== [];
@@ -2170,12 +2599,24 @@ final class WorkflowSpec
                 $add($k, 'llm', self::LEVEL_WARN, t('Le modèle de cette étape ne sait pas utiliser les connecteurs : ses sources seront ignorées.'));
             }
         }
+        // Une table permanente se lit par les outils de tables : sans eux, le
+        // modèle n'en voit que le début (KbTablePrompt::preview).
+        $tables = array_values(array_filter($node['kb_ids'], static fn(int $id): bool => !empty($ctx['kbs'][$id]['table'])));
+        if ($tables !== [] && isset($ctx['tool_llms'])) {
+            $llm = self::effectiveLlm($node, $ctx);
+            if ($llm !== '' && empty($ctx['tool_llms'][$llm])) {
+                $add($k, 'sources', self::LEVEL_WARN, t('Le modèle de cette étape ne sait pas utiliser les outils : la table « {nom} » ne sera lue qu’en aperçu (ses {n} premières lignes). Choisissez un modèle qui sait utiliser les connecteurs pour la lire en entier.', [
+                    'nom' => (string)$ctx['kbs'][$tables[0]]['name'], 'n' => KbTablePrompt::PREVIEW_ROWS,
+                ]));
+            }
+        }
     }
 
-    private static function actionIssues(array $node, array $ctx, callable $add): void
+    private static function actionIssues(array $def, array $node, array $ctx, array &$names, array $available, callable $add): void
     {
         $k = $node['key'];
         $target = $node['target'];
+        $reading = self::isReadingAction($node);
         if ($target === '') {
             $add($k, 'target', self::LEVEL_BLOCK, t('Choisissez l’outil dans lequel agir.'));
         } else {
@@ -2190,20 +2631,103 @@ final class WorkflowSpec
             } elseif (isset($ctx['sources']) && !isset($ctx['sources'][$conn])) {
                 $add($k, 'target', self::LEVEL_BLOCK, t('Ce connecteur n’est pas proposé sur cette instance.'));
             } elseif (isset($ctx['sources'][$conn]) && empty($ctx['sources'][$conn]['connected'])) {
-                $add($k, 'target', self::LEVEL_BLOCK, t('Reliez d’abord « {nom} » dans Réglages → Comptes connectés.', ['nom' => $ctx['sources'][$conn]['label']]));
+                $add($k, 'target', self::LEVEL_BLOCK, t('Reliez d’abord « {nom} » dans Réglages → Comptes connectés.', ['nom' => $ctx['sources'][$conn]['label']]), (string)$conn);
             }
         }
-        if (trim($node['instruction']) === '') {
+        if ($target === 'slack') {
+            self::slackIssues($node, $ctx, $names, $available, $add);
+        } elseif (trim($node['instruction']) === '') {
             $add($k, 'instruction', self::LEVEL_BLOCK, t('Dites ce que l’action doit faire.'));
         }
         if ($node['write'] === self::WRITE_AUTO && empty($ctx['auto'])) {
             $add($k, 'write', self::LEVEL_BLOCK, t('« Agir sans validation » n’est pas autorisé par l’administrateur.'));
         }
-        if (isset($ctx['tool_llms'])) {
+        // Lire Slack : les messages sont lus AVANT le tour, le modèle ne fait
+        // que rédiger la pièce — pas besoin qu'il pilote les connecteurs.
+        if (isset($ctx['tool_llms']) && !$reading) {
             $llm = self::effectiveLlm($node, $ctx);
             if ($llm !== '' && empty($ctx['tool_llms'][$llm])) {
                 $add($k, 'llm', self::LEVEL_BLOCK, t('Le modèle de cette action ne sait pas utiliser les connecteurs : choisissez-en un autre.'));
             }
+        }
+    }
+
+    /**
+     * Une brique Slack : où publier (ou lire), quoi, ce qui est joint ; et ce
+     * que la connexion de la personne permet (`$ctx['slack']`,
+     * UserSlackService::capabilities) — une autorisation qui manque se règle
+     * en reconnectant Slack, d'où un avertissement plutôt qu'un blocage.
+     */
+    private static function slackIssues(array $node, array $ctx, array &$names, array $available, callable $add): void
+    {
+        $k = $node['key'];
+        $s = $node['slack'];
+        $caps = is_array($ctx['slack'] ?? null) ? $ctx['slack'] : null;
+        $post = $s['mode'] === self::SLACK_POST;
+        $target = $s['where'];
+
+        $ref = trim((string)match ($target) {
+            self::SLACK_PERSON => $s['person'],
+            self::SLACK_SEARCH => $s['query'],
+            default            => $s['channel'],
+        });
+        if ($ref === '') {
+            $add($k, 'slack', self::LEVEL_BLOCK, match ($target) {
+                self::SLACK_PERSON => $post ? t('Indiquez à qui écrire.') : t('Indiquez la personne dont lire les messages.'),
+                self::SLACK_SEARCH => t('Indiquez ce qu’il faut chercher dans Slack.'),
+                default            => $post ? t('Indiquez le canal où publier.') : t('Indiquez le canal à lire.'),
+            });
+        } elseif ($target === self::SLACK_CHANNEL && self::mentions($ref) === [] && !UserSlackService::isPlausibleChannelRef($ref)) {
+            $add($k, 'slack', self::LEVEL_BLOCK, t('« {canal} » n’est pas un nom de canal Slack (il ne contient jamais d’espace) : écrivez-le comme dans Slack, par exemple #general.', ['canal' => $ref]));
+        }
+        foreach (self::mentions($ref) as $m) {
+            if (!isset($available[$m])) {
+                $add($k, 'slack', self::LEVEL_BLOCK, t('La destination cite une pièce qui n’existe pas encore à ce point.'));
+            }
+        }
+
+        if ($post) {
+            if (trim($node['instruction']) === '' && $s['attach'] === []) {
+                $add($k, 'instruction', self::LEVEL_BLOCK, t('Écrivez ce que dit le message, ou joignez une pièce.'));
+            }
+            foreach ($s['attach'] as $a) {
+                if (!isset($available[$a])) {
+                    $add($k, 'attach', self::LEVEL_BLOCK, t('Une pièce jointe n’existe pas encore à ce point du workflow.'));
+                }
+            }
+        } else {
+            $o = $node['output'];
+            if ($o['name'] === '') {
+                $add($k, 'output', self::LEVEL_BLOCK, t('Nommez la pièce que la brique remet.'));
+            } elseif (isset($names[mb_strtolower($o['name'])])) {
+                $add($k, 'output', self::LEVEL_BLOCK, t('Deux pièces s’appellent « {nom} » : renommez-en une.', ['nom' => $o['name']]));
+            } else {
+                $names[mb_strtolower($o['name'])] = true;
+            }
+            if ($o['form'] === 'fiche' && ($o['fields'] ?? []) === []) {
+                $add($k, 'output', self::LEVEL_BLOCK, t('Une Fiche demande au moins un champ.'));
+            }
+        }
+
+        if ($caps === null) {
+            return;
+        }
+        $reconnect = t('Reconnectez Slack dans Réglages → Comptes connectés pour accorder cette autorisation.');
+        if ($post) {
+            if (empty($caps['post'])) {
+                $add($k, 'slack', self::LEVEL_WARN, t('Votre connexion Slack ne permet pas de publier.') . ' ' . $reconnect);
+            } elseif ($target === self::SLACK_PERSON && empty($caps['direct'])) {
+                $add($k, 'slack', self::LEVEL_WARN, t('Votre connexion Slack ne permet pas encore d’écrire à une personne.') . ' ' . $reconnect);
+            }
+            if ($s['attach'] !== [] && empty($caps['files'])) {
+                $add($k, 'attach', self::LEVEL_WARN, t('Votre connexion Slack ne permet pas encore de joindre des fichiers.') . ' ' . $reconnect);
+            }
+        } elseif ($target === self::SLACK_SEARCH ? empty($caps['search']) : empty($caps['read'])) {
+            $add($k, 'slack', self::LEVEL_WARN, t('Votre connexion Slack ne permet pas cette lecture.') . ' ' . $reconnect);
+        }
+        if ($target === self::SLACK_PERSON && empty($caps['email'])
+            && (filter_var($ref, FILTER_VALIDATE_EMAIL) || self::citesEmailField($ref, $available))) {
+            $add($k, 'slack', self::LEVEL_WARN, t('Retrouver une personne par son adresse demande une autorisation que votre connexion Slack n’a pas encore : désignez-la par son nom, ou reconnectez Slack.'));
         }
     }
 
@@ -2216,20 +2740,7 @@ final class WorkflowSpec
     private static function createIssues(array $def, array $node, array $ctx, array &$names, callable $add): void
     {
         $k = $node['key'];
-        $tool = null;
-        if ($node['tool_id'] === null) {
-            $add($k, 'tool', self::LEVEL_BLOCK, t('Choisissez l’outil qui fait la création.'));
-        } elseif (isset($ctx['creations'])) {
-            $tool = $ctx['creations'][$node['tool_id']] ?? null;
-            if ($tool === null) {
-                $add($k, 'tool', self::LEVEL_BLOCK, t('Cet outil ne vous est plus ouvert : choisissez-en un autre.'));
-            } elseif ($tool['kind'] !== $node['kind']) {
-                $add($k, 'tool', self::LEVEL_BLOCK, t('Cet outil ne fait pas ce que la brique crée : choisissez-en un autre.'));
-                $tool = null;
-            } elseif ($tool['reason'] !== null) {
-                $add($k, 'tool', self::LEVEL_BLOCK, (string)$tool['reason']);
-            }
-        }
+        self::creationToolIssues($def, $node, (string)$node['kind'], $node['tool_id'], $ctx, $add, 'tool');
         if (trim($node['instruction']) === '') {
             $add($k, 'instruction', self::LEVEL_BLOCK, t('Décrivez ce qu’il faut créer.'));
         }
@@ -2241,11 +2752,42 @@ final class WorkflowSpec
         } else {
             $names[mb_strtolower($o['name'])] = true;
         }
-        if ($node['kind'] === 'image' && $tool !== null && empty($tool['can_edit'])) {
+    }
+
+    /**
+     * L'outil d'une création — brique Création, ou étape qui remet une image,
+     * une page, une carte : ouvert à la personne, en service, de la bonne
+     * nature (`$ctx['creations']`, WorkflowCreations::toolsFor) ; une image
+     * lue par un outil qui ne sait pas partir d'une image n'est pas montrée
+     * au modèle.
+     */
+    private static function creationToolIssues(array $def, array $node, string $kind, ?int $toolId, array $ctx, callable $add, string $target): void
+    {
+        $k = $node['key'];
+        $tool = null;
+        $step = $node['type'] === self::TYPE_STEP;
+        if ($toolId === null) {
+            $add($k, $target, self::LEVEL_BLOCK, $step
+                ? t('Choisissez l’outil qui crée la pièce de l’étape.')
+                : t('Choisissez l’outil qui fait la création.'));
+        } elseif (isset($ctx['creations'])) {
+            $tool = $ctx['creations'][$toolId] ?? null;
+            if ($tool === null) {
+                $add($k, $target, self::LEVEL_BLOCK, t('Cet outil ne vous est plus ouvert : choisissez-en un autre.'));
+            } elseif ($tool['kind'] !== $kind) {
+                $add($k, $target, self::LEVEL_BLOCK, $step
+                    ? t('Cet outil ne fait pas la forme choisie : choisissez-en un autre.')
+                    : t('Cet outil ne fait pas ce que la brique crée : choisissez-en un autre.'));
+                $tool = null;
+            } elseif ($tool['reason'] !== null) {
+                $add($k, $target, self::LEVEL_BLOCK, (string)$tool['reason']);
+            }
+        }
+        if ($kind === 'image' && $tool !== null && empty($tool['can_edit'])) {
             $pieces = self::pieces($def);
             foreach (self::readsOf($def, $node) as $r) {
                 if (($pieces[$r]['form'] ?? '') === 'image') {
-                    $add($k, 'tool', self::LEVEL_WARN, t('Cet outil ne sait pas partir d’une image : « {nom} » ne lui sera pas montrée, seule sa description.', ['nom' => $pieces[$r]['name']]));
+                    $add($k, $target, self::LEVEL_WARN, t('Cet outil ne sait pas partir d’une image : « {nom} » ne lui sera pas montrée, seule sa description.', ['nom' => $pieces[$r]['name']]));
                 }
             }
         }
@@ -2329,6 +2871,14 @@ final class WorkflowSpec
         } else {
             self::ruleIssues($k, 'rule', $node['rule'], $available, $add);
         }
+        // Les deux voies arrêtent le workflow (même constat qu'une décision) :
+        // le livrable n'est jamais atteint — une voie qui a fait son travail
+        // devrait reprendre le rail.
+        $lanes = array_filter([$node['yes'] ?? null, $node['no'] ?? null], 'is_array');
+        if (count($lanes) === 2 && self::laneStops($node['yes']) && self::laneStops($node['no'])
+            && ($def['end']['pieces'] ?? []) !== []) {
+            $add($k, 'lanes', self::LEVEL_WARN, t('Les deux voies arrêtent le workflow : le livrable ne sera jamais atteint.'));
+        }
     }
 
     private static function ruleIssues(string $k, string $target, array $rule, array $available, callable $add): void
@@ -2348,6 +2898,9 @@ final class WorkflowSpec
             } elseif (!in_array($it['op'], ['empty', 'notempty', 'yes', 'no'], true) && $it['value'] === '') {
                 $add($k, $target, self::LEVEL_BLOCK, t('Indiquez la valeur à comparer.'));
             }
+        }
+        foreach (WorkflowValues::ruleConflicts($rule, $available, $target) as $c) {
+            $add($k, $target, $c['level'] === 'block' ? self::LEVEL_BLOCK : self::LEVEL_WARN, $c['text']);
         }
     }
 
@@ -2379,6 +2932,44 @@ final class WorkflowSpec
     }
 
     /** Le workflow peut-il être publié ? */
+    /**
+     * Ce qui doit être réglé AVANT de lancer la version publiée, vérifié au
+     * lancement avec les connexions et les outils DU MOMENT. Pure.
+     *
+     * Le défaut payé (retour du 2026-11-04) : un workflow publié quand tout
+     * était relié, lancé plus tard, n'a découvert qu'à la toute fin que Gmail
+     * n'était plus connecté — l'email de remise n'est pas parti, après des
+     * minutes de travail et des crédits dépensés. « À régler » ne se calculait
+     * qu'à la publication. Désormais, au lancement : tout point BLOQUANT
+     * (connexion perdue, outil retiré, modèle supprimé, base inaccessible…)
+     * et toute source d'étape qui n'est plus reliée (l'étape ne pourrait pas
+     * la consulter). Chaque point porte le titre de sa brique et, s'il se règle
+     * en reliant un compte, la clé du connecteur (`connect`).
+     *
+     * @return list<array{node: string, target: string, level: string, text: string, brick: string, connect?: string}>
+     */
+    public static function preflight(array $def, array $ctx): array
+    {
+        $titles = [self::START_KEY => (string)($def['start']['title'] ?? '') ?: t('Départ'), self::END_KEY => (string)($def['end']['title'] ?? '') ?: t('Livrable')];
+        foreach (self::flatNodes($def) as $n) {
+            $titles[$n['key']] = (string)$n['title'];
+        }
+        $out = [];
+        $seen = [];
+        foreach (self::issues($def, $ctx) as $i) {
+            if ($i['level'] !== self::LEVEL_BLOCK && (string)($i['connect'] ?? '') === '') {
+                continue;
+            }
+            $sig = $i['node'] . '|' . $i['text'];
+            if (isset($seen[$sig])) {
+                continue;
+            }
+            $seen[$sig] = true;
+            $out[] = $i + ['brick' => $titles[$i['node']] ?? ''];
+        }
+        return $out;
+    }
+
     public static function publishable(array $issues): bool
     {
         foreach ($issues as $i) {
@@ -2393,8 +2984,12 @@ final class WorkflowSpec
     // Outils
     // ==================================================================
 
-    /** Clé lisible : minuscules sans accents, chiffres et « _ », 24 caractères. */
-    public static function slug(string $text): string
+    /**
+     * Clé lisible : minuscules sans accents, chiffres et « _ », 24 caractères
+     * (`$max` = 0 : sans limite — forme comparable d'un nom, cf.
+     * WorkflowDraft : deux noms longs qui commencent pareil restent distincts).
+     */
+    public static function slug(string $text, int $max = self::KEY_MAX): string
     {
         $text = mb_strtolower(trim($text));
         $text = strtr($text, [
@@ -2407,7 +3002,7 @@ final class WorkflowSpec
         if ($text !== '' && ctype_digit($text[0])) {
             $text = 'p_' . $text;
         }
-        return substr($text, 0, self::KEY_MAX);
+        return $max > 0 ? substr($text, 0, $max) : $text;
     }
 
     private static function uniqueKey(string $wanted, string $fallback, array &$used): string

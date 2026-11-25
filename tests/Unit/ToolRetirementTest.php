@@ -172,7 +172,7 @@ final class ToolRetirementTest extends TestCase
         ToolCatalog::setToday('2026-09-10');
 
         $vert = Diagnostics::controleOutilsArretes([
-            ['name' => 'Affiches', 'type' => 'image', 'provider' => 'openai', 'model' => 'gpt-image-2', 'is_active' => 1],
+            ['name' => 'Affiches', 'type' => 'image', 'provider' => 'openai', 'model' => 'gpt-image-2.6-flare', 'is_active' => 1],
             // Inactif : proposé à personne, il ne compte pas.
             ['name' => 'Ancien', 'type' => 'image', 'provider' => 'openai', 'model' => 'dall-e-3', 'is_active' => 0],
         ]);

@@ -8,6 +8,7 @@
 <body class="admin-page">
 <?php $page = 'agent'; require ROOT . '/templates/partials/admin-nav.php'; ?>
 <div class="admin-content">
+    <?php require ROOT . '/templates/partials/admin-topbar.php'; ?>
     <?php $ongletsGroupe = AdminTabs::DIAGNOSTIC; require ROOT . '/templates/partials/admin-tabs.php'; ?>
     <?php
         // Formats d'affichage dans la langue de la page : en français, virgule
@@ -40,14 +41,14 @@
         $cardsTotal = $cards !== [] ? $cards[count($cards) - 1] : null;
     ?>
 
-    <div class="lg-header">
-        <div>
+    <div class="lg-header page-head">
+        <div class="page-head-text">
             <h1 style="margin-bottom:4px"><?= te('Agent') ?></h1>
-            <p style="color:var(--text-muted);font-size:13px;margin:0;max-width:760px">
+            <p class="page-head-sub">
                 <?= te("Ce que fait MIA quand elle se sert de ses outils et connecteurs : allers-retours avec le modèle, appels d'outils, erreurs, cartes d'approbation. Seules les réponses passées par les outils sont mesurées — des nombres et des noms d'outils, jamais un contenu.") ?>
             </p>
         </div>
-        <div class="lg-header-actions agent-periods" role="group" aria-label="<?= te('Période') ?>">
+        <div class="lg-header-actions agent-periods page-head-actions" role="group" aria-label="<?= te('Période') ?>">
             <?php foreach (AgentTelemetry::PERIODS as $p): ?>
                 <a href="/admin/agent?jours=<?= $p ?>" class="lg-range<?= $p === $days ? ' is-active' : '' ?>"<?= $p === $days ? ' aria-current="true"' : '' ?>><?= htmlspecialchars(I18n::plural((int)$p, '{n} jour', '{n} jours')) ?></a>
             <?php endforeach; ?>
@@ -89,7 +90,7 @@
         <div class="card" style="margin-bottom:16px">
             <h3 style="margin-bottom:10px;font-size:15px"><?= te('Par outil') ?></h3>
             <div class="table-wrap">
-                <table class="agent-table">
+                <table class="agent-table table-stack">
                     <thead><tr><th><?= te('Outil') ?></th><th><?= te('Appels') ?></th><th><?= te('Erreurs') ?></th><th><?= te('Durée moyenne') ?></th><th><?= te('Durée maximale') ?></th></tr></thead>
                     <tbody>
                     <?php foreach ($tools as $t): ?>
@@ -115,7 +116,7 @@
         <div class="card" style="margin-bottom:16px">
             <h3 style="margin-bottom:10px;font-size:15px"><?= te("Cartes d'approbation") ?></h3>
             <div class="table-wrap">
-                <table class="agent-table">
+                <table class="agent-table table-stack">
                     <thead><tr><th><?= te('Action') ?></th><th><?= te('Proposées') ?></th><th><?= te('Approuvées') ?></th><th><?= te('Refusées') ?></th><th><?= te("Échec à l'exécution") ?></th><th><?= te('Sans décision') ?></th><th><?= te('Délai de décision') ?></th><th><?= te("Taux d'approbation") ?></th></tr></thead>
                     <tbody>
                     <?php foreach ($cards as $c): $isTotal = $c['tool'] === ''; ?>
@@ -143,7 +144,7 @@
         <div class="card" style="margin-bottom:16px">
             <h3 style="margin-bottom:10px;font-size:15px"><?= te('Par modèle') ?></h3>
             <div class="table-wrap">
-                <table class="agent-table">
+                <table class="agent-table table-stack">
                     <thead><tr><th><?= te('Modèle') ?></th><th><?= te('Réponses') ?></th><th><?= te('Allers-retours') ?></th><th><?= te("Appels d'outils") ?></th><th><?= te('Erreurs') ?></th><th><?= te('Budget épuisé') ?></th><th><?= te('Cache relu') ?></th><th><?= te('Durée moyenne') ?></th></tr></thead>
                     <tbody>
                     <?php foreach ($models as $m): ?>

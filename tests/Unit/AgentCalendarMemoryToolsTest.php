@@ -246,7 +246,7 @@ final class AgentCalendarMemoryToolsTest extends TestCase
             $this->assertStringContainsString("FreeSlots::zone(\$this->turn->timeZone)", $src, 'Date du jour dans le fuseau de l\'utilisateur.');
         }
         $chat = (string)file_get_contents(ROOT . '/src/Controllers/ChatController.php');
-        $this->assertMatchesRegularExpression('/\$queueConnectorWrite,\s*(?:\/\/[^\n]*\n\s*)*\$timeZone,\s*\$searchScope\s*\);/', $chat,
+        $this->assertMatchesRegularExpression('/\$queueConnectorWrite,\s*(?:\/\/[^\n]*\n\s*)*\$timeZone,\s*\$searchScope\s*(?:\);|,)/', $chat,
             'Le fuseau du navigateur rejoint le contexte du tour.');
     }
 
@@ -333,8 +333,8 @@ final class AgentCalendarMemoryToolsTest extends TestCase
         $chat = (string)file_get_contents(ROOT . '/src/Controllers/ChatController.php');
         $this->assertStringContainsString('$pastReference    = $supportsTools && ConversationSearch::looksLikePastReference($content);', $chat);
         $this->assertStringContainsString('if ($supportsTools && ($pastReference || $loopRunsAnyway || $fileReread)) {', $chat);
-        $this->assertStringContainsString('new ConversationTools($turn, true, $loopRunsAnyway && !$unattended, $fileReread)', $chat,
-            '`memoriser` seulement quand la boucle tourne déjà ; relecture des fichiers seulement quand la fenêtre les a retirés.');
+        $this->assertStringContainsString('new ConversationTools($turn, true, $loopRunsAnyway && !$unattended && UserMemory::isEnabled(), $fileReread)', $chat,
+            '`memoriser` seulement quand la boucle tourne déjà et que la mémoire est proposée ; relecture des fichiers seulement quand la fenêtre les a retirés.');
     }
 
     private function turn(): AgentTurn

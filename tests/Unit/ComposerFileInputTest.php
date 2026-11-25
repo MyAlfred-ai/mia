@@ -69,8 +69,10 @@ final class ComposerFileInputTest extends TestCase
         $this->assertSame('image/jpeg,.jpg,.jpeg', FileExtractor::acceptAttribute(['image/jpeg', ' IMAGE/JPEG ']));
         $this->assertSame('', FileExtractor::acceptAttribute([]));
         // Images en tête quel que soit l'ordre d'entrée, ordre relatif conservé.
+        // Accepter le texte, c'est accepter scripts, données et code (lus comme du texte).
         $this->assertSame(
-            'image/png,image/gif,application/pdf,text/plain,.png,.gif,.pdf,.txt',
+            'image/png,image/gif,application/pdf,text/plain,.png,.gif,.pdf,.txt,'
+                . implode(',', FileExtractor::textExtensions()),
             FileExtractor::acceptAttribute(['application/pdf', 'image/png', 'text/plain', 'image/gif'])
         );
     }

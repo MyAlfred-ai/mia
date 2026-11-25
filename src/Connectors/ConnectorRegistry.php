@@ -218,16 +218,23 @@ final class ConnectorRegistry
                 'label'        => 'Google Agenda',
                 'chat_label'   => 'Agenda Google',
                 'summary'      => "Chaque utilisateur connecte son propre agenda : l'assistant consulte "
-                                . "ses évènements et en crée après approbation. Aucune invitation n'est "
-                                . "envoyée, aucun évènement modifié ni supprimé.",
-                'capabilities' => ['Lecture', 'Création approuvée'],
+                                . "ses évènements, en crée et en modifie après approbation — invités, "
+                                . "récurrence, visibilité, disponibilité. Aucun évènement n'est supprimé ni annulé.",
+                'capabilities' => ['Lecture', 'Écriture approuvée', 'Invités'],
                 'icon'         => '<img src="/assets/img/google-calendar.svg" width="21" height="21" alt="">',
                 'needs_oauth'  => true,
                 'oauth'        => GoogleCalendarOAuth::class,
                 'service'      => UserCalendarService::class,
                 'needs_link'   => true,
                 'token'        => UserDriveToken::PROVIDER_CALENDAR,
-                'note'         => '',
+                // Le scope calendar.events couvre, côté API, la suppression :
+                // garde-fous applicatifs, comme pour Outlook et Google Tasks.
+                'note'         => "Le consentement Google porte sur calendar.events : c'est le seul droit qui "
+                                . "permette de créer ou de modifier un évènement, et il couvre aussi — côté API — "
+                                . "la suppression. MIA n'expose aucun outil de suppression ni d'annulation. Par "
+                                . "défaut, Google Agenda envoie l'invitation (puis les mises à jour) par email aux "
+                                . "invités : chaque création ou modification passe par une carte d'approbation "
+                                . "qui nomme les invités et dit s'ils seront prévenus.",
                 'warn'         => self::WARN_GOOGLE,
                 'settings_url' => null,
                 'settings_label' => '',
@@ -303,9 +310,9 @@ final class ConnectorRegistry
                 'label'        => 'Calendrier Outlook',
                 'chat_label'   => 'Agenda Outlook',
                 'summary'      => "Chaque utilisateur connecte son propre calendrier Outlook : l'assistant "
-                                . "consulte ses évènements et en crée après approbation. Aucune invitation "
-                                . "n'est envoyée, aucun évènement modifié ni supprimé.",
-                'capabilities' => ['Lecture', 'Création approuvée'],
+                                . "consulte ses évènements, en crée et en modifie après approbation — invités, "
+                                . "réunion Teams, récurrence. Aucun évènement n'est supprimé ni annulé.",
+                'capabilities' => ['Lecture', 'Écriture approuvée', 'Invités'],
                 'icon'         => '<img src="/assets/img/outlook-calendar.svg" width="21" height="21" alt="">',
                 'needs_oauth'  => true,
                 'oauth'        => MicrosoftCalendarOAuth::class,
@@ -313,17 +320,16 @@ final class ConnectorRegistry
                 'needs_link'   => true,
                 'token'        => UserDriveToken::PROVIDER_MSCALENDAR,
                 // Même situation qu'Outlook et que Google Tasks : le seul droit
-                // permettant de CRÉER couvre aussi, côté API, la modification et
-                // la suppression. Et une différence propre à Microsoft, qui doit
-                // être dite : il n'existe aucun équivalent du `sendUpdates=none`
-                // de Google, donc MIA ne peut pas créer un évènement AVEC
-                // participants sans les inviter — il n'en ajoute donc jamais.
+                // permettant de CRÉER couvre aussi, côté API, la suppression.
+                // Et une différence propre à Microsoft, qui doit être dite : il
+                // n'existe aucun équivalent du `sendUpdates=none` de Google —
+                // inviter quelqu'un lui envoie l'invitation, sans réglage.
                 'note'         => "Le consentement Microsoft porte sur Calendars.ReadWrite : c'est le seul droit "
-                                . "qui permette de créer un évènement, et il couvre aussi — côté API — la "
-                                . "modification et la suppression. MIA n'expose aucun outil de ce genre : "
-                                . "consultation et création approuvée, rien d'autre. Aucune invitation n'est "
-                                . "possible non plus : Microsoft les envoie dès la création, donc les évènements "
-                                . "sont créés SANS participant (l'utilisateur les ajoute lui-même dans Outlook).",
+                                . "qui permette de créer ou de modifier un évènement, et il couvre aussi — côté "
+                                . "API — la suppression. MIA n'expose aucun outil de suppression ni d'annulation. "
+                                . "Dès qu'un évènement a des invités, Outlook leur écrit par email (invitation, "
+                                . "puis mise à jour à chaque changement), sans réglage possible : chaque création "
+                                . "ou modification passe par une carte d'approbation qui nomme les invités.",
                 'warn'         => self::WARN_MICROSOFT,
                 'settings_url' => '/admin/sso',
                 'settings_label' => 'Configurer l\'application Azure',
@@ -593,9 +599,14 @@ final class ConnectorRegistry
      * La consigne borne volontairement l'usage : sans le « seulement si »,
      * l'assistant proposerait d'activer Gmail à chaque question de cuisine.
      *
+     * Conversation vocale (`$voice`) : personne n'ouvre un menu à la voix. Le
+     * geste indiqué devient une phrase à DIRE — « active » suivi du nom —,
+     * que le navigateur reconnaît (voice-commands.js, connectorCommand ; le
+     * test VoiceConnectorsTest vérifie que chaque libellé cité ici s'y dit).
+     *
      * @param list<string> $chatLabels
      */
-    public static function dormantConnectorsNote(array $chatLabels): string
+    public static function dormantConnectorsNote(array $chatLabels, bool $voice = false): string
     {
         $chatLabels = array_values(array_filter(array_map('trim', $chatLabels), static fn(string $l): bool => $l !== ''));
         if ($chatLabels === []) {
@@ -611,7 +622,63 @@ final class ConnectorRegistry
             "Note : l'utilisateur a connecté {liste}, mais cet interrupteur est ÉTEINT pour ce message — tu n'as donc pas accès à ces données maintenant, et tu ne dois rien en inventer.",
             "Note : l'utilisateur a connecté {liste}, mais ces interrupteurs sont ÉTEINTS pour ce message — tu n'as donc accès à AUCUNE de ces données maintenant, et tu ne dois rien en inventer.",
             ['liste' => $liste]
-        ) . ' ' . t("Si, et SEULEMENT si, sa demande en avait besoin : dis-lui que tu ne peux pas y accéder tant que l'interrupteur est éteint, puis indique le geste exact — ouvrir le menu « + » sous le champ de saisie, déplier « Connecteurs », activer {premier} (ou celui qui convient) et renvoyer sa demande. Propose au passage ce que tu PEUX faire sans cet accès (répondre de mémoire, travailler sur un fichier qu'il joint au message). Si sa demande n'a rien à voir, ne mentionne pas cette note.", ['premier' => I18n::listeCitee([$chatLabels[0]])]);
+        ) . ' ' . ($voice
+            ? t("Si, et SEULEMENT si, sa demande en avait besoin : dis-lui en une phrase que tu n'y as pas accès pour l'instant, et qu'il lui suffit de dire « active » suivi du nom du service — par exemple {premier} — puis de reposer sa question. Ne lui parle d'aucun menu ni d'aucun bouton : il te parle à voix haute. Si sa demande n'a rien à voir, ne mentionne pas cette note.", ['premier' => I18n::listeCitee([$chatLabels[0]])])
+            : t("Si, et SEULEMENT si, sa demande en avait besoin : dis-lui que tu ne peux pas y accéder tant que l'interrupteur est éteint, puis indique le geste exact — ouvrir le menu « + » sous le champ de saisie, déplier « Connecteurs », activer {premier} (ou celui qui convient) et renvoyer sa demande. Propose au passage ce que tu PEUX faire sans cet accès (répondre de mémoire, travailler sur un fichier qu'il joint au message). Si sa demande n'a rien à voir, ne mentionne pas cette note.", ['premier' => I18n::listeCitee([$chatLabels[0]])]));
+    }
+
+    /** Où tourne le tour : il dit où se règle l'accès à un connecteur éteint. */
+    public const WHERE_WORKFLOW = 'workflow';
+    public const WHERE_TASK     = 'task';
+
+    /**
+     * Connecteurs PRÊTS mais non ouverts à une étape de workflow ou à une
+     * tâche programmée : leur NOM de produit (celui des tuiles « Peut
+     * consulter » de l'éditeur et « Avec quoi » d'une tâche), pas la ligne du
+     * menu « + », qui n'existe pas là.
+     *
+     * @param array<string,bool> $asked sources ouvertes au tour
+     * @return list<string>
+     */
+    public static function dormantSourceLabels(int $userId, array $asked): array
+    {
+        $out = [];
+        foreach (self::chatFeatureState($userId) as $key => $st) {
+            if (!empty($asked[$key]) || empty($st['connected'])) {
+                continue;
+            }
+            $label = self::label($key);
+            if ($label !== '') {
+                $out[] = t($label);
+            }
+        }
+        return $out;
+    }
+
+    /**
+     * Pendant de dormantConnectorsNote() pour un tour SANS personne devant
+     * l'écran : une étape de workflow ou une tâche programmée. Le geste
+     * indiqué est celui de l'éditeur (cocher la source dans « Peut
+     * consulter », publier) ou de la fiche de la tâche (« Avec quoi ») —
+     * jamais le menu « + » du chat, qui n'y existe pas : constaté chez
+     * un client (2026-11-24), l'étape renvoyait la personne vers un menu
+     * absent. PURE (testable sans base). Vide si la liste est vide.
+     *
+     * @param list<string> $labels noms de produit (dormantSourceLabels)
+     */
+    public static function dormantSourcesNote(array $labels, string $where): string
+    {
+        $labels = array_values(array_filter(array_map('trim', $labels), static fn(string $l): bool => $l !== ''));
+        if ($labels === []) {
+            return '';
+        }
+        $vars = ['liste' => I18n::listeCitee($labels), 'premier' => I18n::listeCitee([$labels[0]])];
+        if ($where === self::WHERE_TASK) {
+            return "\n\n" . t("Note : {liste} est relié au compte de la personne, mais cette tâche programmée ne le consulte pas — tu n'as donc pas accès à ces données ici, et tu ne dois rien en inventer. Si, et SEULEMENT si, la consigne en avait besoin : dis-le dans ton compte rendu et indique le geste exact — ouvrir la tâche dans Espaces → Tâches programmées, section « {section} », cocher {premier}, puis enregistrer. Il n'y a ni menu « + » ni interrupteur ici : n'en parle pas. Si la consigne n'a rien à voir, ne mentionne pas cette note.",
+                $vars + ['section' => t('Avec quoi')]);
+        }
+        return "\n\n" . t("Note : {liste} est relié au compte de la personne, mais cette étape de workflow ne le consulte pas — tu n'as donc pas accès à ces données ici, et tu ne dois rien en inventer. Si, et SEULEMENT si, la consigne en avait besoin : dis-le dans ta réponse et indique le geste exact — dans l'éditeur du workflow, ouvrir cette étape, section « {section} », cocher {premier}, publier, puis relancer. Il n'y a ni menu « + » ni interrupteur ici : n'en parle pas. Les pièces jointes de l'email qui lance le workflow n'en ont pas besoin : elles sont jointes à l'étape. Si la consigne n'a rien à voir, ne mentionne pas cette note.",
+            $vars + ['section' => t('Peut consulter')]);
     }
 
     /**
@@ -906,6 +973,64 @@ final class ConnectorRegistry
     }
 
     /**
+     * Connecteurs du chat RELIÉS (ou reliés à nouveau) depuis le dernier
+     * affichage du chat, à allumer dans le menu « + » : relier un service,
+     * c'est vouloir s'en servir — l'interrupteur s'allume donc de lui-même, et
+     * la personne peut l'éteindre ensuite comme n'importe quel autre.
+     *
+     * Le serveur ne fait que DIRE quels connecteurs viennent d'être reliés ;
+     * c'est le navigateur qui allume (chat.js, préférence `connectorPrefs`),
+     * avec les garde-fous de toute restauration : ligne indisponible ignorée,
+     * modèle sans outils → allumage différé au retour d'un modèle compatible.
+     *
+     * Lu UNE fois (UserDriveToken::takeChatEnablePending efface le drapeau),
+     * réservé à qui peut se servir des connecteurs, limité aux connecteurs
+     * encore proposés — une ligne absente du menu n'a rien à allumer.
+     * Best-effort : ce confort ne fait jamais tomber une page.
+     *
+     * @return list<string> clés de connecteur
+     */
+    public static function takeJustConnected(array $user): array
+    {
+        if (!self::usableBy($user)) {
+            return [];
+        }
+        try {
+            $providers = UserDriveToken::takeChatEnablePending((int)($user['id'] ?? 0));
+        } catch (\Throwable $e) {
+            error_log('[connecteurs] allumage après connexion non lu : ' . $e->getMessage());
+            return [];
+        }
+        return $providers === [] ? [] : self::justConnectedKeys($providers, [self::class, 'isProposed']);
+    }
+
+    /**
+     * Forme PURE de takeJustConnected : providers reliés → clés des
+     * connecteurs du CHAT à allumer (jamais OneDrive, qui n'a pas de ligne
+     * dans le menu « + »), dans l'ordre du catalogue, sans doublon.
+     *
+     * @param list<string>          $providers  providers de `user_drive_tokens` à allumer
+     * @param callable(string):bool $isProposed le connecteur est-il encore proposé ?
+     * @return list<string>
+     */
+    public static function justConnectedKeys(array $providers, callable $isProposed): array
+    {
+        $linked = array_flip(array_map('strval', $providers));
+        $out    = [];
+        foreach (self::chatCatalog() as $c) {
+            $token = $c['token'] ?? null;
+            if (empty($c['needs_link']) || !is_string($token) || !isset($linked[$token])) {
+                continue;
+            }
+            $key = (string)$c['key'];
+            if ($isProposed($key) && !in_array($key, $out, true)) {
+                $out[] = $key;
+            }
+        }
+        return $out;
+    }
+
+    /**
      * Forme PURE de reconnectNeeded : providers révoqués → clés à reconnecter.
      * Testable sans base, le prédicat de visibilité étant injecté.
      *
@@ -937,6 +1062,35 @@ final class ConnectorRegistry
             $out[] = $key;
         }
         return $out;
+    }
+
+    /**
+     * La pastille d'une connexion à reconnecter, son texte en info-bulle
+     * (nav-signals.js) : avatar, menu « Mon compte », menu « + ». Vide sans
+     * connexion à rétablir.
+     */
+    public static function reconnectDot(array $keys, string $text = ''): string
+    {
+        if ($keys === []) {
+            return '';
+        }
+        $text = $text !== '' ? $text : self::reconnectSummary($keys);
+        return '<span class="reconnect-dot" data-tip="' . htmlspecialchars($text, ENT_QUOTES) . '" data-tip-tone="warn" aria-hidden="true"></span>';
+    }
+
+    /**
+     * Sur SA carte de Réglages → Comptes connectés : la pastille d'une
+     * connexion à reconnecter (la pastille du menu mène jusqu'ici). Vide si
+     * celle-ci n'est pas à reconnecter.
+     *
+     * @param list<string> $keys connecteurs à reconnecter (reconnectNeeded)
+     */
+    public static function reconnectDotFor(string $key, array $keys): string
+    {
+        if (!in_array($key, $keys, true)) {
+            return '';
+        }
+        return self::reconnectDot([$key], t('Connexion expirée ou révoquée : reconnectez-la, ou retirez-la.'));
     }
 
     /**

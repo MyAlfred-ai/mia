@@ -23,7 +23,7 @@ s'ouvre par le bouton **☰**, en haut à gauche.
 |---|---|
 | **Tableau de bord** | [La gestion des crédits](credits/index.md) — et l'état général de l'instance |
 | **Personnes** → Comptes, Groupes, Rôles | [Les utilisateurs et les accès](utilisateurs/index.md) |
-| **Modèles IA** → Clés API, Modèles (avec le comportement par défaut), Tests | [Les modèles de LLM](modeles/index.md) |
+| **Modèles IA** → Fournisseurs et modèles (clés, modèles, qui répond par défaut), Tests | [Les modèles de LLM](modeles/index.md) |
 | **Capacités** → Outils | [Les outils](outils/index.md) — dictée et conversation vocales comprises |
 | **Capacités** → Connecteurs | [Les connecteurs](connecteurs/index.md) |
 | **Capacités** → Sources synchronisées | [Les bases de connaissances](bases-de-connaissances/index.md) |
@@ -37,13 +37,31 @@ leurs tuiles **Assistants** et **Bases**, dans la rangée **Espaces** de la barr
 administrateur voit ceux de toute l'organisation — voir [Les assistants](assistants/index.md) et
 [Les bases de connaissances](bases-de-connaissances/index.md).
 
+## Se repérer sur une page
+
+Toutes les pages de l'administration et de **Réglages** suivent le même plan. En haut, une barre dit
+où vous êtes (par exemple **Administration › Personnes › Comptes** : chaque étape est un lien) et,
+sur les pages qui s'enregistrent toutes seules, la pastille **Enregistrement automatique**, qui passe
+à **Enregistrement…** puis **Enregistré** à chaque modification — ou à **Non enregistré** si
+l'enregistrement échoue. Le bouton **Rechercher** (⌘K ou Ctrl+K) ouvre la recherche pour aller
+directement à une page. Dessous, le titre de la page, une phrase qui dit à quoi elle sert et, à droite,
+ses boutons. Un réglage secondaire peut tenir en une ligne qui résume son état (par exemple
+**Règles d'accès** sur la page Comptes) : cliquez **Modifier** pour le déplier.
+
+Sur téléphone, le bouton principal de la page (**Nouvel utilisateur**, **Nouveau groupe**, **Ajouter
+un outil**) reste en bas de l'écran, et les listes s'affichent en cartes.
+
 ## Les pastilles du menu
 
 Le menu signale de lui-même ce qui reste à configurer, ou ce qui ne marche plus : une **pastille**
 apparaît sur l'entrée où l'on corrige, et sur la rubrique qui la contient — dépliez-la pour trouver
-l'entrée marquée. Passez la souris sur l'entrée : une **bulle** au-dessus de la pastille dit le
-problème et la marche à suivre. Sur téléphone, l'explication s'affiche sous l'entrée, et le bouton
+l'entrée marquée. Passez la souris sur l'entrée : une **info-bulle** au-dessus de la pastille dit le
+problème et la marche à suivre. Sur téléphone, touchez la pastille pour lire sa bulle ; le bouton
 **☰** porte lui aussi une pastille.
+
+Sur la page, la pastille va **jusqu'à l'élément concerné** : la carte de l'outil, la ligne du modèle
+ou du compte, la carte du groupe, du connecteur ou de la base, la section Google ou Microsoft porte la
+sienne, et sa bulle dit ce qui ne va pas pour lui seul.
 
 Une pastille **ambre** signale quelque chose d'invisible pour les utilisateurs, de remplacé en
 silence ou qui n'est plus tenu à jour ; une pastille **rouge**, quelque chose qui échoue chez eux.
@@ -52,7 +70,7 @@ Aucune ne s'ignore : chacune s'éteint dès que la cause est corrigée.
 | Entrée | Exemples de ce qui est signalé |
 |---|---|
 | **Personnes** → Comptes, Groupes | Comptes en attente d'activation ; groupe dont aucun modèle autorisé n'est activé |
-| **Modèles IA** → Clés API, Modèles | Aucune clé ; clé sans modèle activé ; modèle activé sans clé ; modèle par défaut ou de secours qui ne marche plus |
+| **Modèles IA** → Fournisseurs et modèles | Aucune clé ; clé sans modèle activé ; modèle activé sans clé ; modèle par défaut ou de secours qui ne marche plus |
 | **Capacités** → Outils | Outil inutilisable, hors service ou en échec au dernier test ; outil qu'aucun groupe n'autorise ; voix sans clé OpenAI |
 | **Capacités** → Connecteurs | Connecteur activé dont les identifiants manquent |
 | **Capacités** → Sources synchronisées | Source sans identifiants |
@@ -63,7 +81,7 @@ Aucune ne s'ignore : chacune s'éteint dès que la cause est corrigée.
 | Tuile **Bases** de la barre latérale | Synchronisation en échec ; cerveau MyBrain refusé ; aucune clé de vectorisation |
 
 Le **Tableau de bord** liste les mêmes points dans sa carte **Alertes**, chacun avec un lien
-**Régler →**. Le bouton **Admin**, en bas de la barre latérale, porte une pastille avec leur nombre,
+**Régler →** qui ouvre la page sur l'élément concerné. Le bouton **Admin**, en bas de la barre latérale, porte une pastille avec leur nombre,
 jusque dans le chat.
 
 ## Mettre une instance en service

@@ -149,10 +149,10 @@ if (str_starts_with($path, "/v1/images/")) {
         return $req;
     }
 
-    private function generate(string $provider, string $model, ?array $images): array
+    private function generate(string $provider, string $model, ?array $images, array $config = []): array
     {
         $result = ImageGenerator::generate(
-            ['provider' => $provider, 'model' => $model, 'config_json' => '{}', 'api_key_enc' => Encryption::encrypt('sk-test')],
+            ['provider' => $provider, 'model' => $model, 'config_json' => (string)json_encode((object)$config), 'api_key_enc' => Encryption::encrypt('sk-test')],
             'reprends le logo de la deuxième image',
             $images
         );
@@ -243,5 +243,53 @@ if (str_starts_with($path, "/v1/images/")) {
         $body = self::request($path)['body'];
         $this->assertStringNotContainsString('input_image', $body);
         $this->assertStringNotContainsString('inlineData', $body);
+    }
+
+    // ------------------------------------------------------------------
+    // Options de l'image (ImageOptions) : fond, format du fichier, orientation
+    // ------------------------------------------------------------------
+
+    public function testFondTransparentEtFormatPartentAGptImageEtNommentLeFichier(): void
+    {
+        $r = $this->generate('openai', 'gpt-image-2.5-flare', null, ['background' => 'transparent', 'output_format' => 'jpeg', 'format' => 'portrait']);
+        $payload = json_decode(self::request('/v1/images/generations')['body'], true);
+        $this->assertSame('transparent', $payload['background']);
+        $this->assertSame('png', $payload['output_format'], 'Fond transparent : JPEG ne le garde pas, PNG s’enclenche.');
+        $this->assertSame('1024x1536', $payload['size'], 'Portrait : la taille de cette orientation.');
+        $this->assertStringEndsWith('.png', $r['image_url']);
+        $this->assertArrayNotHasKey('format', $payload, 'L’orientation est une affaire de MIA, jamais envoyée telle quelle.');
+
+        $r = $this->generate('openai', 'gpt-image-2', null, ['output_format' => 'webp', 'size' => '2048x1152', 'format' => 'landscape']);
+        $payload = json_decode(self::request('/v1/images/generations')['body'], true);
+        $this->assertSame('webp', $payload['output_format']);
+        $this->assertSame('2048x1152', $payload['size'], 'Une taille déjà en paysage est gardée.');
+        $this->assertArrayNotHasKey('background', $payload, 'Fond non coché : celui du modèle.');
+        $this->assertStringEndsWith('.webp', $r['image_url']);
+    }
+
+    public function testLaRetoucheEtLeModeleNatifRecoiventAussiLesOptions(): void
+    {
+        $this->generate('openai', 'gpt-image-2.5-sunburst', self::images(1)[0], ['background' => 'transparent']);
+        $edit = self::request('/v1/images/edits')['body'];
+        $this->assertStringContainsString("name=\"background\"\r\n\r\ntransparent", $edit);
+        $this->assertStringContainsString("name=\"output_format\"\r\n\r\npng", $edit);
+
+        $r = $this->generate('openai', 'gpt-5.4', null, ['output_format' => 'jpeg', 'format' => 'square']);
+        $tool = json_decode(self::request('/v1/responses')['body'], true)['tools'][0];
+        $this->assertSame(['type' => 'image_generation', 'size' => '1024x1024', 'output_format' => 'jpeg'], $tool);
+        $this->assertStringEndsWith('.jpg', $r['image_url']);
+    }
+
+    public function testNanoBananaRecoitLOrientationEtIgnoreFondEtFormat(): void
+    {
+        $this->generate('gemini', 'gemini-3.1-flash-image', null, ['format' => 'landscape', 'background' => 'transparent', 'output_format' => 'webp']);
+        $payload = json_decode(self::request('/gemini/gemini-3.1-flash-image:generateContent')['body'], true);
+        $this->assertSame(['aspectRatio' => '16:9'], $payload['generationConfig']['imageConfig']);
+        $this->assertStringNotContainsString('transparent', json_encode($payload));
+        $this->assertStringNotContainsString('webp', json_encode($payload));
+
+        $this->generate('gemini', 'gemini-3.1-flash-image', null);
+        $payload = json_decode(self::request('/gemini/gemini-3.1-flash-image:generateContent')['body'], true);
+        $this->assertArrayNotHasKey('imageConfig', $payload['generationConfig'], 'Sans orientation : la requête de toujours.');
     }
 }

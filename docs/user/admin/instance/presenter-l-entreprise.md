@@ -90,8 +90,9 @@ l'entreprise en pied de page avec le numéro de slide.
   (polices, couleurs, arrière-plans, éléments du masque) et ce que MIA ajoute (le texte, les formes
   dessinées, le pied de page et le numéro de slide).
 - **Où le modèle sert** : aux présentations PowerPoint livrées dans la conversation — leur carte
-  l'annonce, « au modèle de … » —, et à celles qu'un modèle réalise lui-même (**Version soignée** sur
-  la carte). Dans ce second cas, le modèle part **en entier** chez le fournisseur du modèle (Anthropic
+  l'annonce, « au modèle de … », et sa case **Embarquer : Modèle PowerPoint de …** permet à
+  l'utilisateur de s'en passer —, et à celles qu'un modèle réalise lui-même (**Version soignée** sur
+  la carte). Dans ce second cas, le modèle part **en premier** et **en entier** chez le fournisseur du modèle (Anthropic
   ou OpenAI), **slides d'exemple comprises**, avec le logo de l'entreprise : c'est sa **référence** du
   style maison — l'utilisateur voit cette ligne avant de lancer, et peut la décocher. Le fichier rendu
   reprend les mises en page du modèle, sans aucune de ses slides d'exemple ; les fichiers envoyés
@@ -125,6 +126,19 @@ mise en page, ses en-têtes et ses pieds de page.
   page. Un modèle qui a le sien le garde.
 - **Télécharger un document d'essai** fabrique un document avec trois niveaux de titres, des listes, un
   tableau, un lien et une citation : ouvrez-le dans Word pour vérifier le rendu.
+- **Version soignée** : quand un utilisateur fait réaliser un document Word par un modèle (bouton
+  **Version soignée** de sa carte, ou choix fait avant l'écriture), ce modèle Word part **tel quel**
+  chez le fournisseur du modèle (Anthropic ou OpenAI), **en premier**, puis les fichiers joints et la
+  demande : le document est construit dans le modèle, avec ses styles, en-têtes et pieds de page, sans
+  son contenu d'exemple. Les fichiers envoyés sont effacés chez le fournisseur une fois le document
+  reçu. Pour un PDF, seuls le logo et la mention de pied de page partent.
+- **Comment MIA se sert de votre modèle** : sous chaque modèle déposé, la page décrit les deux
+  chemins — la **version rapide**, remplie par MIA tout de suite et sans crédit, et la **version
+  soignée**, construite dans le modèle par un modèle IA — et le choix laissé aux utilisateurs.
+- **Le choix des utilisateurs** : sur la carte de chaque fichier, et sous la question « Version rapide
+  / Version soignée » posée avant l'écriture, une ligne **Embarquer :** propose de garder ou non le
+  modèle et le logo (cases cochées d'office, choix retenu par appareil). Décochés, le fichier suit la
+  mise en page de MIA.
 - **Retirer** remet la mise en page de MIA (A4, logo en en-tête, mention en pied).
 
 Les fichiers des modèles ne sont pas accessibles depuis le web. Ils font partie de la

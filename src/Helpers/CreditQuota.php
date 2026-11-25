@@ -28,13 +28,22 @@ class CreditQuota
     public const REASON_QUOTA  = 'quota';
     public const REASON_BUDGET = 'budget';
 
-    /** Instantané de consommation du mois pour un utilisateur. */
+    /**
+     * Instantané de consommation pour un utilisateur : le mois en cours contre
+     * son quota mensuel — ou, pour un compte de démo, tout ce qui a été
+     * consommé depuis le début de la démo contre son enveloppe (DemoAccount),
+     * qui remplace alors le quota mensuel.
+     */
     public static function status(array $user): array
     {
         $snapshot = UsageLog::creditsBreakdownThisMonth((int)$user['id']);
+        $budget = AiBudget::status();
+        $demoCredits = DemoAccount::allowance($user);
+        if ($demoCredits !== null) {
+            return self::compose(DemoAccount::usedCredits($user), null, $snapshot, (bool)$budget['blocks'], (string)$budget['resets_on'], $demoCredits);
+        }
         $used = (int)$snapshot['quota_credits'];
         $quotaK = User::effectiveCreditQuotaK($user);
-        $budget = AiBudget::status();
 
         return self::compose($used, $quotaK, $snapshot, (bool)$budget['blocks'], (string)$budget['resets_on']);
     }
@@ -42,10 +51,15 @@ class CreditQuota
     /**
      * Assemblage pur du statut (testé sans base). Liste de clés FERMÉE : tout
      * ajout part chez chaque utilisateur, d'où l'interdiction des montants €.
+     *
+     * `$demoCredits` : enveloppe d'un compte de démo, en crédits. Elle tient
+     * lieu de quota (`quota_max`) et la raison d'un blocage reste `quota` —
+     * c'est le plafond PERSONNEL : tâches programmées, workflows et jobs le
+     * traitent déjà comme tel. `demo` dit seulement quel message montrer.
      */
-    public static function compose(int $used, ?int $quotaK, array $snapshot, bool $budgetBlocks, string $resetsOn): array
+    public static function compose(int $used, ?int $quotaK, array $snapshot, bool $budgetBlocks, string $resetsOn, ?int $demoCredits = null): array
     {
-        $quotaMax = $quotaK !== null ? $quotaK * 1_000 : null;
+        $quotaMax = $demoCredits !== null ? max(0, $demoCredits) : ($quotaK !== null ? $quotaK * 1_000 : null);
         $remaining = $quotaMax !== null ? max(0, $quotaMax - $used) : null;
         if ($quotaMax === null) {
             $percent = 0;
@@ -68,6 +82,7 @@ class CreditQuota
             'reason' => $quotaExceeded ? self::REASON_QUOTA : ($budgetBlocks ? self::REASON_BUDGET : null),
             'budget_blocked' => $budgetBlocks,
             'resets_on' => $resetsOn,
+            'demo' => $demoCredits !== null,
         ];
     }
 
@@ -114,6 +129,15 @@ class CreditQuota
                 'message' => $inJob
                     ? t('Le budget IA mensuel de votre organisation est atteint : la génération n\'a pas été lancée. Reprise le {date}.', ['date' => $date])
                     : t('Le budget IA mensuel de votre organisation est atteint : le service reprend le {date}.', ['date' => $date]),
+            ];
+        }
+        if (!empty($status['demo'])) {
+            return [
+                'kind'    => self::REASON_QUOTA,
+                'title'   => DemoAccount::endedTitle(),
+                'message' => $inJob
+                    ? t('Les crédits de votre démonstration sont épuisés : la génération n\'a pas été lancée.')
+                    : DemoAccount::endedMessageForInstance(),
             ];
         }
         return [

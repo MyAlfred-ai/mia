@@ -27,7 +27,11 @@ de saisie. Avec un assistant, c'est lui qui impose son modèle : le sélecteur d
 
 **Le choix suit la conversation.** Le modèle est enregistré avec la conversation et revient quand
 vous la rouvrez. Vous pouvez en changer en cours de route : tout l'historique part alors vers le
-nouveau modèle. Une nouvelle conversation démarre sur le modèle par défaut de l'instance.
+nouveau modèle.
+
+**Votre modèle par défaut.** Une nouvelle conversation démarre sur votre modèle par défaut : celui
+de votre organisation, ou celui que vous avez choisi d'un geste — l'étoile au bout de sa ligne, dans
+le sélecteur. Il vaut pour les conversations sans assistant, sur tous vos appareils.
 
 **Ce que chaque modèle sait faire.** Le bandeau au-dessus des messages l'indique, une fois déplié
 (il est replié par défaut : la flèche à sa droite l'ouvre) :
@@ -54,10 +58,10 @@ basculer sur un modèle de secours désigné par l'administrateur. Un message vo
 raison ; le secours garde vos connecteurs s'il sait s'en servir, et la réponse est facturée à son
 tarif. Le message suivant retente votre modèle.
 
-**Internet et connecteurs avec Mistral.** Les modèles Mistral ne savent pas chercher sur Internet
-pendant qu'ils utilisent un connecteur ou un outil d'assistant. Quand vous en avez allumé un, il
-passe avant : la recherche Internet est mise de côté pour cette réponse, et MIA vous le dit. Les
-autres éditeurs font les deux à la fois.
+**Internet et connecteurs avec Mistral et DeepSeek.** Les modèles Mistral et DeepSeek ne savent pas
+chercher sur Internet pendant qu'ils utilisent un connecteur ou un outil d'assistant. Quand vous en
+avez allumé un, il passe avant : la recherche Internet est mise de côté pour cette réponse, et MIA
+vous le dit. Les autres éditeurs font les deux à la fois.
 
 **Quand un modèle échoue.** Une panne n'est jamais muette : un encadré remplace la réponse, et son
 titre nomme la cause — éditeur surchargé, crédit épuisé chez l'éditeur, conversation devenue trop
@@ -81,13 +85,18 @@ modèle travaille, la réponse n'est pas considérée comme bloquée.
 | Vous voulez… | Page |
 |---|---|
 | Changer de modèle, comparer deux réponses, comprendre un message d'erreur | [Choisir un modèle](choisir-un-modele.md) |
+| Toujours démarrer avec le même modèle | [Choisir son modèle par défaut](choisir-son-modele-par-defaut.md) |
 
 ## Ce que vous pouvez régler
 
-Le modèle de chaque conversation standard. Tout le reste — les modèles proposés, celui par défaut,
-celui de secours, ceux de votre groupe — dépend de votre administrateur.
+Le modèle de chaque conversation standard, et votre modèle par défaut. Tout le reste — les modèles
+proposés, celui de votre organisation, celui de secours, ceux de votre groupe — dépend de votre
+administrateur.
 
 ## Exemples
+
+**Toujours le même modèle.** Vous préférez un modèle à celui de votre organisation : ouvrez le
+sélecteur et touchez l'étoile au bout de sa ligne. Vos prochaines conversations s'ouvrent avec lui.
 
 **Un mail à reformuler.** Un modèle marqué **€** ou **€€** : la réponse est quasi instantanée et ne
 coûte presque rien.

@@ -49,6 +49,7 @@ final class WorkflowContentView
         'cc'               => 'Cc',
         'objet'            => 'Objet',
         'canal'            => 'Canal',
+        'personne'         => 'Message direct à',
         'conversation_nom' => 'Conversation',
         'titre'            => 'Titre',
         'sujet'            => 'Sujet',
@@ -58,7 +59,12 @@ final class WorkflowContentView
         'debut'            => 'Début',
         'fin'              => 'Fin',
         'lieu'             => 'Lieu',
+        'salle'            => 'Salle',
         'invites'          => 'Invités',
+        'invites_optionnels' => 'Invités facultatifs',
+        'ajouter_invites'  => 'Invités ajoutés',
+        'ajouter_invites_optionnels' => 'Invités facultatifs ajoutés',
+        'retirer_invites'  => 'Invités retirés',
         'echeance'         => 'Échéance',
         'rappel'           => 'Rappel',
         'plage'            => 'Plage',
@@ -82,7 +88,9 @@ final class WorkflowContentView
         'creer_brouillon_gmail'          => 'Gmail',
         'creer_brouillon_outlook'        => 'Outlook',
         'creer_evenement_agenda'         => 'Google Agenda',
+        'modifier_evenement_agenda'      => 'Google Agenda',
         'creer_evenement_agenda_outlook' => 'Outlook',
+        'modifier_evenement_agenda_outlook' => 'Outlook',
         'envoyer_message_slack'          => 'Slack',
         'envoyer_message_teams'          => 'Teams',
     ];
@@ -116,6 +124,10 @@ final class WorkflowContentView
             $value = self::scalarText($args[$key] ?? null);
             if ($value === '') {
                 continue;
+            }
+            // Une personne Slack résolue (« <@U…|Nom> ») se lit par son nom.
+            if ($key === 'personne') {
+                $value = UserSlackService::personDisplay($value);
             }
             $rows[] = [t($label), $key === 'url' ? self::link($value, $value) : self::esc($value)];
         }
@@ -206,7 +218,9 @@ final class WorkflowContentView
 
             case 'document':
                 $source = (string)($content['source'] ?? '');
-                return ($content['language'] ?? '') === 'text' ? self::pre($source) : self::markdown($source);
+                // Un fichier brut (script, données…) se lit tel quel, jamais en Markdown.
+                return ($content['language'] ?? '') === 'text' || ArtifactContract::isRawFile((string)($content['format'] ?? ''))
+                    ? self::pre($source) : self::markdown($source);
 
             case 'list':
                 $items = array_map('strval', (array)($content['items'] ?? []));

@@ -478,4 +478,77 @@ final class UserOutlookServiceTest extends TestCase
         $this->assertStringContainsString("'repondre_a'   => ['type' => 'string', 'description' => \"ID du message Outlook", $chat);
         $this->assertStringContainsString("(string)(\$action['args']['repondre_a'] ?? '')", $chat);
     }
+
+    // ===================== Audit du 2026-11-13 (doc Graph relue) =====================
+
+    /**
+     * `createReply` rend la citation en TEXTE quand le message d'origine est en
+     * texte brut (exemple de la doc) : collée telle quelle dans un corps HTML,
+     * ses sauts de ligne disparaissaient et ses chevrons devenaient des balises.
+     */
+    public function testUneCitationEnTexteBrutEstPasseeEnHtml(): void
+    {
+        $html = UserOutlookService::quotedHtml(['contentType' => 'text', 'content' => "Bonjour,\nprix < 100 € & TVA\n"]);
+        $this->assertStringContainsString('prix &lt; 100 € &amp; TVA', $html);
+        $this->assertStringContainsString('<br>', $html);
+
+        $deja = '<html><body><p>Bonjour</p></body></html>';
+        $this->assertSame($deja, UserOutlookService::quotedHtml(['contentType' => 'html', 'content' => $deja]));
+        $this->assertSame($deja, UserOutlookService::quotedHtml(['content' => $deja]), 'Sans type annoncé : HTML, comme avant.');
+        $this->assertSame('', UserOutlookService::quotedHtml([]));
+
+        $service = self::lire('src/Outlook/UserOutlookService.php');
+        $this->assertStringContainsString('self::quotedHtml(', $service);
+    }
+
+    /** Doc createReply : « you should send the reply to the recipients in replyTo ». */
+    public function testUneReponseSuitLeReplyToDuMessageDOrigine(): void
+    {
+        $this->assertSame(
+            [
+                ['emailAddress' => ['address' => 'support@ex.fr', 'name' => 'Support']],
+                ['emailAddress' => ['address' => 'bob@ex.fr']],
+            ],
+            UserOutlookService::replyToFrom(['replyTo' => [
+                ['emailAddress' => ['address' => 'support@ex.fr', 'name' => 'Support']],
+                ['emailAddress' => ['address' => 'SUPPORT@ex.fr']],
+                ['emailAddress' => ['address' => 'pas une adresse']],
+                ['emailAddress' => ['address' => 'bob@ex.fr', 'name' => '']],
+            ]])
+        );
+        $this->assertSame([], UserOutlookService::replyToFrom(['replyTo' => []]));
+        $this->assertSame([], UserOutlookService::replyToFrom([]));
+
+        // Seulement quand l'utilisateur n'a nommé personne, et en lecture seule.
+        $service = self::lire('src/Outlook/UserOutlookService.php');
+        $this->assertStringContainsString("'?\$select=replyTo'", $service);
+        $this->assertStringContainsString('$replyTo = $this->replyToRecipients($original);', $service);
+    }
+
+    /** Un échec après `createReply`, ou un envoi sans réponse, se DIT. */
+    public function testLesEchecsAMiCheminSontNommes(): void
+    {
+        $service = self::lire('src/Outlook/UserOutlookService.php');
+        // Le brouillon de réponse existe déjà quand le PATCH échoue.
+        $this->assertStringContainsString("\$e->getMessage() . ' ' . self::MSG_REPLY_DRAFT_INCOMPLETE", $service);
+        // Aucune réponse de Graph à l'envoi : il a pu partir — jamais « rien n'est parti ».
+        $this->assertStringContainsString('if ($this->lastHttpStatus === 0) {', $service);
+        $this->assertStringContainsString('peut-être parti', UserOutlookService::MSG_SEND_UNCERTAIN);
+        $this->assertStringNotContainsString('rien n\'est parti', UserOutlookService::MSG_SEND_UNCERTAIN);
+    }
+
+    /** Outlook n'ajoute pas de signature : « Améliorer » ne retire plus la formule de fin. */
+    public function testLaReecritureNePrometPasUneSignatureQuOutlookNAjoutePas(): void
+    {
+        $outlook = MailDraftReview::improvementPrompt('outlook', ['corps' => 'Bonjour'], 'plus court')['system'];
+        $this->assertStringNotContainsString('signature de la boîte est ajoutée automatiquement', $outlook);
+        $this->assertStringContainsString('Outlook n\'ajoute pas de signature', $outlook);
+        $gmail = MailDraftReview::improvementPrompt('gmail', ['corps' => 'Bonjour'], 'plus court')['system'];
+        $this->assertStringContainsString('signature de la boîte est ajoutée automatiquement', $gmail);
+
+        // La recherche ne promet que ce que la doc $search des messages décrit.
+        $outils = self::lire('src/Agent/Tools/OutlookTools.php');
+        $this->assertStringNotContainsString('isRead:false', $outils);
+        $this->assertStringNotContainsString('expression exacte\\"', $outils);
+    }
 }

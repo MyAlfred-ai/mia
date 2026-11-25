@@ -24,7 +24,8 @@ declare(strict_types=1);
  *     (chat, image, page web) s'exécutent un par un, dans l'ordre — chacun lit
  *     le précédent ; la maintenance aussi, une seule à la fois — il reste donc
  *     toujours des workers pour les conversations, et une réindexation ne
- *     tourne jamais sous les pieds d'une ingestion de la même base.
+ *     tourne jamais sous les pieds d'une ingestion de la même base ;
+ *     l'apprentissage de la mémoire a son couloir à part (`memory`).
  * La règle de couloir (LANE_FREE_SQL) est la même pour les trois chemins.
  */
 class JobQueue
@@ -64,6 +65,12 @@ class JobQueue
 
     /** Couloir de la maintenance : une seule à la fois, quel que soit le nombre de workers. */
     public const LANE_MAINTENANCE = 'maintenance';
+    /**
+     * Couloir de l'apprentissage de la mémoire (MemoryLearner) : un job de
+     * maintenance à part, pour que l'ingestion d'un document n'attende jamais
+     * la relecture des conversations — et inversement.
+     */
+    public const LANE_MEMORY = 'memory';
     /**
      * Types qui écrivent un tour de conversation que le tour suivant relit
      * (historique, dernière image, dernière page) : sérialisés par conversation.
@@ -113,17 +120,22 @@ class JobQueue
         ?int $conversationId,
         array $payload,
         string $label = '',
-        ?string $dedupKey = null
+        ?string $dedupKey = null,
+        bool $pendingOnly = false
     ): int {
         $db = Database::getInstance();
 
         // Tâche identique déjà en file ou en cours : on ne l'y remet pas.
         // Sans ça, dix requêtes concurrentes enfileraient dix synchronisations
         // de la même base (le verrou MySQL les sérialiserait ensuite pour rien).
+        // `$pendingOnly` : seule une tâche ENCORE EN ATTENTE la remplace — une
+        // vérification en cours peut avoir lu la boîte juste avant l'email
+        // qui la réveille : il en faut une après elle (couloir : l'une après
+        // l'autre).
         if ($dedupKey !== null) {
             $sel = $db->prepare(
                 "SELECT id FROM async_jobs
-                 WHERE dedup_key = ? AND status IN ('pending','running') LIMIT 1"
+                 WHERE dedup_key = ? AND status IN (" . ($pendingOnly ? "'pending'" : "'pending','running'") . ") LIMIT 1"
             );
             $sel->execute([$dedupKey]);
             $existing = $sel->fetchColumn();
@@ -150,7 +162,7 @@ class JobQueue
             $conversationId,
             $type,
             self::priorityFor($type, $payload),
-            self::laneFor($type, $conversationId),
+            self::laneFor($type, $conversationId, $payload),
             $dedupKey,
             mb_substr($label, 0, 120),
             json_encode($payload, JSON_UNESCAPED_UNICODE),
@@ -181,10 +193,15 @@ class JobQueue
     }
 
     /** Couloir sériel d'un job, null = aucun (pure). Cf. LANE_FREE_SQL. */
-    public static function laneFor(string $type, ?int $conversationId): ?string
+    public static function laneFor(string $type, ?int $conversationId, array $payload = []): ?string
     {
+        // Vérification d'une boîte ou d'un dossier surveillé : une à la fois
+        // par workflow (la ligne de base et la liste des messages vus).
+        if ($type === 'workflow' && ($payload['op'] ?? '') === 'watch' && (int)($payload['workflow_id'] ?? 0) > 0) {
+            return 'wfwatch:' . (int)$payload['workflow_id'];
+        }
         if ($type === 'maintenance') {
-            return self::LANE_MAINTENANCE;
+            return ($payload['op'] ?? '') === 'memory_learn' ? self::LANE_MEMORY : self::LANE_MAINTENANCE;
         }
         if ($conversationId !== null && $conversationId > 0
             && in_array($type, self::CONVERSATION_LANE_TYPES, true)) {
@@ -279,6 +296,18 @@ class JobQueue
     }
 
     // ------------------------------------------------------------- Réclamation
+
+    /**
+     * Un job attend-il ? Lecture SANS verrou, faite par chaque worker plusieurs
+     * fois par seconde : la réclamation, elle, ouvre une transaction et pose
+     * des verrous qui gêneraient une insertion concurrente.
+     */
+    public static function hasPending(): bool
+    {
+        $stmt = Database::getInstance()->query("SELECT 1 FROM async_jobs WHERE status = 'pending' LIMIT 1");
+
+        return $stmt !== false && $stmt->fetchColumn() !== false;
+    }
 
     /** Réclame le plus ancien job en attente. Atomique entre workers concurrents. */
     public static function claimNext(): ?array
@@ -556,6 +585,7 @@ class JobQueue
             'gamma'        => new GammaGenerationJob(),
             'native_deck'  => new NativeDeckJob(),
             'mybrain_feed' => new MyBrainFeedJob(),
+            'table_mission' => new TableMissionJob(),
             'maintenance'  => new MaintenanceJob(),
             'credits_refresh' => new CreditsRefreshJob(),
             'workflow'     => new WorkflowJob(),
@@ -611,13 +641,19 @@ class JobQueue
         ];
     }
 
-    /** Jobs encore vivants d'un utilisateur — restauration à l'ouverture d'une page. */
+    /**
+     * Jobs encore vivants d'un utilisateur — restauration à l'ouverture d'une
+     * page, tiroir des générations. Sans ceux dont l'arrêt est demandé : à
+     * l'écran ils sont déjà finis (le Stop a figé la réponse), le worker ne
+     * fait que les clore. Les rattacher ferait rouvrir une réponse « en cours »
+     * qu'on vient d'arrêter.
+     */
     public static function activeForUser(int $userId): array
     {
         $stmt = Database::getInstance()->prepare(
             "SELECT id, conversation_id, type, label, status, phase, progress, last_seq, created_at
              FROM async_jobs
-             WHERE user_id = ? AND status IN ('pending','running')
+             WHERE user_id = ? AND status IN ('pending','running') AND cancel_requested = 0
              ORDER BY id"
         );
         $stmt->execute([$userId]);
@@ -666,14 +702,85 @@ class JobQueue
 
     // ------------------------------------------------------------- Annulation
 
-    public static function requestCancel(int $jobId, int $userId): bool
+    /**
+     * Demande d'arrêt (bouton Stop, tiroir des générations, « stop » dit en
+     * conversation vocale).
+     *
+     * Job encore EN FILE : jamais commencé, il est clos tout de suite — rien
+     * ne sera généré ni facturé, et le couloir de la conversation se libère
+     * pour le message suivant. La condition sur le statut rend l'écriture
+     * atomique face à un worker qui le réclamerait au même instant
+     * (claimById / claimNext ne prennent qu'un job `pending`).
+     *
+     * Job EN COURS : le worker voit la demande à son prochain tick
+     * (JobContext). `$seenSeq` = dernier évènement du flux que l'écran avait
+     * appliqué au clic : la réponse enregistrée s'arrête là
+     * (cf. textSeenUpTo, ChatController::runSend). Null = sans repère, la
+     * réponse garde tout ce qui a été produit.
+     */
+    public static function requestCancel(int $jobId, int $userId, ?int $seenSeq = null): bool
     {
-        $stmt = Database::getInstance()->prepare(
-            "UPDATE async_jobs SET cancel_requested = 1
-             WHERE id = ? AND user_id = ? AND status IN ('pending','running')"
+        $db = Database::getInstance();
+        $seenSeq = $seenSeq !== null ? max(0, $seenSeq) : null;
+
+        $pending = $db->prepare(
+            "UPDATE async_jobs
+             SET status = 'cancelled', cancel_requested = 1, cancel_seq = ?, finished_at = NOW()
+             WHERE id = ? AND user_id = ? AND status = 'pending'"
         );
-        $stmt->execute([$jobId, $userId]);
+        $pending->execute([$seenSeq, $jobId, $userId]);
+        if ($pending->rowCount() === 1) {
+            // Clôture ordinaire : une tâche programmée ou un workflow
+            // apprennent la fin comme pour un job arrêté en cours.
+            self::finish($jobId, 'cancelled', null, null);
+            return true;
+        }
+
+        $stmt = $db->prepare(
+            "UPDATE async_jobs SET cancel_requested = 1, cancel_seq = COALESCE(cancel_seq, ?)
+             WHERE id = ? AND user_id = ? AND status = 'running'"
+        );
+        $stmt->execute([$seenSeq, $jobId, $userId]);
         return $stmt->rowCount() === 1;
+    }
+
+    /**
+     * Texte de réponse que l'écran montrait quand l'arrêt a été demandé :
+     * les fragments du flux jusqu'à l'évènement `$seq` compris. Null = rien à
+     * couper (cf. seenTextFromEvents).
+     */
+    public static function textSeenUpTo(int $jobId, int $seq): ?string
+    {
+        $stmt = Database::getInstance()->prepare('SELECT seq, payload FROM job_events WHERE job_id = ? ORDER BY seq');
+        $stmt->execute([$jobId]);
+        return self::seenTextFromEvents($stmt->fetchAll() ?: [], $seq);
+    }
+
+    /**
+     * Forme pure de textSeenUpTo. Une réponse qui porte une image de l'outil
+     * image n'est jamais coupée (null) : l'image est insérée dans la réponse
+     * hors du flux de texte, le texte vu ne s'y recoupe plus, et une image
+     * payée ne doit pas disparaître — même règle des deux côtés (chat.js,
+     * applyStoppedChatEvent : l'écran rend alors tout ce qui est arrivé).
+     *
+     * @param list<array{seq:int|string, payload:string}> $rows
+     */
+    public static function seenTextFromEvents(array $rows, int $seq): ?string
+    {
+        $text = '';
+        foreach ($rows as $row) {
+            $event = json_decode((string)($row['payload'] ?? ''), true);
+            if (!is_array($event)) {
+                continue;
+            }
+            if (!empty($event['tool_image'])) {
+                return null;
+            }
+            if ((int)($row['seq'] ?? 0) <= $seq && isset($event['chunk']) && is_string($event['chunk'])) {
+                $text .= $event['chunk'];
+            }
+        }
+        return $text;
     }
 
     // ------------------------------------------------------- Entretien / crash
@@ -931,6 +1038,11 @@ class JobQueue
             WorkflowEngine::maintain();
             ScheduledTaskRun::maintain(new \DateTimeImmutable('now', new \DateTimeZone('UTC')));
             NativeDeckStore::purgeExpired();
+            // Mémoire : apprentissage (par le fork, jamais dans cette requête) et entretien.
+            MemoryLearner::tick();
+            MemoryLearner::maintain();
+            // Dates d'arrêt des modèles : le relevé part par le fork, jamais ici.
+            LlmShutdownWatch::tick();
         } catch (\Throwable $e) {
             // L'entretien ne doit jamais casser une requête utilisateur.
             error_log('[JobQueue] entretien paresseux : ' . $e->getMessage());

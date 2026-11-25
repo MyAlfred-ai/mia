@@ -2,7 +2,7 @@
 title: Changer la langue
 description: Basculer l'interface entre français et anglais.
 sidebar:
-  order: 2
+  order: 3
 ---
 
 ## Étapes

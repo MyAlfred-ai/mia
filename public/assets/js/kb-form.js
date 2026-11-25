@@ -2,23 +2,34 @@
  * Fiche d'une base de connaissances — Espaces → Bases de connaissances
  * → « + Nouvelle base » / « Modifier » (templates/admin/knowledge-bases/edit.php).
  *
- * La page porte ses valeurs, rendues par le serveur ; ce script ne fait que
- * ce qu'un rendu ne peut pas faire :
- *  - les SOURCES : la tuile choisie déplie sa configuration (dossier, accès,
+ * La page porte ses valeurs, rendues par le serveur, en trois questions (ce
+ * qu'elle contient, d'où viennent les documents, qui s'en sert) ; ce script
+ * ne fait que ce qu'un rendu ne peut pas faire :
+ *  - les SOURCES : la source choisie déplie sa configuration (dossier, accès,
  *    synchronisation, connexion d'un cerveau), « Tester », l'explorateur de
  *    dossiers déplié sous le champ, le dépôt de documents (glisser-déposer,
  *    plusieurs à la fois) et leur liste ;
- *  - l'ÉTAT de la base (panneau en tête), rafraîchi tant qu'elle travaille ;
- *  - les listes à cocher (assistants, partage) : recherche, Tout / Aucun,
- *    cases « peut modifier », « cochée par défaut », « peut nourrir » liées à
- *    leur ligne ;
- *  - le SCHÉMA de la base, à droite, redessiné à chaque geste (diagram.js +
- *    kb-diagram.js) — chaque élément mène à son réglage ;
+ *  - l'ÉTAT de la base (panneau de la question 2 et ligne de l'en-tête),
+ *    rafraîchi tant qu'elle travaille ;
+ *  - QUI LA VOIT (moi seul, moi et les administrateurs, partagée) : le choix
+ *    pose la case cachée « Uniquement pour moi » et retire les partages ;
+ *  - les PASTILLES du partage et des assistants liés, tirées des listes à
+ *    cocher (celles qui partent dans le POST), dépliées sous « Ajouter » :
+ *    recherche, Tout / Aucun, cases « peut modifier », « cochée par défaut »,
+ *    « peut nourrir » liées à leur ligne ;
+ *  - les VOLETS : chaque question se replie sur une ligne qui la résume ;
+ *    ce que la personne a ouvert ou fermé est retenu par base et par
+ *    appareil, et un problème nouveau rouvre « D'où viennent les documents » ;
+ *  - la LISTE COMPACTE des documents : cinq lignes, les plus urgentes
+ *    d'abord, « Voir les N autres », filtres par état, recherche par nom ;
+ *  - le menu « … » de l'en-tête (réglages avancés, suppression) ;
+ *  - le VOLET des extraits d'un document, ouvert d'un clic sur un document
+ *    qui en a (même chargeur que « Avancé ») ;
  *  - la section « Avancé » : l'explication du choix de réindexation et le
  *    détail des extraits vectorisés, chargé à l'ouverture.
  *
  * Textes affichés : t() / tn() (dictionnaire CLIENT, lang/en.client.php) ;
- * libellés du schéma et des sections : rendus traduits par le serveur.
+ * libellés des sections et des infobulles : rendus traduits par le serveur.
  *
  * État de départ : window.KB_FORM (AdminController::renderKnowledgeBaseForm).
  * Enregistrement : celui du formulaire (autosave.js en modification, « Créer
@@ -35,6 +46,9 @@
 
     const byId = (id) => document.getElementById(id);
     const show = (el, on) => { if (el) el.hidden = !on; };
+    // Les résumés des volets s'écrivent une fois tout en place (Démarrage) :
+    // avant, les éléments qu'ils lisent ne sont pas encore repérés.
+    let foldsReady = false;
 
     function csrf() {
         const meta = document.querySelector('meta[name="csrf-token"]');
@@ -75,6 +89,92 @@
         return SIZE_UNITS[i](value);
     }
 
+    // =====================================================================
+    // Infobulles (points « i » de la fiche)
+    // =====================================================================
+    // Le détail d'un réglage vit dans `data-tip`. UNE bulle, posée sur <body> :
+    // dans une carte, elle serait rognée, ou ferait défiler la page de côté
+    // au téléphone. Souris : au survol ; clavier et doigt : au focus (le
+    // point est focalisable, le toucher le focalise). Échap ou défilement la
+    // referment. Positions mesurées en pixels d'écran, écrites en pixels de
+    // page (÷ miaUiZoom, taille d'affichage de la personne).
+    (function tips() {
+        let bubble = null;
+        let owner  = null;
+        let timer  = null;
+        const zoom = () => (typeof window.miaUiZoom === 'function' ? (window.miaUiZoom() || 1) : 1);
+
+        function hide() {
+            clearTimeout(timer);
+            if (owner) owner.classList.remove('is-on');
+            owner = null;
+            if (bubble) bubble.hidden = true;
+        }
+        function showFor(el) {
+            const text = el.dataset.tip || '';
+            if (text === '') return;
+            if (!bubble) {
+                bubble = document.createElement('div');
+                bubble.className = 'kbf-bubble';
+                bubble.setAttribute('aria-hidden', 'true'); // le point porte déjà son aria-label
+                bubble.hidden = true;
+                document.body.appendChild(bubble);
+            }
+            if (owner && owner !== el) owner.classList.remove('is-on');
+            owner = el;
+            el.classList.add('is-on');
+            bubble.textContent = text;
+            bubble.style.left = '0px';
+            bubble.style.top = '0px';
+            bubble.hidden = false;
+            const z = zoom();
+            const r = el.getBoundingClientRect();
+            const w = bubble.offsetWidth * z;
+            const h = bubble.offsetHeight * z;
+            const margin = 12;
+            let left = r.left + r.width / 2 - w / 2;
+            left = Math.max(margin, Math.min(left, window.innerWidth - margin - w));
+            // Dessous ; au-dessus si la place manque en bas.
+            let top = r.bottom + 8;
+            if (top + h > window.innerHeight - margin && r.top - 8 - h > margin) top = r.top - 8 - h;
+            bubble.style.left = (left / z) + 'px';
+            bubble.style.top = (top / z) + 'px';
+        }
+
+        document.addEventListener('pointerover', (e) => {
+            if (e.pointerType !== 'mouse') return;
+            const el = e.target.closest('.kbf-tip');
+            if (!el) return;
+            clearTimeout(timer);
+            timer = setTimeout(() => showFor(el), owner ? 0 : 120);
+        });
+        document.addEventListener('pointerout', (e) => {
+            if (e.pointerType !== 'mouse') return;
+            const el = e.target.closest('.kbf-tip');
+            if (!el || (e.relatedTarget && el.contains(e.relatedTarget))) return;
+            if (document.activeElement === el) return;
+            hide();
+        });
+        document.addEventListener('focusin', (e) => {
+            const el = e.target.closest && e.target.closest('.kbf-tip');
+            if (el) showFor(el);
+        });
+        document.addEventListener('focusout', (e) => {
+            if (e.target.closest && e.target.closest('.kbf-tip') === owner) hide();
+        });
+        // Filet du toucher : un moteur qui ne focalise pas au toucher.
+        document.addEventListener('click', (e) => {
+            const el = e.target.closest('.kbf-tip');
+            if (el && owner !== el) showFor(el);
+            else if (!el && owner && document.activeElement !== owner) hide();
+        });
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && owner) hide();
+        });
+        window.addEventListener('scroll', () => { if (owner) hide(); }, true);
+        window.addEventListener('resize', () => { if (owner) hide(); });
+    })();
+
     const saved = Object.assign({ provider: '', url: '', auto: true, auth: 'key', owner: '', folder: '' }, C.source || {});
     let currentDocs = (C.docs || []).slice();
 
@@ -88,6 +188,7 @@
             label: 'Google Drive',
             badge: 'Drive',
             icon: '/assets/img/google-drive.svg',
+            short: t('Un dossier tenu en miroir, sous-dossiers compris.'),
             urlLabel: t('Dossier Google Drive'),
             placeholder: 'https://drive.google.com/drive/folders/…',
             browsable: true, // seulement en mode « ma connexion » (cf. canBrowse)
@@ -98,6 +199,7 @@
             label: 'OneDrive',
             badge: 'OneDrive',
             icon: '/assets/img/onedrive.svg',
+            short: t('Un dossier tenu en miroir, sous-dossiers compris.'),
             urlLabel: t('Dossier OneDrive'),
             placeholder: t('Choisissez un dossier avec « Parcourir… »'),
             browsable: true,
@@ -108,6 +210,7 @@
             label: 'SharePoint',
             badge: 'SharePoint',
             icon: '/assets/img/sharepoint.svg',
+            short: t('Un dossier tenu en miroir, sous-dossiers compris.'),
             urlLabel: t('Dossier SharePoint'),
             placeholder: t('https://votretenant.sharepoint.com/sites/…'),
             hint: t('Le dossier et ses sous-dossiers sont tenus en miroir. Collez l\'adresse du dossier (« Copier le lien » de SharePoint, ou la barre d\'adresse) : l\'accès passe par l\'application Azure de votre organisation, aucun partage public n\'est requis.'),
@@ -116,6 +219,7 @@
             label: t('Google Agenda'),
             badge: t('Agenda'),
             icon: '/assets/img/google-calendar.svg',
+            short: t('Un agenda public tenu en miroir, un document par mois.'),
             urlLabel: t('Agenda Google'),
             placeholder: t('adresse@gmail.com, xxx@group.calendar.google.com ou URL publique'),
             hint: t('L\'agenda est tenu en miroir, un document par mois (3 mois en arrière, 12 en avant). Il doit être public — Paramètres et partage de l\'agenda → « Rendre disponible publiquement ». Collez son identifiant (Paramètres → « Intégrer l\'agenda ») ou son URL publique.'),
@@ -124,7 +228,8 @@
 
     const tilesBox       = byId('kbSourcesField');
     const syncConfig     = byId('kbSyncConfig');
-    const syncHint       = byId('kbSyncHint');
+    const syncHintText   = byId('kbSyncHintText');
+    const syncHintTip    = byId('kbSyncHintTip');
     const syncUrlLabel   = byId('kbSyncUrlLabel');
     const syncUrl        = byId('kbSyncUrl');
     const syncTestBtn    = byId('kbSyncTestBtn');
@@ -231,7 +336,13 @@
         show(driveAuthRow, p === 'drive');
         if (meta) {
             const ownerMode = p === 'drive' && selectedAuth() === 'owner';
-            if (syncHint)     syncHint.textContent     = (ownerMode && meta.hintOwner) ? meta.hintOwner : meta.hint;
+            // Une ligne ; le détail, propre au fournisseur, dans l'infobulle.
+            const detail = (ownerMode && meta.hintOwner) ? meta.hintOwner : meta.hint;
+            if (syncHintText) syncHintText.textContent = meta.short;
+            if (syncHintTip) {
+                syncHintTip.dataset.tip = detail;
+                syncHintTip.setAttribute('aria-label', detail);
+            }
             if (syncUrlLabel) syncUrlLabel.textContent = meta.urlLabel;
             if (syncUrl)      syncUrl.placeholder      = meta.placeholder;
         }
@@ -264,17 +375,18 @@
         const hasSyncedDocs = currentDocs.some((d) => d.source && d.source !== 'upload');
         show(syncSwitchWarn, !C.create && saved.provider !== '' && p !== saved.provider && hasSyncedDocs);
         if (tilesBox) {
-            tilesBox.querySelectorAll('.kb-source-tile').forEach((tile) => {
+            tilesBox.querySelectorAll('.kbf-pill').forEach((tile) => {
                 const input = tile.querySelector('input[name="sync_provider"]');
                 tile.classList.toggle('is-selected', !!input && input.checked);
             });
         }
         updateBackendUI();
+        refreshFoldSummaries();
     }
 
-    // ── Base en direct (tuile « Cerveau MyBrain ») ──
+    // ── Base en direct (source « Cerveau MyBrain ») ──
     // Pas une source de documents : un cerveau interrogé à chaque message. La
-    // tuile retire de la fiche ce qui n'a plus de sens (documents, modèle
+    // source retire de la fiche ce qui n'a plus de sens (documents, modèle
     // d'embedding) et fait parler le partage de « qui interroge ».
     const myBrainConfig  = byId('kbMyBrainConfig');
     const myBrainUrl     = byId('kbMyBrainUrl');
@@ -297,6 +409,8 @@
         const live = isLive();
         show(myBrainConfig, live);
         show(docsBlock, !live);
+        // Les sources à configurer ne concernent pas un cerveau.
+        show(byId('kbOtherSources'), !live);
         // Aucun fichier ni modèle d'embedding ne part avec un cerveau.
         if (docsCreateIn) docsCreateIn.disabled = live;
         show(advanced, !live);
@@ -312,6 +426,8 @@
             if (feedWrap)   feedWrap.hidden   = !live;
             syncManageBox(row);
         });
+        // Les droits montrés sur les pastilles changent avec la nature.
+        renderShareChips();
     }
 
     if (myBrainTestBtn) {
@@ -339,9 +455,7 @@
                     if (myBrainKeyHint && data.key_hint) {
                         myBrainKeyHint.textContent = t('Clé enregistrée : {indice} — laissez vide pour la garder.', { indice: data.key_hint });
                     }
-                    if (C.diagram && C.diagram.base && C.diagram.base.remote) C.diagram.base.remote.app = data.application || '';
                     Status.refresh();
-                    Diagram.render();
                 }
             } catch (e) {
                 setMyBrainResult('✗ ' + t('Erreur réseau. Réessayez.'), 'error');
@@ -351,7 +465,7 @@
         });
     }
 
-    // Changement de tuile : adresse et synchronisation automatique suivent la
+    // Changement de source : adresse et synchronisation automatique suivent la
     // source (retour sur la source enregistrée = valeurs enregistrées ;
     // nouvelle source = champ vide, synchronisation pré-cochée).
     if (tilesBox) {
@@ -363,6 +477,9 @@
             if (p === 'drive') setAuth(p === saved.provider ? saved.auth : defaultAuth());
             clearSyncTest();
             setMyBrainResult('', '');
+            // Une autre source se règle : ses réglages s'ouvrent.
+            const syncFold = byId('kbSyncFold');
+            if (syncFold && p !== saved.provider) syncFold.open = true;
             updateFeedUI();
         });
     }
@@ -415,7 +532,6 @@
                     pickedName = String(data.name);
                     pickedFor  = provider;
                     pickedRef  = url;
-                    Diagram.render();
                 }
             } catch (e) {
                 showSyncTestResult(false, t('Erreur réseau. Réessayez.'));
@@ -615,14 +731,44 @@
     // serveur par KbStatus::documentState — la liste l'affiche tel quel, les
     // cartes s'appuient sur la même règle : elles ne peuvent pas se contredire.
     const docsList    = byId('kbDocumentsList');
+    const drawerEl    = byId('kbDocDrawer');
     const docsToolbar = byId('kbDocsToolbar');
     const docsCount   = byId('kbDocsCount');
     const docErrorEl  = byId('kbDocError');
     const docFileIn   = byId('kbDocFileInput');
     const drop        = byId('kbDrop');
     const pendingList = byId('kbPendingFiles');
-    let docsOnlyProblems = false;
-    let docsSignature    = '';
+    const headDocs    = byId('kbHeadDocs');
+    const docsFilters = byId('kbDocsFilters');
+    const docsSearch  = byId('kbDocsSearch');
+    const docsMore    = byId('kbDocsMore');
+    let docsSignature = '';
+    // Le volet des extraits (plus bas) suit la liste redessinée.
+    let onDocsRendered = null;
+
+    // Liste compacte : cinq lignes (ce qui demande l'attention d'abord), puis
+    // « Voir les N autres » ; au-delà de cinq documents, des filtres par état
+    // — seulement s'il y a deux états au moins —, et dès huit une recherche
+    // par nom. Le volet des extraits passe d'un document à l'autre dans CET
+    // ordre (docsView), lignes repliées comprises.
+    const DOCS_VISIBLE    = 5;
+    const DOCS_SEARCH_MIN = 8;
+    const docTone = (d) => (d.state && d.state.tone) || 'idle';
+    const docExcluded = (d) => !!d.excluded || (d.state && d.state.key === 'excluded');
+    const DOC_FILTERS = [
+        { key: 'all',      label: () => t('Tous') },
+        { key: 'check',    label: () => t('À vérifier'), tone: 'warn', test: (d) => docIsProblem(d) },
+        { key: 'busy',     label: () => t('En cours'),   tone: 'busy', test: (d) => !docExcluded(d) && (docTone(d) === 'busy' || docTone(d) === 'idle') },
+        { key: 'ok',       label: () => t('Indexés'),    tone: 'ok',   test: (d) => docTone(d) === 'ok' },
+        { key: 'excluded', label: () => t('Exclus'),     tone: 'idle', test: (d) => docExcluded(d) },
+    ];
+    let docsFilter   = 'all';
+    let docsQuery    = '';
+    let docsExpanded = false;
+    let docsView     = [];
+
+    // Recherche sans casse ni accents : « regle » trouve « Règlement ».
+    const plainName = (s) => String(s || '').normalize('NFD').replace(/\p{M}/gu, '').toLowerCase();
 
     function showDocError(msg) {
         if (!docErrorEl) return;
@@ -635,28 +781,111 @@
         return tone === 'error' || tone === 'warn';
     }
 
-    function renderDocsToolbar(total, problems) {
+    // Les filtres sont des LIENS : en lecture seule, le fieldset désactivé
+    // désactiverait des boutons. Rebâtis seulement quand leur liste change
+    // (le focus reste sur le filtre touché) ; sinon les nombres suivent.
+    function renderDocsToolbar(all) {
         if (!docsToolbar) return;
-        docsToolbar.innerHTML = '';
-        if (problems === 0) {
-            docsOnlyProblems = false;
-            show(docsToolbar, false);
-            return;
+        const shown = DOC_FILTERS
+            .map((f) => ({ f, n: f.test ? all.filter(f.test).length : all.length }))
+            .filter((x) => x.f.key === 'all' || x.n > 0);
+        const chips = all.length > DOCS_VISIBLE && shown.length > 2 ? shown : [];
+        if (!chips.some((x) => x.f.key === docsFilter)) docsFilter = 'all';
+        // La recherche est un champ : désactivé avec le reste en lecture seule.
+        const searchOn = !C.readOnly && !!docsSearch && all.length >= DOCS_SEARCH_MIN;
+        if (!searchOn && docsQuery !== '') { docsQuery = ''; if (docsSearch) docsSearch.value = ''; }
+        show(docsSearch, searchOn);
+        show(docsToolbar, chips.length > 0 || searchOn);
+        if (!docsFilters) return;
+        const keys = chips.map((x) => x.f.key).join(',');
+        if (docsFilters.dataset.keys !== keys) {
+            docsFilters.dataset.keys = keys;
+            docsFilters.innerHTML = '';
+            chips.forEach(({ f }) => {
+                const a = document.createElement('a');
+                a.href = '#kbDocumentsList';
+                a.className = 'kb-docs-chip';
+                a.setAttribute('role', 'button');
+                a.dataset.filter = f.key;
+                if (f.tone) a.dataset.tone = f.tone;
+                const label = document.createElement('span');
+                label.className = 'kb-docs-chip-label';
+                label.textContent = f.label();
+                const n = document.createElement('span');
+                n.className = 'kb-docs-chip-n';
+                a.append(label, n);
+                docsFilters.appendChild(a);
+            });
         }
-        show(docsToolbar, true);
-        const label = document.createElement('span');
-        label.className = 'kb-docs-toolbar-label';
-        label.textContent = tn(problems, '{n} document à vérifier sur {total}', '{n} documents à vérifier sur {total}', { total });
-        const btn = document.createElement('button');
-        btn.type = 'button';
-        btn.className = 'kb-docs-filter';
-        btn.setAttribute('aria-pressed', docsOnlyProblems ? 'true' : 'false');
-        btn.textContent = docsOnlyProblems ? t('Tout afficher') : t('Voir seulement ceux-là');
-        btn.addEventListener('click', () => {
-            docsOnlyProblems = !docsOnlyProblems;
-            renderDocuments(currentDocs);
+        show(docsFilters, chips.length > 0);
+        chips.forEach(({ f, n }) => {
+            const a = docsFilters.querySelector('[data-filter="' + f.key + '"]');
+            if (!a) return;
+            a.querySelector('.kb-docs-chip-n').textContent = String(n);
+            a.setAttribute('aria-pressed', f.key === docsFilter ? 'true' : 'false');
         });
-        docsToolbar.append(label, btn);
+    }
+
+    function setDocsFilter(key) {
+        if (key === docsFilter) return;
+        docsFilter = key;
+        docsExpanded = false;
+        renderDocuments(currentDocs);
+    }
+    docsFilters?.addEventListener('click', (e) => {
+        const a = e.target.closest('[data-filter]');
+        if (!a) return;
+        e.preventDefault();
+        setDocsFilter(a.dataset.filter);
+    });
+    // Un lien rôle bouton : Espace l'active aussi.
+    docsFilters?.addEventListener('keydown', (e) => {
+        const a = e.target.closest('[data-filter]');
+        if (!a || e.key !== ' ') return;
+        e.preventDefault();
+        setDocsFilter(a.dataset.filter);
+    });
+    docsSearch?.addEventListener('input', () => {
+        docsQuery = docsSearch.value;
+        renderDocuments(currentDocs);
+    });
+
+    // « Voir les N autres » / « Réduire la liste » : un seul lien, gardé
+    // d'un rendu à l'autre (il garde le focus).
+    let docsMoreLink = null;
+    function renderDocsMore(hidden, expandedBeyond) {
+        if (!docsMore) return;
+        const on = hidden > 0 || expandedBeyond;
+        show(docsMore, on);
+        if (!on) return;
+        if (!docsMoreLink) {
+            docsMoreLink = document.createElement('a');
+            docsMoreLink.href = '#kbDocumentsList';
+            docsMoreLink.className = 'kb-docs-more-link';
+            docsMoreLink.setAttribute('role', 'button');
+            docsMoreLink.setAttribute('aria-controls', 'kbDocumentsList');
+            const toggle = (e) => {
+                e.preventDefault();
+                const first = docsExpanded ? null : DOCS_VISIBLE;
+                docsExpanded = !docsExpanded;
+                renderDocuments(currentDocs);
+                // Déplié : le regard (et le clavier) reprend au premier document
+                // révélé ; replié : la liste revient en vue.
+                if (first !== null) {
+                    const row = docsList ? docsList.children[first] : null;
+                    row?.querySelector('a.kb-doc-open')?.focus({ preventScroll: true });
+                } else if (docsList && docsList.getBoundingClientRect().top < 0) {
+                    docsList.scrollIntoView({ block: 'start', behavior: reducedMotion() ? 'auto' : 'smooth' });
+                }
+            };
+            docsMoreLink.addEventListener('click', toggle);
+            docsMoreLink.addEventListener('keydown', (e) => { if (e.key === ' ') toggle(e); });
+            docsMore.appendChild(docsMoreLink);
+        }
+        docsMoreLink.setAttribute('aria-expanded', hidden > 0 ? 'false' : 'true');
+        docsMoreLink.textContent = hidden > 0
+            ? tn(hidden, 'Voir l’autre document', 'Voir les {n} autres documents')
+            : t('Réduire la liste');
     }
 
     function renderDocuments(docs) {
@@ -664,23 +893,48 @@
         const all = docs || [];
         docsSignature = JSON.stringify(all);
         docsList.innerHTML = '';
-        const problems = all.filter(docIsProblem);
-        renderDocsToolbar(all.length, problems.length);
         if (docsCount) docsCount.textContent = all.length === 0 ? '' : String(all.length);
-        if (all.length === 0) {
-            const empty = document.createElement('div');
-            empty.className = 'kb-docs-empty';
-            empty.textContent = t('Aucun document pour l\'instant.');
-            docsList.appendChild(empty);
-            return;
-        }
+        if (headDocs) headDocs.textContent = tn(all.length, '{n} document', '{n} documents');
         // Ce qui demande l'attention d'abord (échec, puis à vérifier, puis en
         // cours) : en bas d'une liste de 100 fichiers, un échec ne se voit pas.
         const rank = { error: 0, warn: 1, busy: 2, idle: 3, ok: 4 };
-        (docsOnlyProblems ? problems : all)
-            .map((d, i) => ({ d, i, r: rank[(d.state && d.state.tone) || 'idle'] ?? 3 }))
+        // Les exclus en dernier : ils ne demandent plus rien.
+        const sorted = all
+            .map((d, i) => ({ d, i, r: docExcluded(d) ? 5 : (rank[docTone(d)] ?? 3) }))
             .sort((a, b) => a.r - b.r || a.i - b.i)
-            .forEach((x) => docsList.appendChild(documentRow(x.d)));
+            .map((x) => x.d);
+        renderDocsToolbar(sorted);
+        const filter = DOC_FILTERS.find((f) => f.key === docsFilter) || DOC_FILTERS[0];
+        const q = plainName(docsQuery.trim());
+        docsView = sorted.filter((d) => (!filter.test || filter.test(d)) && (q === '' || plainName(d.file_name).includes(q)));
+        if (docsView.length === 0) {
+            const empty = document.createElement('div');
+            empty.className = 'kb-docs-empty';
+            empty.textContent = all.length === 0 ? t('Aucun document pour l\'instant.') : t('Aucun document ne correspond.');
+            docsList.appendChild(empty);
+        }
+        // Une recherche montre tout ce qu'elle trouve.
+        const limit = docsExpanded || q !== '' ? docsView.length : Math.min(docsView.length, DOCS_VISIBLE);
+        docsView.slice(0, limit).forEach((d) => docsList.appendChild(documentRow(d)));
+        renderDocsMore(docsView.length - limit, docsExpanded && q === '' && docsView.length > DOCS_VISIBLE);
+        refreshFoldSummaries();
+        if (onDocsRendered) onDocsRendered();
+    }
+
+    /**
+     * Le lien d'un document dans la liste, la liste dépliée et son volet
+     * ouvert s'il le faut (le volet des extraits y rend le focus).
+     */
+    function revealDoc(id) {
+        const find = () => (docsList ? docsList.querySelector('.kb-doc-open[data-doc-id="' + id + '"]') : null);
+        let link = find();
+        if (!link && docsView.some((d) => d.id === id)) {
+            docsExpanded = true;
+            renderDocuments(currentDocs);
+            link = find();
+        }
+        if (link) openFoldOf(link);
+        return link;
     }
 
     function documentRow(d) {
@@ -693,10 +947,23 @@
         info.className = 'kb-doc-main';
         const name = document.createElement('div');
         name.className = 'kb-doc-name';
-        const title = document.createElement('span');
+        // Chaque document s'ouvre dans sa fiche (volet) : étapes, pourquoi il
+        // pose problème, nouvel essai ou exclusion, extraits. Son nom est un
+        // lien, étendu à toute la ligne (hors corbeille).
+        const viewable = !!drawerEl;
+        const title = document.createElement(viewable ? 'a' : 'span');
         title.className = 'kb-doc-title';
         title.textContent = d.file_name;
-        title.title = d.file_name;
+        if (viewable) {
+            row.classList.add('is-viewable');
+            title.classList.add('kb-doc-open');
+            title.href = '#document-' + d.id;
+            title.dataset.docId = String(d.id);
+            title.setAttribute('aria-haspopup', 'dialog');
+            title.title = t('Voir le détail de « {nom} »', { nom: d.file_name });
+        } else {
+            title.title = d.file_name;
+        }
         name.appendChild(title);
         const source = d.source || 'upload';
         const synced = source !== 'upload';
@@ -719,9 +986,14 @@
         const sub = document.createElement('div');
         sub.className = 'kb-doc-sub';
         sub.textContent = formatBytes(d.file_size);
+        // Dernière indexation, dans l'heure du navigateur (le serveur l'envoie en UTC).
+        // Pas sur un document sans extrait (« Sans texte ») : « indexé » s'y lirait
+        // comme une réussite ; sa fiche garde l'heure.
+        const when = d.indexed_at && !docExcluded(d) && Number(d.chunk_count) > 0 && window.MiaKbDoc ? window.MiaKbDoc.formatTime(d.indexed_at) : '';
+        if (when) sub.append(document.createTextNode(' · ' + t('indexé le {date}', { date: when })));
         // Le motif s'affiche EN CLAIR pour ce qui ne va pas : un « échec » sans
         // raison ne dit ni quoi corriger ni s'il faut s'en inquiéter.
-        if (st.detail && (st.tone === 'error' || st.tone === 'warn' || st.tone === 'ok')) {
+        if (st.detail && (st.tone === 'error' || st.tone === 'warn' || st.tone === 'ok' || docExcluded(d))) {
             const why = document.createElement('span');
             why.className = 'kb-doc-why';
             why.textContent = st.detail;
@@ -735,6 +1007,13 @@
         state.dataset.tone = st.tone;
         state.textContent = st.label;
         row.appendChild(state);
+        if (viewable) {
+            const go = document.createElement('span');
+            go.className = 'kb-doc-go';
+            go.setAttribute('aria-hidden', 'true');
+            go.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>';
+            row.appendChild(go);
+        }
 
         // Un document piloté par la synchronisation ACTIVE ne se supprime pas
         // ici : il reviendrait au prochain passage (retirez-le du dossier
@@ -761,7 +1040,6 @@
                 renderDocuments(currentDocs);
                 showDocError('');
                 Status.refresh();
-                Diagram.render();
             } catch (e) {
                 showDocError(t('Erreur réseau. Réessayez.'));
                 del.disabled = false;
@@ -799,7 +1077,6 @@
         if (docFileIn) { docFileIn.disabled = false; docFileIn.value = ''; }
         showDocError(errors.join(' '));
         Status.refresh();
-        Diagram.render();
     }
 
     if (docFileIn) {
@@ -839,7 +1116,6 @@
                 pendingFiles().forEach((x, j) => { if (j !== i) dt.items.add(x); });
                 docsCreateIn.files = dt.files;
                 renderPending();
-                Diagram.render();
             });
             li.append(name, size, del);
             pendingList.appendChild(li);
@@ -858,7 +1134,7 @@
     }
 
     // =====================================================================
-    // État de la base (panneau en tête de la fiche)
+    // État de la base (panneau de la question 2, ligne de l'en-tête)
     // =====================================================================
     // Tant que la base travaille (passage en file ou en cours, documents en
     // lecture ou en vectorisation), panneau d'état et liste des documents se
@@ -866,6 +1142,7 @@
     // « Travaille » est tranché par le serveur (`busy`) : une synchronisation
     // encore EN ATTENTE compte.
     const statusPanel = byId('kbStatusPanel');
+    const headState   = byId('kbHeadState');
     const Status = (() => {
         let timer = null;
         let seq   = 0;
@@ -881,6 +1158,9 @@
         }
 
         async function refresh() {
+            // Une table permanente n'a ni passage ni document à suivre :
+            // ses lignes se rafraîchissent par ses propres gestes (kb-table.js).
+            if (C.table) return;
             clearTimeout(timer);
             if (!C.id) return;
             const mine = ++seq;
@@ -898,10 +1178,16 @@
                     renderDocuments(currentDocs);
                     updateFeedUI(); // l'avertissement de changement de source dépend des documents
                 }
-                if (C.diagram && C.diagram.base) {
-                    C.diagram.base.state = { title: data.title || '', tone: data.tone || '' };
-                    Diagram.render();
+                if (headState && data.title) {
+                    headState.textContent = data.title;
+                    headState.dataset.tone = data.tone || '';
                 }
+                // Un problème NOUVEAU (échec, documents à vérifier…) rouvre le
+                // volet des documents, même replié par la personne.
+                if (typeof data.attention === 'string') Folds.attention(data.attention, data.busy);
+                refreshFoldSummaries();
+                // Un scan lu, une version en double déposée : les conseils suivent.
+                if (data.advice) applyAdvice(data.advice);
                 next = data.busy ? 2500 : 0;
             } catch (e) {
                 next = 6000; // réseau capricieux : on retente, plus doucement
@@ -922,6 +1208,40 @@
             },
         };
     })();
+
+    // =====================================================================
+    // Pour une base efficace : points à améliorer et pastille de l'en-tête
+    // =====================================================================
+    // Rendus par le serveur (KbAdvice, partiel kb-advice.php) au chargement et
+    // à chaque rafraîchissement de l'état : ce script ne fait que les poser.
+    // La pastille (« 2 points à améliorer ») ouvre la section et y mène.
+    const adviceBox   = byId('conseils');
+    const advicePill  = byId('kbAdvicePill');
+    const adviceCount = byId('kbAdviceCount');
+    const adviceList  = byId('kbAdviceIssues');
+
+    function applyAdvice(a) {
+        const label = Number(a.count) > 0 ? String(a.label || '') : '';
+        [advicePill, adviceCount].forEach((el) => {
+            if (!el) return;
+            el.textContent = label;
+            el.hidden = label === '';
+        });
+        if (adviceList && typeof a.html === 'string' && adviceList.innerHTML.trim() !== a.html.trim()) adviceList.innerHTML = a.html;
+        refreshFoldSummaries();
+    }
+
+    function openAdvice() {
+        if (!adviceBox) return;
+        openFoldOf(adviceBox);
+        adviceBox.open = true;
+        const reduced = !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+        adviceBox.scrollIntoView({ block: 'start', behavior: reduced ? 'auto' : 'smooth' });
+    }
+    advicePill?.addEventListener('click', (e) => {
+        e.preventDefault();
+        openAdvice();
+    });
 
     // « Synchroniser maintenant » / « Réessayer » du panneau.
     document.addEventListener('click', async (e) => {
@@ -970,15 +1290,29 @@
     });
 
     // =====================================================================
-    // Assistants liés et partage : recherche, Tout / Aucun, cases liées
+    // Qui s'en sert : qui la voit, partage et assistants liés en pastilles
     // =====================================================================
+    // Les listes à cocher restent la vérité — ce sont elles qui partent dans
+    // le POST ; les pastilles en sont le résumé, redessiné à chaque geste, et
+    // « Ajouter » / « Lier un assistant » déplient les listes.
     const assistantList   = byId('kbAssistantList');
     const assistantSearch = byId('kbAssistantSearch');
     const assistantEmpty  = byId('kbAssistantEmpty');
+    const assistantChips  = byId('kbAssistantChips');
     const linkedCount     = byId('kbLinkedCount');
     const shareUserSearch = byId('kbShareUserSearch');
     const shareUserList   = byId('kbShareUserList');
     const shareUserEmpty  = byId('kbShareUserEmpty');
+    const shareChips      = byId('kbShareChips');
+    const sharePanelEl    = byId('kbSharePanel');
+    const shareBody       = byId('kbShareBody');
+    const privateNote     = byId('kbPrivateAssistantsHint');
+    const accessBox       = byId('kbAccess');
+
+    const SVG_X     = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>';
+    const SVG_GROUP = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>';
+    const SVG_USER  = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>';
+    const reducedMotion = () => !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
 
     function filterRows(list, query, empty) {
         if (!list) return;
@@ -995,12 +1329,158 @@
     function updateLinkedCount() {
         if (!linkedCount || !assistantList) return;
         const n = assistantList.querySelectorAll('input[type="checkbox"]:checked').length;
-        linkedCount.textContent = n === 0 ? t('Aucun') : tn(n, '{n} lié', '{n} liés');
+        linkedCount.textContent = n === 0 ? '' : tn(n, '{n} lié', '{n} liés');
+    }
+
+    // ── Listes dépliées sous « Ajouter » / « Lier un assistant » ──
+    function foldable(btn, panel) {
+        function set(on) {
+            if (!btn || !panel) return;
+            panel.hidden = !on;
+            btn.setAttribute('aria-expanded', on ? 'true' : 'false');
+            btn.classList.toggle('is-open', on);
+        }
+        btn?.addEventListener('click', () => {
+            const on = !!panel && panel.hidden;
+            set(on);
+            // Au clavier ou à la souris, la recherche prend le focus ; au doigt,
+            // le clavier virtuel surgirait avant qu'on ait regardé la liste.
+            if (on && window.matchMedia && window.matchMedia('(hover: hover) and (pointer: fine)').matches) {
+                panel.querySelector('input.ug-search')?.focus();
+            }
+        });
+        return { open: () => set(true), close: () => set(false) };
+    }
+    const sharePanel     = foldable(byId('kbShareAddBtn'), sharePanelEl);
+    const assistantPanel = foldable(byId('kbAssistantAddBtn'), byId('kbAssistantPicker'));
+
+    // Une pastille ouvre la liste sur sa ligne (ses cases « peut modifier »…).
+    function revealRow(panel, row) {
+        panel.open();
+        const list = row.closest('.ug-check-list');
+        const search = list ? list.parentElement.querySelector('input.ug-search') : null;
+        if (search && search.value && row.hidden) {
+            search.value = '';
+            search.dispatchEvent(new Event('input', { bubbles: true }));
+        }
+        row.scrollIntoView({ block: 'nearest', behavior: reducedMotion() ? 'auto' : 'smooth' });
+        row.classList.remove('is-spotlit');
+        void row.offsetWidth;
+        row.classList.add('is-spotlit');
+        setTimeout(() => row.classList.remove('is-spotlit'), 1800);
+    }
+
+    function rowName(row) {
+        const n = row.querySelector('.ug-member-name');
+        return n ? n.textContent.trim() : '';
+    }
+
+    function chipFor(o) {
+        const el = document.createElement('span');
+        el.className = 'kbf-chip';
+        el.setAttribute('role', 'listitem');
+        const body = document.createElement('button');
+        body.type = 'button';
+        body.className = 'kbf-chip-body';
+        body.title = t('Voir dans la liste');
+        if (o.lead) body.appendChild(o.lead);
+        const name = document.createElement('span');
+        name.className = 'kbf-chip-name';
+        name.textContent = o.label;
+        body.appendChild(name);
+        if (o.sub) {
+            const sub = document.createElement('span');
+            sub.className = 'kbf-chip-sub';
+            sub.textContent = o.sub;
+            body.appendChild(sub);
+        }
+        body.addEventListener('click', o.onOpen);
+        el.appendChild(body);
+        if (!C.readOnly && o.onRemove) {
+            const x = document.createElement('button');
+            x.type = 'button';
+            x.className = 'kbf-chip-x';
+            x.title = t('Retirer « {nom} »', { nom: o.label });
+            x.setAttribute('aria-label', x.title);
+            x.innerHTML = SVG_X;
+            x.addEventListener('click', o.onRemove);
+            el.appendChild(x);
+        }
+        return el;
+    }
+
+    function chipsEmpty(box, text) {
+        const empty = document.createElement('span');
+        empty.className = 'kbf-chips-empty';
+        empty.textContent = text;
+        box.appendChild(empty);
+    }
+
+    // Groupes et personnes cochés, avec leurs droits.
+    function renderShareChips() {
+        if (!shareChips) return;
+        shareChips.innerHTML = '';
+        const live = isLive();
+        const rows = Array.from(form.querySelectorAll('.kb-share-item')).filter((row) => {
+            const target = row.querySelector('input[data-share-target]');
+            return !!target && target.checked;
+        });
+        rows.forEach((row) => {
+            const target = row.querySelector('input[data-share-target]');
+            const on = (sel) => { const box = row.querySelector(sel); return !!(box && box.checked); };
+            const rights = [];
+            if (!live && on('.kb-share-manage input')) rights.push(t('peut modifier'));
+            if (live && on('.kb-share-default input')) rights.push(t('cochée par défaut'));
+            if (live && on('.kb-share-feed input')) rights.push(t('peut nourrir'));
+            const lead = document.createElement('span');
+            lead.className = 'kbf-chip-ic';
+            lead.innerHTML = target.dataset.shareTarget === 'group' ? SVG_GROUP : SVG_USER;
+            shareChips.appendChild(chipFor({
+                label: rowName(row),
+                sub: rights.join(' · '),
+                lead,
+                onOpen: () => revealRow(sharePanel, row),
+                // Le geste repasse par la case : sa ligne, les pastilles et
+                // l'enregistrement automatique suivent comme pour un clic.
+                onRemove: () => {
+                    target.checked = false;
+                    target.dispatchEvent(new Event('change', { bubbles: true }));
+                },
+            }));
+        });
+        if (rows.length === 0) chipsEmpty(shareChips, t('Aucun groupe ni personne pour l’instant.'));
+    }
+
+    // Assistants cochés, avec leur avatar.
+    function renderAssistantChips() {
+        if (!assistantChips || !assistantList) return;
+        assistantChips.innerHTML = '';
+        const rows = Array.from(assistantList.querySelectorAll('.ug-check-item')).filter((row) => {
+            const box = row.querySelector('input[type="checkbox"]');
+            return !!box && box.checked;
+        });
+        rows.forEach((row) => {
+            const box = row.querySelector('input[type="checkbox"]');
+            const ava = row.querySelector('.kb-pick-ava');
+            const lead = ava ? ava.cloneNode(true) : null;
+            const inactive = row.querySelector('.badge-red');
+            assistantChips.appendChild(chipFor({
+                label: rowName(row),
+                sub: inactive ? inactive.textContent.trim() : '',
+                lead,
+                onOpen: () => revealRow(assistantPanel, row),
+                onRemove: () => {
+                    box.checked = false;
+                    box.dispatchEvent(new Event('change', { bubbles: true }));
+                },
+            }));
+        });
+        if (rows.length === 0) chipsEmpty(assistantChips, t('Aucun assistant lié pour l’instant.'));
     }
 
     assistantSearch?.addEventListener('input', () => filterRows(assistantList, assistantSearch.value, assistantEmpty));
     shareUserSearch?.addEventListener('input', () => filterRows(shareUserList, shareUserSearch.value, shareUserEmpty));
-    assistantList?.addEventListener('change', updateLinkedCount);
+    assistantList?.addEventListener('change', () => { updateLinkedCount(); renderAssistantChips(); });
 
     // Tout / Aucun : n'agit que sur les lignes visibles (respecte la
     // recherche), et dit au formulaire ce qui a changé — une affectation par
@@ -1021,6 +1501,7 @@
             });
             if (changed) changed.dispatchEvent(new Event('change', { bubbles: true }));
             updateLinkedCount();
+            renderAssistantChips();
         });
     });
 
@@ -1050,6 +1531,8 @@
     form.querySelectorAll('.kb-share-item').forEach((row) => {
         row.querySelector('input[data-share-target]')?.addEventListener('change', () => syncManageBox(row));
     });
+    // Tout geste dans la liste (ligne, droits) redessine les pastilles.
+    sharePanelEl?.addEventListener('change', renderShareChips);
 
     // Interrupteur « Active » de l'en-tête.
     const activeBox  = byId('kbIsActive');
@@ -1060,200 +1543,120 @@
         activeText.classList.toggle('is-off', !activeBox.checked);
     });
 
+    // ── Qui la voit : privée, commune ou publique ──
+    // Trois boutons radio `visibility` (envoyés avec la fiche, `visibility_form`
+    // dit au serveur qu'ils étaient affichés). Le partage aux groupes et aux
+    // personnes ne vaut que pour une base COMMUNE : passer en privée ou en
+    // publique retire les partages accordés — on le confirme, ils ne
+    // reviendront pas d'eux-mêmes.
+    const sharedBoxes = () => Array.from(form.querySelectorAll('input[data-share-target]:checked'));
+    const checkedAccess = () => {
+        const radio = accessBox ? accessBox.querySelector('input[name="visibility"]:checked') : null;
+        return radio ? radio.value : (C.private ? 'private' : 'common');
+    };
+    let access = checkedAccess();
+
+    function checkAccess(value) {
+        const radio = accessBox ? accessBox.querySelector('input[name="visibility"][value="' + value + '"]') : null;
+        if (radio) radio.checked = true;
+    }
+
+    function syncPrivate() {
+        const common = access === 'common';
+        if (shareBody) shareBody.hidden = !common;
+        if (privateNote) privateNote.hidden = access !== 'private';
+        form.querySelectorAll('.kb-share-item').forEach((row) => {
+            const target = row.querySelector('input[data-share-target]');
+            if (target) target.disabled = C.readOnly || !common;
+            if (!common) row.querySelectorAll('input').forEach((i) => { i.disabled = true; });
+            else syncManageBox(row);
+        });
+        accessBox?.querySelectorAll('[data-vis-note]').forEach((note) => {
+            note.hidden = note.dataset.visNote !== access;
+        });
+        renderShareChips();
+    }
+
+    accessBox?.addEventListener('change', (e) => {
+        const radio = e.target.closest('input[name="visibility"]');
+        if (!radio) return;
+        const next   = radio.value;
+        const shared = sharedBoxes();
+        if (next === 'private' && shared.length > 0
+            && !confirm(t('Réserver cette base à vous seul ? Les {n} partages accordés seront retirés, et ni les personnes concernées ni les administrateurs ne la verront plus.', { n: shared.length }))) {
+            e.stopImmediatePropagation();
+            checkAccess(access);
+            return;
+        }
+        if (next === 'public' && shared.length > 0
+            && !confirm(tn(shared.length, 'Rendre la base publique ? Toute l’organisation la verra ; le partage accordé devient inutile et sera retiré.', 'Rendre la base publique ? Toute l’organisation la verra ; les {n} partages accordés deviennent inutiles et seront retirés.'))) {
+            e.stopImmediatePropagation();
+            checkAccess(access);
+            return;
+        }
+        access = next;
+        if (next !== 'common') {
+            shared.forEach((box) => {
+                box.checked = false;
+                const row = box.closest('.kb-share-item');
+                if (row) syncManageBox(row);
+            });
+        }
+        syncPrivate();
+        if (next === 'common' && sharedBoxes().length === 0 && !C.create) sharePanel.open();
+    }, true);
+    syncPrivate();
+
+    // ── Menu « … » de l'en-tête : réglages avancés, suppression ──
+    const moreBtn  = byId('kbMoreBtn');
+    const moreMenu = byId('kbMoreMenu');
+    const moreItems = () => (moreMenu ? Array.from(moreMenu.querySelectorAll('[role="menuitem"]')) : []);
+    function setMore(on, focusFirst) {
+        if (!moreBtn || !moreMenu) return;
+        moreMenu.hidden = !on;
+        moreBtn.setAttribute('aria-expanded', on ? 'true' : 'false');
+        if (on && focusFirst) moreItems()[0]?.focus();
+    }
+    moreBtn?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        // detail === 0 : ouvert au clavier, le focus entre dans le menu.
+        setMore(moreMenu.hidden, e.detail === 0);
+    });
+    document.addEventListener('click', (e) => {
+        if (moreMenu && !moreMenu.hidden && !e.target.closest('.kbf-more')) setMore(false);
+    });
+    moreMenu?.addEventListener('keydown', (e) => {
+        const items = moreItems();
+        const at = items.indexOf(document.activeElement);
+        if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+            e.preventDefault();
+            const step = e.key === 'ArrowDown' ? 1 : -1;
+            items[(at + step + items.length) % items.length]?.focus();
+        } else if (e.key === 'Escape') {
+            setMore(false);
+            moreBtn.focus();
+        } else if (e.key === 'Tab') {
+            setMore(false);
+        }
+    });
+    moreMenu?.querySelector('[data-kb-open-advanced]')?.addEventListener('click', (e) => {
+        e.preventDefault();
+        setMore(false);
+        if (!advanced) return;
+        advanced.open = true;
+        advanced.scrollIntoView({ block: 'start', behavior: reducedMotion() ? 'auto' : 'smooth' });
+        advanced.querySelector('summary')?.focus({ preventScroll: true });
+    });
+
     // Supprimer / Débrancher : confirmation, puis le formulaire dédié.
     const deleteBtn = byId('kbDeleteBtn');
     deleteBtn?.addEventListener('click', () => {
+        setMore(false);
         if (!confirm(deleteBtn.dataset.confirm || '')) return;
         // Plus rien à enregistrer d'une base qui part.
         if (window.MiaAutosave && typeof window.MiaAutosave.detach === 'function') window.MiaAutosave.detach(form);
         byId('kbDeleteForm')?.submit();
     });
-
-    // =====================================================================
-    // Schéma de la base, à droite (au-dessus de la fiche sur un écran étroit)
-    // =====================================================================
-    // Composé depuis les champs, sous la forme de KbDiagram::spec, et
-    // redessiné à chaque geste (balisage identique : rien n'est reposé).
-    // Chaque élément désigne ce qu'il montre (data-target) ; un clic dessus —
-    // ou sur son bouton « crayon », au clavier — amène le réglage à l'écran,
-    // l'allume un instant et lui donne le focus.
-    const Diagram = (() => {
-        const conf  = C.diagram;
-        const panel = byId('kbDiagramPanel');
-        const host  = byId('kbDiagram');
-        const noop  = { render() {} };
-        if (!conf || !panel || !host || !window.MiaKbDiagram) return noop;
-
-        const titleEl = byId('kbDiagramTitle');
-        const L = (conf.catalog && conf.catalog.labels) || {};
-        const base = conf.base || {};
-        const checkedIds = (name) => Array.from(form.querySelectorAll('input[name="' + name + '"]'))
-            .filter((i) => i.checked && !i.disabled)
-            .map((i) => Number(i.value));
-        const boxValues = (name) => Array.from(form.querySelectorAll('input[name="' + name + '"]')).map((i) => Number(i.value));
-        const value = (id) => (byId(id) ? byId(id).value : '');
-        const hostOf = (url) => {
-            try { return new URL(url).hostname; } catch (_e) { return ''; }
-        };
-
-        function access() {
-            const acc = Object.assign({ owned: true, shared: false, can_manage: true, you: true, creator: C.userName, users: [], groups: [] }, base.access || {});
-            if (!acc.owned) return acc;
-            const rows = (side) => Array.from(form.querySelectorAll('input[data-share-target="' + side + '"]'))
-                .filter((i) => i.checked)
-                .map((i) => {
-                    const row = i.closest('.kb-share-item');
-                    const on = (sel) => !!(row && row.querySelector(sel) && row.querySelector(sel).checked);
-                    return { id: Number(i.value), manage: on('.kb-share-manage input'), default: on('.kb-share-default input'), feed: on('.kb-share-feed input') };
-                });
-            // Sans section de partage dans la page (rien à cocher), la base enregistrée fait foi.
-            if (form.querySelector('input[data-share-target]')) {
-                acc.users  = rows('user');
-                acc.groups = rows('group');
-            }
-            return acc;
-        }
-
-        function source(provider) {
-            if (!PROVIDER_META[provider]) return { provider: '' };
-            const url = syncUrl ? syncUrl.value.trim() : '';
-            const unchanged = provider === saved.provider && url === saved.url;
-            const ownerMode = canOwnerAuth(provider) && selectedAuth() === 'owner';
-            let folder = '';
-            if (pickedFor === provider && pickedName) folder = pickedName;
-            else if (unchanged) folder = saved.folder;
-            return {
-                provider,
-                linked: url !== '',
-                folder,
-                auto: !!(syncEnabled && syncEnabled.checked),
-                owner: ownerMode ? (unchanged && saved.owner ? saved.owner : C.userName) : '',
-            };
-        }
-
-        function spec() {
-            const provider = selectedProvider();
-            const live = provider === 'mybrain' || (!C.create && C.live);
-            const files = C.create
-                ? pendingFiles().map((f) => ({ name: f.name, image: (f.type || '').indexOf('image/') === 0, tone: '', label: L.file_new || '' }))
-                : currentDocs.filter((d) => (d.source || 'upload') === 'upload').map((d) => ({
-                    name: d.file_name,
-                    image: (d.mime_type || '').indexOf('image/') === 0,
-                    tone: (d.state && d.state.tone) || '',
-                    label: (d.state && d.state.label) || '',
-                }));
-            // Assistants liés hors du périmètre (aucune case ici) : ils survivent à l'enregistrement.
-            const inForm = boxValues('profile_ids[]');
-            const outside = (base.assistant_ids || []).filter((id) => inForm.indexOf(Number(id)) < 0);
-            return {
-                name: value('kbName'),
-                description: value('kbDescription'),
-                active: !!(activeBox && activeBox.checked),
-                system: !!base.system,
-                live,
-                creating: !!C.create,
-                source: live ? { provider: '' } : source(provider),
-                remote: live ? {
-                    host: hostOf(value('kbMyBrainUrl')) || ((base.remote || {}).host || ''),
-                    app: (base.remote || {}).app || '',
-                } : null,
-                files,
-                synced_total: C.create ? 0 : currentDocs.filter((d) => (d.source || 'upload') !== 'upload').length,
-                chunks: base.chunks || 0,
-                usage: base.usage || 0,
-                embedding: C.create ? (embSelect ? embSelect.value : '') : (base.embedding || ''),
-                state: base.state || null,
-                assistant_ids: checkedIds('profile_ids[]').concat(outside),
-                access: access(),
-            };
-        }
-
-        // ---- Du schéma au réglage ----
-        // L'intitulé d'une section, sans le compteur que porte son titre.
-        const sectionTitle = (id) => {
-            const el = byId(id);
-            const h = el ? el.querySelector('h4, .kb-advanced-title') : null;
-            if (!h) return '';
-            const copy = h.cloneNode(true);
-            copy.querySelectorAll('.kb-linked-count').forEach((n) => n.remove());
-            return copy.textContent.trim();
-        };
-        const titles = {
-            identity:   sectionTitle('kbSectionIdentity'),
-            sources:    sectionTitle('kbSectionSources'),
-            assistants: sectionTitle('kbSectionAssistants'),
-            sharing:    sectionTitle('kbSectionSharing'),
-            advanced:   sectionTitle('avance'),
-        };
-        const firstBox = (scope) => (scope
-            ? scope.querySelector('input[type="checkbox"]:checked:not(:disabled)') || scope.querySelector('input[type="checkbox"]:not(:disabled)')
-            : null);
-        const JUMP_TARGETS = {
-            connectors: { section: 'sources', el: () => byId('kbSyncConfig') || byId('kbSectionSources'), field: () => syncUrl },
-            live:       { section: 'sources', el: () => byId('kbMyBrainConfig') || byId('kbSectionSources'), field: () => byId('kbMyBrainUrl') },
-            docs:       { section: 'sources', el: () => byId('kbDocsBlock') || byId('kbSectionSources'), field: () => byId('kbDocFileInput') || byId('kbDocsCreateInput') },
-            llm:        { section: 'advanced', open: true, el: () => byId('kbEmbeddingField'), field: () => byId('kbReindexChoice') || byId('kbEmbeddingChoice') },
-            embedding:  { section: 'advanced', open: true, el: () => byId('kbEmbeddingField'), field: () => byId('kbReindexChoice') || byId('kbEmbeddingChoice') },
-            chunks:     { section: 'advanced', open: true, el: () => byId('kbChunksBlock') || byId('kbEmbeddingField'), field: () => byId('kbChunkSearch') },
-            assistant:  { section: 'identity', el: () => byId('kbSectionIdentity'), field: () => byId('kbName') },
-            active:     { section: '', el: () => byId('kbActiveToggle'), field: () => activeBox },
-            state:      { section: '', el: () => statusPanel },
-            assistants: { section: 'assistants', el: () => byId('kbSectionAssistants'), field: () => firstBox(assistantList) },
-            sharing:    { section: 'sharing', el: () => byId('kbSectionSharing'), field: () => firstBox(byId('kbShareGroupList')) || firstBox(shareUserList) },
-        };
-        const jumpTitles = {};
-        Object.keys(JUMP_TARGETS).forEach((key) => {
-            const label = titles[JUMP_TARGETS[key].section];
-            if (label) jumpTitles[key] = t('Modifier dans « {section} »', { section: label });
-        });
-
-        let spotTimer = null;
-        function spotlight(el) {
-            document.querySelectorAll('.kb-content .is-spotlit').forEach((x) => x.classList.remove('is-spotlit'));
-            clearTimeout(spotTimer);
-            el.classList.add('is-spotlit');
-            spotTimer = setTimeout(() => el.classList.remove('is-spotlit'), 1800);
-        }
-        function jumpTo(key) {
-            const jump = JUMP_TARGETS[key];
-            if (!jump) return;
-            if (jump.open && advanced && !advanced.open) advanced.open = true;
-            const el = jump.el();
-            if (!el || el.hidden) return;
-            const target = jump.field ? jump.field() : null;
-            const reduced = !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
-            el.scrollIntoView({ block: 'start', behavior: reduced ? 'auto' : 'smooth' });
-            spotlight(el);
-            if (target && typeof target.focus === 'function' && !target.disabled) {
-                try { target.focus({ preventScroll: true }); } catch (_e) { target.focus(); }
-            }
-        }
-        host.addEventListener('click', (e) => {
-            const node = e.target.closest('[data-target]');
-            if (node && host.contains(node)) jumpTo(node.dataset.target);
-        });
-
-        let timer = null;
-        let first = true;
-        function paint() {
-            timer = null;
-            const s = spec();
-            if (titleEl) titleEl.textContent = String(s.name || '').trim() || L.untitled || '';
-            panel.hidden = false;
-            window.MiaKbDiagram.mount(host, s, conf.catalog, { animate: first, jump: jumpTitles });
-            first = false;
-        }
-        function render() {
-            if (timer === null) timer = setTimeout(paint, 90);
-        }
-        // Tout geste de la page : la fiche, l'interrupteur « Active » et le
-        // modèle d'embedding rattachés par form= hors d'elle. Les écouteurs
-        // des champs passent avant : le schéma lit l'état final.
-        document.addEventListener('input', render);
-        document.addEventListener('change', render);
-        paint();
-        return { render };
-    })();
 
     // =====================================================================
     // Avancé : réindexation et extraits vectorisés
@@ -1293,168 +1696,313 @@
         if (!confirm(what)) e.preventDefault();
     });
 
-    // ── Extraits vectorisés : chargés à l'ouverture de « Avancé » ──
+    // ── Extraits vectorisés : un SEUL chargeur (kb-doc.js, MiaKbDoc) ──
+    // Mêmes extraits (…/chunks), même rendu, même recherche, même pagination
+    // pour « Avancé » et pour la fiche d'un document (volet) : la page de la
+    // base et sa fiche partagent le module.
+    const chunkViewer = (o) => (window.MiaKbDoc
+        ? window.MiaKbDoc.chunkViewer(Object.assign({ kbId: C.id }, o))
+        : { load() {}, restart() {}, clear() {}, loaded: false });
+
+    // « Avancé » : tous les documents, ou celui choisi ; chargé à l'ouverture.
     const chunksBlock = byId('kbChunksBlock');
     const chunkList   = byId('kbChunkList');
     const chunkDoc    = byId('kbChunkDoc');
-    const chunkSearch = byId('kbChunkSearch');
-    const chunkPager  = byId('kbChunkPager');
-    const chunkPrev   = byId('kbChunkPrev');
-    const chunkNext   = byId('kbChunkNext');
-    const chunkPage   = byId('kbChunkPage');
-    const chunks = { page: 1, pages: 1, seq: 0, loaded: false };
-
-    function chunkMessage(text) {
-        chunkList.innerHTML = '';
-        const p = document.createElement('p');
-        p.className = 'kb-chunk-empty';
-        p.textContent = text;
-        chunkList.appendChild(p);
-        show(chunkPager, false);
-    }
-
-    /** Le texte de l'extrait, le terme cherché surligné (nœuds texte : rien n'est interprété). */
-    function highlighted(text, query) {
-        const frag = document.createDocumentFragment();
-        const q = (query || '').trim();
-        if (!q) {
-            frag.appendChild(document.createTextNode(text));
-            return frag;
-        }
-        const lower = text.toLowerCase();
-        const needle = q.toLowerCase();
-        let at = 0;
-        let hit = lower.indexOf(needle, at);
-        while (hit !== -1) {
-            frag.appendChild(document.createTextNode(text.slice(at, hit)));
-            const mark = document.createElement('mark');
-            mark.textContent = text.slice(hit, hit + q.length);
-            frag.appendChild(mark);
-            at = hit + q.length;
-            hit = lower.indexOf(needle, at);
-        }
-        frag.appendChild(document.createTextNode(text.slice(at)));
-        return frag;
-    }
-
-    function chunkRow(c, query, checked) {
-        const item = document.createElement('article');
-        item.className = 'kb-chunk';
-        item.dataset.vector = !checked ? 'unknown' : (c.vector ? 'yes' : 'no');
-
-        const head = document.createElement('div');
-        head.className = 'kb-chunk-head';
-        const idx = document.createElement('span');
-        idx.className = 'kb-chunk-idx';
-        idx.textContent = '#' + (Number(c.chunk_index) + 1);
-        const doc = document.createElement('span');
-        doc.className = 'kb-chunk-doc';
-        doc.textContent = c.file_name;
-        doc.title = c.file_name;
-        const meta = document.createElement('span');
-        meta.className = 'kb-chunk-meta';
-        meta.textContent = t('{tokens} tokens · {chars} caractères', {
-            tokens: Number(c.token_count).toLocaleString(LOCALE),
-            chars: Number(c.chars).toLocaleString(LOCALE),
-        });
-        const vec = document.createElement('span');
-        vec.className = 'kb-chunk-vec';
-        vec.textContent = !checked ? t('Vecteur non vérifié') : (c.vector ? t('Vectorisé') : t('Sans vecteur'));
-        vec.title = !checked
-            ? t('Le moteur vectoriel ne répond pas : la présence du vecteur n’a pas pu être vérifiée.')
-            : (c.vector ? t('Son vecteur est dans le moteur : la recherche par le sens le retrouve.')
-                : t('Aucun vecteur dans le moteur : seule la recherche par mots le retrouve. « Réindexer » le recalcule.'));
-        head.append(idx, doc, meta, vec);
-
-        const text = document.createElement('p');
-        text.className = 'kb-chunk-text';
-        text.appendChild(highlighted(c.content, query));
-        if (c.cut) text.appendChild(document.createTextNode(' […]'));
-        item.append(head, text);
-
-        // Long : replié sur quatre lignes, à déplier.
-        if (c.content.length > 320) {
-            text.classList.add('is-clamped');
-            const more = document.createElement('button');
-            more.type = 'button';
-            more.className = 'kb-chunk-more';
-            more.textContent = t('Afficher tout');
-            more.setAttribute('aria-expanded', 'false');
-            more.addEventListener('click', () => {
-                const open = text.classList.toggle('is-clamped') === false;
-                more.textContent = open ? t('Replier') : t('Afficher tout');
-                more.setAttribute('aria-expanded', open ? 'true' : 'false');
-            });
-            item.appendChild(more);
-        }
-        return item;
-    }
-
-    async function loadChunks() {
-        if (!chunkList || !C.id) return;
-        const mine = ++chunks.seq;
-        chunks.loaded = true;
-        chunkList.classList.add('is-loading');
-        chunkList.setAttribute('aria-busy', 'true');
-        const query = chunkSearch ? chunkSearch.value.trim() : '';
-        const params = new URLSearchParams({ page: String(chunks.page) });
-        if (chunkDoc && chunkDoc.value) params.set('doc', chunkDoc.value);
-        if (query) params.set('q', query);
-        try {
-            const r = await fetch('/admin/knowledge-bases/' + C.id + '/chunks?' + params.toString(), {
-                headers: { 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
-                cache: 'no-store',
-            });
-            const data = await r.json().catch(() => ({}));
-            if (mine !== chunks.seq) return;
-            if (!data || !data.ok) { chunkMessage((data && data.error) || t('Lecture des extraits impossible.')); return; }
-            chunks.page  = data.page;
-            chunks.pages = data.pages;
-            chunkList.innerHTML = '';
-            if (!data.chunks.length) {
-                chunkMessage(query ? t('Aucun extrait ne contient « {q} ».', { q: query }) : t('Aucun extrait pour ce document.'));
-                return;
-            }
-            if (!data.vectors_checked) {
-                const warn = document.createElement('p');
-                warn.className = 'kb-chunk-warn';
-                warn.textContent = t('Le moteur vectoriel ne répond pas : la présence des vecteurs n’a pas pu être vérifiée.');
-                chunkList.appendChild(warn);
-            }
-            data.chunks.forEach((c) => chunkList.appendChild(chunkRow(c, query, !!data.vectors_checked)));
-            const many = data.pages > 1;
-            show(chunkPager, true);
-            if (chunkPage) {
-                chunkPage.textContent = (many ? t('Page {page} / {pages}', { page: data.page, pages: data.pages }) + ' · ' : '')
-                    + tn(data.total, '{total} extrait', '{total} extraits', { total: data.total.toLocaleString(LOCALE) });
-            }
-            show(chunkPrev, many);
-            show(chunkNext, many);
-            if (chunkPrev) chunkPrev.disabled = data.page <= 1;
-            if (chunkNext) chunkNext.disabled = data.page >= data.pages;
-        } catch (e) {
-            if (mine === chunks.seq) chunkMessage(t('Erreur réseau. Réessayez.'));
-        } finally {
-            if (mine === chunks.seq) {
-                chunkList.classList.remove('is-loading');
-                chunkList.removeAttribute('aria-busy');
-            }
-        }
-    }
-
     if (chunksBlock && chunkList) {
-        let searchTimer = null;
-        chunkDoc?.addEventListener('change', () => { chunks.page = 1; loadChunks(); });
-        chunkSearch?.addEventListener('input', () => {
-            clearTimeout(searchTimer);
-            searchTimer = setTimeout(() => { chunks.page = 1; loadChunks(); }, 300);
+        const advancedChunks = chunkViewer({
+            list: chunkList,
+            search: byId('kbChunkSearch'),
+            pager: byId('kbChunkPager'),
+            prev: byId('kbChunkPrev'),
+            next: byId('kbChunkNext'),
+            pageLabel: byId('kbChunkPage'),
+            docId: () => (chunkDoc ? chunkDoc.value : ''),
+            toTop: () => chunksBlock.scrollIntoView({ block: 'start' }),
+            showDoc: true,
         });
-        chunkPrev?.addEventListener('click', () => { if (chunks.page > 1) { chunks.page--; loadChunks(); chunksBlock.scrollIntoView({ block: 'start' }); } });
-        chunkNext?.addEventListener('click', () => { if (chunks.page < chunks.pages) { chunks.page++; loadChunks(); chunksBlock.scrollIntoView({ block: 'start' }); } });
+        chunkDoc?.addEventListener('change', () => advancedChunks.restart(false));
         advanced?.addEventListener('toggle', () => {
-            if (advanced.open && !chunks.loaded) loadChunks();
+            if (advanced.open && !advancedChunks.loaded) advancedChunks.load();
         });
     }
+
+    // =====================================================================
+    // Fiche d'un document (volet, kb-doc.js) — clic sur un document
+    // =====================================================================
+    // Le même volet que la page de la base : étapes du traitement, ce qui ne
+    // va pas et pourquoi, nouvel essai ou exclusion, puis ses extraits.
+    // L'adresse porte #document-ID (#extraits-ID, ancien lien, y mène aussi) ;
+    // un geste fait relire l'état de la base et la liste des documents.
+    const Drawer = (window.MiaKbDoc && drawerEl && C.id)
+        ? window.MiaKbDoc.drawer({
+            kbId: C.id,
+            ids: () => docsView.map((d) => Number(d.id)),
+            reveal: (id) => revealDoc(id),
+            onChange: (data) => {
+                if (data && data.deleted) {
+                    currentDocs = currentDocs.filter((x) => x.id !== data.deleted);
+                    renderDocuments(currentDocs);
+                }
+                Status.refresh();
+            },
+        })
+        : { open() {}, close() {}, refresh() {}, openFromHash() {}, isOpen: () => false, docId: 0 };
+
+    docsList?.addEventListener('click', (e) => {
+        const link = e.target.closest('.kb-doc-open');
+        if (!link) return;
+        e.preventDefault();
+        Drawer.open(Number(link.dataset.docId), link);
+    });
+
+    // La liste redessinée (rafraîchissement, document retiré) : un document
+    // disparu ferme le volet.
+    onDocsRendered = () => {
+        if (Drawer.isOpen() && !currentDocs.some((x) => x.id === Drawer.docId)) Drawer.close();
+    };
+
+    // =====================================================================
+    // Volets : chaque question se replie sur une ligne qui la résume
+    // =====================================================================
+    // Ouverts d'office par le serveur : tout à la création ; en modification,
+    // seule « D'où viennent les documents », quand la base demande qu'on s'en
+    // occupe (KbStatus::attention). Ce que la personne ouvre ou ferme est
+    // retenu pour CETTE base sur cet appareil (clé par compte : poste
+    // partagé) ; un volet jamais touché suit le serveur. Un problème NOUVEAU
+    // — sa signature change — rouvre les documents malgré un repli retenu.
+    const foldEls    = Array.from(document.querySelectorAll('details.kbf-fold'));
+    const foldAllBtn = byId('kbFoldAll');
+    const FOLD_KEY   = 'kbFold:' + (Number(C.userId) || 0) + ':' + (Number(C.id) || 0);
+    const foldSetup  = C.fold || { open: {}, attention: '', busy: false };
+
+    function readFoldMemory() {
+        try {
+            const v = JSON.parse(localStorage.getItem(FOLD_KEY) || 'null');
+            if (v && typeof v === 'object' && v.open && typeof v.open === 'object') return { open: v.open, attn: String(v.attn || '') };
+        } catch (_e) { /* stockage indisponible ou abîmé : les volets suivent le serveur */ }
+        return null;
+    }
+    function writeFoldMemory() {
+        if (!foldMem) return;
+        try { localStorage.setItem(FOLD_KEY, JSON.stringify(foldMem)); } catch (_e) { /* navigation privée, quota : rien */ }
+    }
+    // Rien à retenir à la création : la base n'existe pas encore.
+    const foldMem = C.create || !C.id ? null : (readFoldMemory() || { open: {}, attn: '' });
+    const sourcesFold = foldEls.find((d) => d.dataset.fold === 'sources') || null;
+
+    // Signature de ce qui demande l'attention. Pendant un passage (busy), le
+    // serveur ne dit rien : la retenir ferait prendre le problème d'avant,
+    // revenu à la fin du passage, pour un nouveau.
+    function noteAttention(sig, busy) {
+        if (!foldMem || busy) return;
+        if (sig !== '' && sig !== foldMem.attn) {
+            delete foldMem.open.sources;
+            if (sourcesFold) sourcesFold.open = true;
+        }
+        foldMem.attn = sig;
+        writeFoldMemory();
+    }
+
+    function applyFoldMemory() {
+        if (!foldMem) return;
+        noteAttention(String(foldSetup.attention || ''), !!foldSetup.busy);
+        foldEls.forEach((d) => {
+            const key = d.dataset.fold;
+            if (Object.prototype.hasOwnProperty.call(foldMem.open, key)) d.open = !!foldMem.open[key];
+        });
+    }
+
+    const Folds = {
+        attention: (sig, busy) => noteAttention(String(sig || ''), !!busy),
+    };
+
+    /** Ouvre les volets qui contiennent `el` (lien profond, document, champ invalide). */
+    function openFoldOf(el) {
+        let d = el ? el.closest('details') : null;
+        while (d) {
+            if (!d.open && (d.classList.contains('kbf-fold') || d.classList.contains('kbf-subfold'))) d.open = true;
+            d = d.parentElement ? d.parentElement.closest('details') : null;
+        }
+    }
+
+    function syncFoldAll() {
+        if (!foldAllBtn) return;
+        const allOpen = foldEls.length > 0 && foldEls.every((d) => d.open);
+        foldAllBtn.setAttribute('aria-expanded', allOpen ? 'true' : 'false');
+        foldAllBtn.classList.toggle('is-open', allOpen);
+        const txt = foldAllBtn.querySelector('.kbf-fold-all-text');
+        if (txt) txt.textContent = allOpen ? t('Tout replier') : t('Tout déplier');
+    }
+
+    foldEls.forEach((d) => {
+        // Le clic précède la bascule : l'état retenu est celui d'après. Le
+        // clavier (Entrée, Espace) passe aussi par ce clic.
+        d.querySelector(':scope > summary')?.addEventListener('click', () => {
+            if (!foldMem) return;
+            foldMem.open[d.dataset.fold] = !d.open;
+            writeFoldMemory();
+        });
+        d.addEventListener('toggle', syncFoldAll);
+    });
+    foldAllBtn?.addEventListener('click', () => {
+        const open = !foldEls.every((d) => d.open);
+        foldEls.forEach((d) => {
+            d.open = open;
+            if (foldMem) foldMem.open[d.dataset.fold] = open;
+        });
+        writeFoldMemory();
+        syncFoldAll();
+    });
+
+    // Un champ invalide dans un volet replié ne pourrait pas prendre le focus.
+    form.addEventListener('invalid', (e) => openFoldOf(e.target), true);
+
+    // Lien profond vers une partie de la fiche (#kbSectionUse, #kbSyncFold…) :
+    // ses volets s'ouvrent. #conseils, #avance et #extraits-ID ont leur geste.
+    function openForHash() {
+        const id = location.hash.slice(1);
+        if (!id || id === 'conseils' || id === 'avance' || /^(?:extraits|document)-\d+$/.test(id)) return;
+        let el = null;
+        try { el = document.getElementById(decodeURIComponent(id)); } catch (_e) { return; }
+        if (!el || !el.closest('details.kbf-fold')) return;
+        openFoldOf(el);
+        if (el.matches('details')) el.open = true;
+        el.scrollIntoView({ block: 'start', behavior: reducedMotion() ? 'auto' : 'smooth' });
+    }
+    window.addEventListener('hashchange', openForHash);
+
+    // ── Résumés : une ligne par volet replié, recalculée à chaque geste ──
+    function writeSummary(box, items) {
+        if (!box) return;
+        const list = items.filter((x) => x && x.text);
+        box.innerHTML = '';
+        list.forEach((x) => {
+            const span = document.createElement('span');
+            span.className = 'kbf-sum-item' + (x.strong ? ' is-strong' : '');
+            if (x.tone) span.dataset.tone = x.tone;
+            span.textContent = x.text;
+            box.appendChild(span);
+        });
+        // Coupé par la largeur : le texte entier reste au survol.
+        box.title = list.map((x) => x.text).join(' · ');
+    }
+
+    function identitySummary() {
+        const name = (byId('kbName')?.value || '').trim();
+        const desc = (byId('kbDescription')?.value || '').trim();
+        return [{ text: name || t('Sans nom'), strong: true, tone: name ? '' : 'warn' }, { text: desc }];
+    }
+
+    function sourcesSummary() {
+        // Table permanente : ses lignes, ses colonnes, sa dernière
+        // modification — la ligne que le serveur a rendue (kb-table.js la
+        // tient à jour après chaque geste).
+        if (C.table) {
+            const zone = byId('kbTableSection');
+            const text = zone ? (zone.dataset.summary || '') : '';
+            return text ? [{ text, strong: true }] : [];
+        }
+        const items = [];
+        const pill = tilesBox ? tilesBox.querySelector('input[name="sync_provider"]:checked') : null;
+        const pillName = pill ? pill.closest('.kbf-pill')?.querySelector('.kbf-pill-name') : null;
+        if (pillName) items.push({ text: pillName.textContent.trim(), strong: true });
+        else if (!tilesBox) items.push({ text: t('Documentation de MIA'), strong: true });
+        if (headState && headState.textContent.trim() !== '') {
+            items.push({ text: headState.textContent.trim(), tone: headState.dataset.tone || '' });
+        }
+        if (!isLive()) {
+            // Base vide : son état (« Aucun document ») le dit déjà.
+            items.push({ text: C.create || currentDocs.length === 0 ? '' : tn(currentDocs.length, '{n} document', '{n} documents') });
+            if (adviceCount && !adviceCount.hidden && adviceCount.textContent.trim() !== '') {
+                items.push({ text: adviceCount.textContent.trim(), tone: 'advice' });
+            }
+        }
+        return items;
+    }
+
+    function useSummary() {
+        const items = [];
+        const radio = accessBox ? accessBox.querySelector('input[name="visibility"]:checked') : null;
+        if (radio) {
+            if (radio.value === 'common' && sharedBoxes().length > 0) {
+                const shared = sharedBoxes();
+                const groups = shared.filter((b) => b.dataset.shareTarget === 'group').length;
+                const people = shared.length - groups;
+                const parts = [];
+                if (groups) parts.push(tn(groups, '{n} groupe', '{n} groupes'));
+                if (people) parts.push(tn(people, '{n} personne', '{n} personnes'));
+                items.push(parts.length
+                    ? { text: t('Partagée avec {liste}', { liste: parts.join(', ') }), strong: true }
+                    : { text: t('Partagée — avec personne pour l’instant'), strong: true, tone: 'warn' });
+            } else {
+                const name = radio.closest('.kbx-acc')?.querySelector('b');
+                if (name) items.push({ text: name.textContent.trim(), strong: true });
+            }
+        } else if (C.system) {
+            items.push({ text: t('Sert tout le monde'), strong: true });
+        } else if (!C.owned) {
+            items.push({ text: t('Partagée avec vous'), strong: true });
+        }
+        if (!C.system) {
+            const n = assistantList ? assistantList.querySelectorAll('input[type="checkbox"]:checked').length : 0;
+            items.push({ text: n ? tn(n, '{n} assistant lié', '{n} assistants liés') : t('Aucun assistant lié') });
+        }
+        return items;
+    }
+
+    // Un lien de dossier sans nom connu : son site et son dernier segment
+    // (« drive.google.com › 1AbC… », « contoso.sharepoint.com › Contrats »).
+    function shortFolderRef(url) {
+        try {
+            const u = new URL(url);
+            const segs = u.pathname.split('/').filter(Boolean);
+            const last = segs.length ? decodeURIComponent(segs[segs.length - 1]) : '';
+            return last ? u.host + ' › ' + last : u.host;
+        } catch (_e) {
+            return url; // une adresse d'agenda, un identifiant collé
+        }
+    }
+
+    // Réglages du dossier (sous-volet de la question 2) : dossier, rythme, accès.
+    function syncFoldSummary() {
+        const p = selectedProvider();
+        if (!PROVIDER_META[p]) return [];
+        const url = syncUrl ? syncUrl.value.trim() : '';
+        let folder = '';
+        if (pickedName && pickedFor === p) folder = pickedName;
+        else if (p === saved.provider && url === saved.url && saved.folder) folder = saved.folder;
+        else if (url !== '') folder = shortFolderRef(url);
+        const items = [folder
+            ? { text: folder, strong: true }
+            : { text: t('Aucun dossier choisi'), strong: true, tone: 'warn' }];
+        items.push({ text: syncEnabled && syncEnabled.checked
+            ? t('automatique, toutes les {n} min', { n: Number(C.syncInterval) || 10 })
+            : t('synchronisation manuelle') });
+        if (canOwnerAuth(p)) {
+            if (selectedAuth() === 'owner') {
+                const other = !C.create && saved.auth === 'owner' && saved.owner !== '' && saved.owner !== C.userName && p === saved.provider;
+                items.push({ text: other ? t('avec la connexion de {nom}', { nom: saved.owner }) : t('avec votre connexion') });
+            } else {
+                items.push({ text: t('par la clé API globale') });
+            }
+        }
+        return items;
+    }
+
+    function refreshFoldSummaries() {
+        if (!foldsReady) return;
+        foldEls.forEach((d) => {
+            const box = d.querySelector(':scope > summary [data-fold-summary]');
+            const key = d.dataset.fold;
+            writeSummary(box, key === 'identity' ? identitySummary()
+                : key === 'sources' ? sourcesSummary()
+                : key === 'use' ? useSummary() : []);
+        });
+        writeSummary(byId('kbSyncFoldSum'), syncFoldSummary());
+    }
+    // Tout geste dans le formulaire (nom, source, partage, assistant…).
+    form.addEventListener('input', refreshFoldSummaries);
+    form.addEventListener('change', refreshFoldSummaries);
 
     // =====================================================================
     // Démarrage
@@ -1465,10 +2013,22 @@
     renderDocuments(currentDocs);
     renderPending();
     Status.start();
+    renderAssistantChips();
+    applyFoldMemory();
+    foldsReady = true;
+    refreshFoldSummaries();
+    // Table permanente : ses lignes changent par kb-table.js, qui le signale —
+    // le résumé de son volet suit.
+    document.addEventListener('mia:kb-table-changed', refreshFoldSummaries);
+    syncFoldAll();
+    openForHash();
     // Retour d'une réindexation (#avance) : la section revient ouverte.
     if (location.hash === '#avance' && advanced) {
         advanced.open = true;
         advanced.scrollIntoView({ block: 'start' });
     }
-    Diagram.render();
+    // Arrivée depuis la pastille « À améliorer » de la liste (#conseils).
+    if (location.hash === '#conseils') openAdvice();
+    // Lien vers un document (#document-ID, ou #extraits-ID) : sa fiche s'ouvre.
+    Drawer.openFromHash();
 })();

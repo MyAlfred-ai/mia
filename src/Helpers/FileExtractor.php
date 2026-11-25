@@ -5,11 +5,125 @@ declare(strict_types=1);
 class FileExtractor
 {
     /**
+     * Scripts (Windows, Unix, langages de script) : lus comme du TEXTE, jamais
+     * exécutés — MIA ne lit que leur contenu. Source unique, partagée par la
+     * détection (EXT_FORCED_MIME) et les sélecteurs de fichiers (chat, bases
+     * de connaissances). Sans elle, libmagic classe un .bat qui commence par
+     * `@echo off` en `text/x-msdos-batch` et l'envoi était refusé (« Type de
+     * fichier non supporté »), alors qu'un .bat sans cette ligne passait.
+     */
+    private const SCRIPTS = [
+        'bat' => 'text/plain', 'cmd' => 'text/plain',
+        'ps1' => 'text/plain', 'psm1' => 'text/plain', 'psd1' => 'text/plain',
+        'vbs' => 'text/plain',
+        'sh' => 'text/plain', 'bash' => 'text/plain', 'zsh' => 'text/plain',
+        'ksh' => 'text/plain', 'fish' => 'text/plain',
+        'py' => 'text/plain', 'rb' => 'text/plain', 'pl' => 'text/plain',
+        'lua' => 'text/plain',
+    ];
+
+    /**
+     * Autres formats TEXTE reconnus à leur extension, lus tels quels : balisage,
+     * données, configuration, sous-titres, agendas, contacts, différences,
+     * langages de programmation. Comme pour les scripts, une extension texte
+     * n'est crue que si le contenu en est (looksLikeText) — et un fichier texte
+     * d'extension inconnue, ou sans extension, est reconnu à son CONTENU
+     * (promoteText) : cette liste ne sert qu'à trancher quand libmagic hésite
+     * et à garnir les sélecteurs de fichiers.
+     */
+    private const TEXT_FORMATS = [
+        // Balisage, documentation
+        'tex' => 'text/plain', 'latex' => 'text/plain', 'sty' => 'text/plain', 'bib' => 'text/plain',
+        'rst' => 'text/plain', 'adoc' => 'text/plain', 'asciidoc' => 'text/plain', 'org' => 'text/plain',
+        'textile' => 'text/plain', 'text' => 'text/plain', 'nfo' => 'text/plain',
+        'svg' => 'text/plain', 'xsd' => 'text/plain', 'xsl' => 'text/plain', 'xslt' => 'text/plain',
+        'dtd' => 'text/plain', 'wsdl' => 'text/plain', 'rss' => 'text/plain', 'atom' => 'text/plain',
+        'opml' => 'text/plain', 'xliff' => 'text/plain', 'xlf' => 'text/plain', 'po' => 'text/plain',
+        'pot' => 'text/plain', 'resx' => 'text/plain', 'strings' => 'text/plain',
+        // Données
+        'ndjson' => 'text/plain', 'jsonl' => 'text/plain', 'geojson' => 'text/plain', 'gpx' => 'text/plain',
+        'kml' => 'text/plain', 'ipynb' => 'text/plain', 'plist' => 'text/plain',
+        // Agendas, contacts, sous-titres, différences
+        'ics' => 'text/plain', 'ifb' => 'text/plain', 'vcf' => 'text/plain', 'vcard' => 'text/plain',
+        'srt' => 'text/plain', 'vtt' => 'text/plain', 'ass' => 'text/plain', 'ssa' => 'text/plain',
+        'diff' => 'text/plain', 'patch' => 'text/plain',
+        // Configuration
+        'cfg' => 'text/plain', 'properties' => 'text/plain', 'tfvars' => 'text/plain', 'hcl' => 'text/plain',
+        'tf' => 'text/plain', 'gitignore' => 'text/plain', 'dockerignore' => 'text/plain',
+        'editorconfig' => 'text/plain', 'htaccess' => 'text/plain', 'npmrc' => 'text/plain',
+        // Langages
+        'swift' => 'text/plain', 'scala' => 'text/plain', 'groovy' => 'text/plain', 'gradle' => 'text/plain',
+        'dart' => 'text/plain', 'r' => 'text/plain', 'jl' => 'text/plain', 'm' => 'text/plain',
+        'mm' => 'text/plain', 'ex' => 'text/plain', 'exs' => 'text/plain', 'erl' => 'text/plain',
+        'hrl' => 'text/plain', 'hs' => 'text/plain', 'clj' => 'text/plain', 'cljs' => 'text/plain',
+        'lisp' => 'text/plain', 'el' => 'text/plain', 'vim' => 'text/plain', 'proto' => 'text/plain',
+        'graphql' => 'text/plain', 'gql' => 'text/plain', 'mk' => 'text/plain', 'cmake' => 'text/plain',
+        'asm' => 'text/plain', 's' => 'text/plain', 'vb' => 'text/plain', 'bas' => 'text/plain',
+        'f90' => 'text/plain', 'pas' => 'text/plain', 'coffee' => 'text/plain', 'sass' => 'text/plain',
+        'styl' => 'text/plain', 'vue' => 'text/plain', 'svelte' => 'text/plain', 'astro' => 'text/plain',
+        'pug' => 'text/plain', 'twig' => 'text/plain', 'hbs' => 'text/plain', 'mustache' => 'text/plain',
+        'ejs' => 'text/plain', 'erb' => 'text/plain', 'j2' => 'text/plain', 'jinja' => 'text/plain',
+    ];
+
+    /**
+     * Types MIME de TEXTE hors de la famille text/* : un fichier qui les porte
+     * (ou porte un type texte que MIA n'a pas de lecteur dédié pour) est lu
+     * comme du texte brut, à condition que son contenu en soit
+     * (isReadableText). Les suffixes +xml et +json valent aussi texte.
+     */
+    private const TEXTUAL_MIMES = [
+        'application/json', 'application/ld+json', 'application/x-ndjson', 'application/xml',
+        'application/x-yaml', 'application/yaml', 'application/toml', 'application/javascript',
+        'application/x-javascript', 'application/ecmascript', 'application/x-sh', 'application/x-shellscript',
+        'application/x-csh', 'application/x-perl', 'application/x-php', 'application/x-httpd-php',
+        'application/x-python', 'application/x-ruby', 'application/x-tex', 'application/x-latex',
+        'application/x-bibtex', 'application/x-subrip', 'application/sql', 'application/x-sql',
+        'application/csv', 'application/x-wine-extension-ini', 'application/x-desktop',
+        'application/x-ipynb+json',
+    ];
+
+    /** Étiquettes « type inconnu » : seul le contenu peut trancher. */
+    private const GENERIC_MIMES = ['', 'application/octet-stream', 'application/unknown', 'binary/octet-stream'];
+
+    /**
+     * Étiquettes que libmagic pose sur un conteneur OLE (anciens Office) : la
+     * bonne (application/msword, application/vnd.ms-excel), mais aussi des
+     * génériques (CDFV2, x-ole-storage) selon sa version et le fichier. Les
+     * flux du conteneur tranchent (LegacyOffice::kind).
+     */
+    private const OLE_MIMES = [
+        'application/msword',
+        'application/vnd.ms-excel',
+        'application/vnd.ms-powerpoint',
+        'application/vnd.ms-outlook',
+        'application/vnd.ms-office',
+        'application/x-ole-storage',
+        'application/CDFV2',
+        'application/CDFV2-unknown',
+        'application/CDFV2-corrupt',
+        'application/octet-stream',
+        '',
+    ];
+
+    /** Extensions d'un conteneur OLE : le conteneur est ouvert même si libmagic hésite. */
+    private const OLE_EXTENSIONS = ['doc', 'dot', 'xls', 'xlt', 'ppt', 'pps', 'pot', 'msg'];
+
+    /** Nature d'un conteneur OLE (LegacyOffice::kind) → type lu. */
+    private const OLE_KINDS = [
+        'doc' => LegacyOffice::MIME_DOC,
+        'xls' => LegacyOffice::MIME_XLS,
+        'ppt' => LegacyOffice::MIME_PPT,
+        'msg' => MailFile::MIME_MSG,
+    ];
+
+    /**
      * Extensions → MIME canonique forcé (cf. detectMime). Couvre les formats où
      * libmagic est ambigu : conteneurs ZIP (OOXML/ODF/EPUB) et fichiers texte
      * (code, données structurées) souvent vus comme application/zip ou text/plain.
      */
     private const EXT_FORCED_MIME = [
+        ...self::SCRIPTS,
+        ...self::TEXT_FORMATS,
         // Web / texte enrichi
         'html' => 'text/html', 'htm' => 'text/html',
         'rtf'  => 'application/rtf',
@@ -32,6 +146,7 @@ class FileExtractor
         'ods'  => 'application/vnd.oasis.opendocument.spreadsheet',
         'odp'  => 'application/vnd.oasis.opendocument.presentation',
         'epub' => 'application/epub+zip',
+        'eml'  => MailFile::MIME_EML,
     ];
 
     /**
@@ -57,11 +172,27 @@ class FileExtractor
         }
 
         // Extension fiable (upload admin) + libmagic ambigu → MIME canonique forcé.
+        // Un fichier « texte » par son extension doit l'être aussi par son
+        // contenu : un exécutable renommé en .bat retombe sur le verdict de
+        // libmagic (et se fait refuser) au lieu d'être lu comme du texte.
         if (isset(self::EXT_FORCED_MIME[$clientExt])) {
-            return self::EXT_FORCED_MIME[$clientExt];
+            $forced = self::EXT_FORCED_MIME[$clientExt];
+            if (!in_array($forced, ['text/plain', MailFile::MIME_EML], true) || self::looksLikeText($path)) {
+                return $forced;
+            }
         }
 
         $mime = (string)(@mime_content_type($path) ?: '');
+
+        // Word, Excel et PowerPoint 97-2003, emails Outlook : d'après les flux
+        // du conteneur, pas l'étiquette — un .doc renommé .xls se lit pour ce
+        // qu'il est.
+        if (in_array($mime, self::OLE_MIMES, true) || in_array($clientExt, self::OLE_EXTENSIONS, true)) {
+            $legacy = self::OLE_KINDS[LegacyOffice::kind($path) ?? ''] ?? null;
+            if ($legacy !== null) {
+                return $legacy;
+            }
+        }
 
         $ambiguous = [
             'application/zip',
@@ -74,6 +205,10 @@ class FileExtractor
             $refined = self::detectOfficeOpenXmlMime($path);
             if ($refined !== null) {
                 return $refined;
+            }
+            // Une vraie archive ZIP (ni Office, ni OpenDocument, ni EPUB) : son contenu se lit.
+            if ($mime !== '' && $mime !== 'application/octet-stream') {
+                return ArchiveReader::MIME;
             }
         }
 
@@ -94,7 +229,433 @@ class FileExtractor
             }
         }
 
+        return self::promoteText($path, $mime);
+    }
+
+    /**
+     * Un fichier que MIA n'a pas de lecteur pour, mais dont le CONTENU est du
+     * texte, se lit comme du texte brut — quelle que soit son extension, et
+     * même sans extension (journal, export, code, iCalendar, vCard, LaTeX…).
+     * Le type annoncé ne décide que du droit d'essayer (texte, +xml, +json,
+     * ou type inconnu) ; le contenu tranche. Un binaire n'est jamais « lu »
+     * comme du texte : il en sortirait une bouillie qui coûte et égare.
+     * Les emails (message/*) attendent leur lecteur dédié.
+     */
+    private static function promoteText(string $path, string $mime): string
+    {
+        if (self::isExtractable($mime) || str_starts_with($mime, 'message/')) {
+            return $mime;
+        }
+        if ($mime === 'application/xhtml+xml') {
+            return 'text/html';
+        }
+        if ((in_array($mime, self::GENERIC_MIMES, true) || self::isTextualMime($mime)) && self::isReadableTextFile($path)) {
+            return 'text/plain';
+        }
         return $mime;
+    }
+
+    /** Un lecteur de MIA sait-il tirer le contenu de ce type ? Miroir d'extract(). */
+    public static function isExtractable(string $mime): bool
+    {
+        return in_array($mime, [
+            'text/plain', 'text/markdown', 'text/html', 'application/rtf', 'text/rtf',
+            LegacyOffice::MIME_DOC, LegacyOffice::MIME_XLS, LegacyOffice::MIME_PPT,
+            MailFile::MIME_EML, MailFile::MIME_MSG, ArchiveReader::MIME, 'application/epub+zip', 'application/pdf',
+            'image/jpeg', 'image/png', 'image/gif', 'image/webp',
+        ], true)
+            || str_contains($mime, 'wordprocessingml')
+            || str_contains($mime, 'spreadsheetml')
+            || str_contains($mime, 'presentationml')
+            || str_contains($mime, 'opendocument');
+    }
+
+    /**
+     * Ce type annonce-t-il du texte ? text/* (hors HTML et RTF, qui ont leur
+     * lecteur), les types texte de TEXTUAL_MIMES, les suffixes +xml et +json.
+     * Pure : le contenu doit encore le confirmer (isReadableText).
+     */
+    public static function isTextualMime(string $mime): bool
+    {
+        $mime = strtolower(trim(explode(';', $mime)[0]));
+        if ($mime === '' || str_starts_with($mime, 'message/')) {
+            return false;
+        }
+        return str_starts_with($mime, 'text/')
+            || in_array($mime, self::TEXTUAL_MIMES, true)
+            || str_ends_with($mime, '+xml')
+            || str_ends_with($mime, '+json');
+    }
+
+    /**
+     * Ces octets sont-ils du texte qu'un modèle peut lire ? UTF-16 reconnu ;
+     * sinon aucun octet nul et presque aucun caractère de contrôle (1 % au
+     * plus : un journal peut porter des codes de couleur). Un binaire (archive,
+     * image, exécutable) porte des octets nuls dès ses premiers kilo-octets.
+     * Pure.
+     */
+    public static function isReadableText(string $sample): bool
+    {
+        if ($sample === '') {
+            return false;
+        }
+        if (self::utf16Order($sample) !== null) {
+            return true;
+        }
+        if (str_contains($sample, "\0")) {
+            return false;
+        }
+        $controls = preg_match_all('/[\x01-\x08\x0E-\x1A\x1C-\x1F\x7F]/', $sample);
+        return $controls <= max(2, (int)floor(strlen($sample) * 0.01));
+    }
+
+    /** isReadableText sur le début d'un fichier (64 Ko). */
+    public static function isReadableTextFile(string $path): bool
+    {
+        $sample = @file_get_contents($path, false, null, 0, 65536);
+        return is_string($sample) && self::isReadableText($sample);
+    }
+
+    /**
+     * Extensions de documents reconnues quand un service n'annonce qu'un type
+     * générique (pièce jointe en `application/octet-stream`, fichier Drive).
+     */
+    private const DOCUMENT_EXTENSIONS = [
+        'pdf'  => 'application/pdf',
+        'docx' => 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        'xlsx' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        'doc'  => LegacyOffice::MIME_DOC,
+        'xls'  => LegacyOffice::MIME_XLS,
+        'ppt'  => LegacyOffice::MIME_PPT, 'pps' => LegacyOffice::MIME_PPT,
+        'msg'  => MailFile::MIME_MSG,
+        'eml'  => MailFile::MIME_EML,
+        'zip'  => ArchiveReader::MIME,
+        'md'   => 'text/markdown', 'markdown' => 'text/markdown',
+        'txt'  => 'text/plain',
+    ];
+
+    /** Types « à télécharger » que certains serveurs annoncent à la place du vrai. */
+    private const DOWNLOAD_MIMES = ['application/x-download', 'application/download', 'application/force-download'];
+
+    /**
+     * Extensions de binaires qu'aucun lecteur ne lit : sous un type générique,
+     * on ne les tente pas en texte (le refus nomme le format).
+     */
+    private const BINARY_EXTENSIONS = [
+        'png', 'jpg', 'jpeg', 'gif', 'webp', 'heic', 'heif', 'tif', 'tiff', 'bmp', 'ico',
+        '7z', 'rar', 'gz', 'tgz', 'bz2', 'xz', 'tar',
+        'exe', 'dll', 'msi', 'dmg', 'pkg', 'apk', 'iso', 'bin',
+        'mp3', 'wav', 'm4a', 'ogg', 'flac', 'mp4', 'mov', 'avi', 'mkv', 'webm',
+        'key', 'pages', 'numbers',
+    ];
+
+    /**
+     * Comment lire un fichier qu'un SERVICE décrit (pièce jointe d'email,
+     * fichier Drive, page web) par son type et son nom, avant d'en avoir les
+     * octets : le type à passer à extract(), ou null s'il ne se lit pas (image,
+     * archive, binaire connu). Pure.
+     *
+     *  - un type que MIA lit (Office, OpenDocument, EPUB, PDF, RTF, HTML,
+     *    Markdown, texte) se lit tel quel ;
+     *  - un type texte sans lecteur dédié (CSV, JSON, XML, code, iCalendar…)
+     *    se lit en text/plain ;
+     *  - un type GÉNÉRIQUE (octet-stream, vide) suit l'extension, et à défaut
+     *    se TENTE en text/plain : le contenu tranche (`isReadableText`).
+     *
+     * Quand la réponse est text/plain, l'appelant DOIT vérifier les octets
+     * (`isReadableText`) : un binaire n'est jamais « lu » comme du texte.
+     */
+    public static function readerFor(string $mime, string $name = ''): ?string
+    {
+        $mime = strtolower(trim(explode(';', $mime)[0]));
+        $ext  = strtolower(pathinfo($name, PATHINFO_EXTENSION));
+        if ($mime === 'application/xhtml+xml') {
+            return 'text/html';
+        }
+        if (in_array($mime, self::GENERIC_MIMES, true) || in_array($mime, self::DOWNLOAD_MIMES, true)) {
+            $byExt = self::DOCUMENT_EXTENSIONS[$ext] ?? self::EXT_FORCED_MIME[$ext] ?? null;
+            if ($byExt !== null) {
+                return $byExt;
+            }
+            return in_array($ext, self::BINARY_EXTENSIONS, true) ? null : 'text/plain';
+        }
+        if (str_starts_with($mime, 'image/')) {
+            return null;
+        }
+        if ($mime === 'text/rtf') {
+            return 'application/rtf';
+        }
+        if (self::isExtractable($mime)) {
+            return $mime;
+        }
+        if (self::isTextualMime($mime) || self::hasTextExtension($name)) {
+            return 'text/plain';
+        }
+        return null;
+    }
+
+    /**
+     * Ce nom de fichier porte-t-il une extension de texte (scripts, données,
+     * code, balisage…) ? Pour les sources qui ne donnent qu'un type générique
+     * (pièces jointes d'email, Drive) : le contenu tranche ensuite.
+     */
+    public static function hasTextExtension(string $name): bool
+    {
+        $ext = strtolower(pathinfo($name, PATHINFO_EXTENSION));
+        return in_array($ext, ['txt', 'md', 'markdown'], true)
+            || (self::EXT_FORCED_MIME[$ext] ?? null) === 'text/plain';
+    }
+
+    /**
+     * Extensions des fichiers lus comme du texte (scripts, données, code,
+     * balisage…), pour les sélecteurs de fichiers. Même liste que la
+     * détection : ce qu'un sélecteur propose, le serveur l'accepte.
+     *
+     * @return list<string>
+     */
+    public static function textExtensions(): array
+    {
+        $out = [];
+        foreach (self::EXT_FORCED_MIME as $ext => $mime) {
+            if ($mime === 'text/plain') {
+                $out[] = '.' . $ext;
+            }
+        }
+        return array_values(array_unique($out));
+    }
+
+    /**
+     * Refus présentable d'un fichier que MIA ne sait pas lire : le format reçu,
+     * et ce qu'elle lit. Partagé par le chat, les workflows, les bases et les
+     * documents d'assistant.
+     */
+    public static function unsupportedMessage(string $name, string $mime): string
+    {
+        if (in_array($mime, ['application/x-empty', 'inode/x-empty'], true)) {
+            return t('« {nom} » est vide.', ['nom' => $name]);
+        }
+        $ext  = strtolower(pathinfo($name, PATHINFO_EXTENSION));
+        $type = $ext !== '' ? '.' . $ext : ($mime !== '' ? $mime : t('type inconnu'));
+        return t('MIA ne sait pas lire « {nom} » ({type}). Elle lit les PDF, Word, Excel, PowerPoint, OpenDocument, EPUB, RTF, pages web, emails (.eml, .msg), archives ZIP, images et tout fichier texte (code, données, journaux…).', [
+            'nom'  => $name,
+            'type' => $type,
+        ]);
+    }
+
+    /** Type MIME d'un PDF et d'une présentation PowerPoint, clés de UPLOAD_LIMITS. */
+    public const MIME_PDF  = 'application/pdf';
+    public const MIME_PPTX = 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
+
+    /**
+     * Poids maximal d'un fichier joint (chat, départ d'un workflow), selon sa
+     * nature ; tout autre type est borné à UPLOAD_MAX_SIZE.
+     *
+     *  - PDF : 20 Mo. Il part ENTIER au modèle (images et mise en page
+     *    comprises), encodé en base64 dans le message : un tiers de plus à
+     *    stocker, à garder en mémoire et à envoyer à chaque tour. Plus lourd,
+     *    il dépasserait les 64 Mo qu'accepte MySQL en une écriture et la
+     *    mémoire de PHP.
+     *  - PowerPoint (.pptx) : 50 Mo. Seul son texte est lu, les images restent
+     *    sur le disque : le poids du fichier ne pèse sur rien d'autre.
+     *
+     * Le plafond PHP (upload_max_filesize, Dockerfile) doit rester AU MOINS
+     * égal au plus grand d'entre eux, post_max_size un peu au-dessus.
+     */
+    public const UPLOAD_LIMITS = [
+        self::MIME_PDF  => 20 * 1024 * 1024,
+        self::MIME_PPTX => 50 * 1024 * 1024,
+    ];
+
+    public static function uploadLimit(string $mime): int
+    {
+        return self::UPLOAD_LIMITS[$mime] ?? UPLOAD_MAX_SIZE;
+    }
+
+    public static function largestUploadLimit(): int
+    {
+        return max(UPLOAD_MAX_SIZE, ...array_values(self::UPLOAD_LIMITS));
+    }
+
+    /** Nature d'un fichier pour sa limite, d'après son type ou à défaut son extension. */
+    public static function uploadKind(string $mime, string $name = ''): string
+    {
+        $ext = strtolower(pathinfo($name, PATHINFO_EXTENSION));
+        if ($mime === self::MIME_PDF || ($mime === '' && $ext === 'pdf')) {
+            return 'pdf';
+        }
+        if ($mime === self::MIME_PPTX || ($mime === '' && $ext === 'pptx')) {
+            return 'pptx';
+        }
+        return 'other';
+    }
+
+    /** « 20 Mo » : une limite s'écrit sans décimale. */
+    public static function limitLabel(int $bytes): string
+    {
+        return preg_replace('/[,.]0 /', ' ', Format::sizeMo($bytes)) ?? Format::sizeMo($bytes);
+    }
+
+    /**
+     * Refus présentable d'un fichier trop lourd : ce qu'il pèse, la limite de
+     * SA nature et pourquoi elle existe, et quoi faire. $size null = poids
+     * inconnu (fichier arrêté par PHP avant d'arriver).
+     */
+    public static function tooLargeMessage(string $name, string $mime, ?int $size): string
+    {
+        $kind = self::uploadKind($mime, $name);
+        $head = $size !== null && $size > 0
+            ? t('« {nom} » pèse {taille} :', ['nom' => $name, 'taille' => Format::sizeMo($size)])
+            : t('« {nom} » est trop lourd :', ['nom' => $name]);
+        return $head . ' ' . self::tooLargeRules()[$kind];
+    }
+
+    /**
+     * Explication de la limite, par nature (pdf, pptx, other). Partagée avec le
+     * navigateur (clientUploadLimits), qui refuse un fichier trop lourd avant
+     * de l'envoyer.
+     *
+     * @return array{pdf: string, pptx: string, other: string}
+     */
+    public static function tooLargeRules(): array
+    {
+        return [
+            'pdf' => t('un PDF ne peut pas dépasser {max}. MIA envoie le PDF entier au modèle, pour qu’il en voie aussi les images et la mise en page : plus lourd, il ne passerait pas. Réduisez sa taille (fonction « Réduire la taille » ou « Optimiser » de votre lecteur PDF) ou découpez-le en plusieurs parties.', [
+                'max' => self::limitLabel(self::UPLOAD_LIMITS[self::MIME_PDF]),
+            ]),
+            'pptx' => t('une présentation PowerPoint ne peut pas dépasser {max}. Compressez ses images (dans PowerPoint : Fichier, puis Compresser les images) ou retirez-en les vidéos, puis joignez-la à nouveau.', [
+                'max' => self::limitLabel(self::UPLOAD_LIMITS[self::MIME_PPTX]),
+            ]),
+            'other' => t('ce type de fichier ne peut pas dépasser {max} ({pdf} pour un PDF, {pptx} pour une présentation PowerPoint). Réduisez-le ou découpez-le en plusieurs parties.', [
+                'max'  => self::limitLabel(UPLOAD_MAX_SIZE),
+                'pdf'  => self::limitLabel(self::UPLOAD_LIMITS[self::MIME_PDF]),
+                'pptx' => self::limitLabel(self::UPLOAD_LIMITS[self::MIME_PPTX]),
+            ]),
+        ];
+    }
+
+    /**
+     * Limites et messages pour le navigateur (window.FILE_UPLOAD_LIMITS) : il
+     * refuse un fichier trop lourd AVANT de l'envoyer — inutile de faire
+     * monter 80 Mo pour se l'entendre dire. Le serveur reste juge.
+     *
+     * @return array<string, mixed>
+     */
+    public static function clientUploadLimits(): array
+    {
+        return [
+            'limits' => [
+                'pdf'   => self::UPLOAD_LIMITS[self::MIME_PDF],
+                'pptx'  => self::UPLOAD_LIMITS[self::MIME_PPTX],
+                'other' => UPLOAD_MAX_SIZE,
+            ],
+            'head'  => t('« {nom} » pèse {taille} :'),
+            'rules' => self::tooLargeRules(),
+            'unit'  => I18n::locale() === 'en' ? 'MB' : 'Mo',
+            'decimal' => I18n::locale() === 'en' ? '.' : ',',
+        ];
+    }
+
+    /**
+     * Extensions des scripts lus comme du texte (`.bat`, `.ps1`…), pour les
+     * sélecteurs de fichiers. Même liste que la détection : ce qu'un
+     * sélecteur propose, le serveur l'accepte.
+     *
+     * @return list<string>
+     */
+    public static function scriptExtensions(): array
+    {
+        return array_map(static fn(string $ext): string => '.' . $ext, array_keys(self::SCRIPTS));
+    }
+
+    /**
+     * Le contenu est-il du texte ? Un octet nul n'apparaît dans aucun texte
+     * en UTF-8 ni en Windows-1252 ; il est en revanche partout en UTF-16, que
+     * Windows emploie volontiers (PowerShell ISE, Bloc-notes « Unicode ») :
+     * BOM UTF-16, ou octets nuls d'un seul côté des paires, valent texte.
+     * Fichier illisible : rien ne s'y oppose (le reste de l'envoi tranchera).
+     */
+    public static function looksLikeText(string $path): bool
+    {
+        $sample = @file_get_contents($path, false, null, 0, 8192);
+        if (!is_string($sample) || !str_contains($sample, "\0")) {
+            return true;
+        }
+        return self::utf16Order($sample) !== null;
+    }
+
+    /**
+     * Ordre des octets d'un texte UTF-16 (BOM, sinon octets nuls réguliers
+     * d'un côté des paires — un texte latin en UTF-16 sans BOM), ou null.
+     */
+    private static function utf16Order(string $bytes): ?string
+    {
+        if (str_starts_with($bytes, "\xFF\xFE")) {
+            return 'UTF-16LE';
+        }
+        if (str_starts_with($bytes, "\xFE\xFF")) {
+            return 'UTF-16BE';
+        }
+        $pairs = intdiv(strlen($bytes), 2);
+        if ($pairs < 2) {
+            return null;
+        }
+        $evenNul = 0;
+        $oddNul  = 0;
+        for ($i = 0; $i < $pairs * 2; $i += 2) {
+            if ($bytes[$i] === "\0") {
+                $evenNul++;
+            }
+            if ($bytes[$i + 1] === "\0") {
+                $oddNul++;
+            }
+        }
+        // Texte latin : l'octet de poids fort est nul presque partout, l'autre
+        // jamais. Un binaire a des nuls des deux côtés.
+        if ($oddNul >= 0.6 * $pairs && $evenNul <= 0.05 * $pairs) {
+            return 'UTF-16LE';
+        }
+        if ($evenNul >= 0.6 * $pairs && $oddNul <= 0.05 * $pairs) {
+            return 'UTF-16BE';
+        }
+        return null;
+    }
+
+    /**
+     * Texte d'un fichier lu tel quel, rendu en UTF-8 valide : BOM UTF-8 retiré,
+     * UTF-16 décodé, sinon Windows-1252 (le « ANSI » du Bloc-notes français)
+     * quand les octets ne sont pas de l'UTF-8 ; fins de ligne Windows ramenées
+     * à « \n ». Un texte non converti ferait échouer l'encodage JSON du
+     * message (fichiers joints) ou l'écriture des extraits (bases).
+     */
+    public static function decodeText(string $raw): string
+    {
+        if (str_starts_with($raw, "\xEF\xBB\xBF")) {
+            $raw = substr($raw, 3);
+        } elseif (($order = self::utf16Order(substr($raw, 0, 8192))) !== null) {
+            if (str_starts_with($raw, "\xFF\xFE") || str_starts_with($raw, "\xFE\xFF")) {
+                $raw = substr($raw, 2);
+            }
+            $decoded = @mb_convert_encoding($raw, 'UTF-8', $order);
+            $raw = is_string($decoded) ? $decoded : '';
+        }
+        if (!mb_check_encoding($raw, 'UTF-8')) {
+            $converted = @mb_convert_encoding($raw, 'UTF-8', 'Windows-1252');
+            $raw = is_string($converted) ? $converted : mb_scrub($raw, 'UTF-8');
+        }
+        $raw = str_replace(["\r\n", "\r"], "\n", $raw);
+        // Octets nuls et contrôles invisibles : rien à lire, et MySQL comme
+        // json_encode s'en passent volontiers. Tabulations et sauts gardés.
+        return preg_replace('/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/u', '', $raw) ?? $raw;
+    }
+
+    private static function extractPlainText(string $path): ?string
+    {
+        $raw = @file_get_contents($path);
+        if (!is_string($raw) || $raw === '') {
+            return null;
+        }
+        $text = self::decodeText($raw);
+        return $text !== '' ? $text : null;
     }
 
     private static function detectOfficeOpenXmlMime(string $path): ?string
@@ -148,6 +709,19 @@ class FileExtractor
         'text/markdown'   => ['.md'],
         'application/vnd.openxmlformats-officedocument.wordprocessingml.document' => ['.docx'],
         'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'       => ['.xlsx'],
+        LegacyOffice::MIME_DOC => ['.doc'],
+        LegacyOffice::MIME_XLS => ['.xls'],
+        LegacyOffice::MIME_PPT => ['.ppt', '.pps'],
+        MailFile::MIME_EML     => ['.eml'],
+        MailFile::MIME_MSG     => ['.msg'],
+        ArchiveReader::MIME    => ['.zip'],
+        'application/vnd.openxmlformats-officedocument.presentationml.presentation' => ['.pptx'],
+        'application/vnd.oasis.opendocument.text'         => ['.odt'],
+        'application/vnd.oasis.opendocument.spreadsheet'  => ['.ods'],
+        'application/vnd.oasis.opendocument.presentation' => ['.odp'],
+        'application/epub+zip' => ['.epub'],
+        'text/html'            => ['.html', '.htm'],
+        'application/rtf'      => ['.rtf'],
     ];
 
     /**
@@ -198,7 +772,16 @@ class FileExtractor
         );
         $extensions = [];
         foreach ($ordered as $mime) {
-            foreach (self::MIME_EXTENSIONS[$mime] ?? [] as $ext) {
+            $mimeExtensions = self::MIME_EXTENSIONS[$mime] ?? [];
+            if ($mime === 'text/plain') {
+                // Scripts, données, code, balisage sont lus comme du texte :
+                // accepter le texte, c'est les accepter (un sélecteur de
+                // bureau filtre par extension). Un fichier texte d'extension
+                // inconnue reste accepté par glisser-déposer : le serveur le
+                // reconnaît à son contenu.
+                $mimeExtensions = array_merge($mimeExtensions, self::textExtensions());
+            }
+            foreach ($mimeExtensions as $ext) {
                 if (!in_array($ext, $extensions, true)) {
                     $extensions[] = $ext;
                 }
@@ -210,11 +793,17 @@ class FileExtractor
     public static function extract(string $filePath, string $mimeType): ?string
     {
         return match(true) {
-            $mimeType === 'text/plain'                      => @file_get_contents($filePath) ?: null,
-            $mimeType === 'text/markdown'                   => @file_get_contents($filePath) ?: null,
+            $mimeType === 'text/plain',
+            $mimeType === 'text/markdown'                   => self::extractPlainText($filePath),
             $mimeType === 'text/html'                       => self::extractHtml($filePath),
             $mimeType === 'application/rtf',
             $mimeType === 'text/rtf'                         => self::extractRtf($filePath),
+            $mimeType === LegacyOffice::MIME_DOC            => self::cleaned(LegacyOffice::docText($filePath)),
+            $mimeType === LegacyOffice::MIME_XLS            => self::cleaned(LegacyOffice::xlsText($filePath)),
+            $mimeType === LegacyOffice::MIME_PPT            => self::cleaned(LegacyOffice::pptText($filePath)),
+            $mimeType === MailFile::MIME_EML                => self::cleaned(MailFile::emlText($filePath)),
+            $mimeType === MailFile::MIME_MSG                => self::cleaned(MailFile::msgText($filePath)),
+            $mimeType === ArchiveReader::MIME               => self::cleaned(ArchiveReader::zipText($filePath)),
             str_contains($mimeType, 'wordprocessingml')     => self::extractDocx($filePath),
             str_contains($mimeType, 'spreadsheetml')        => self::extractXlsx($filePath),
             str_contains($mimeType, 'presentationml')       => self::extractPptx($filePath),
@@ -226,6 +815,15 @@ class FileExtractor
         };
     }
 
+    private static function cleaned(?string $text): ?string
+    {
+        if ($text === null) {
+            return null;
+        }
+        $text = self::cleanText($text);
+        return $text !== '' ? $text : null;
+    }
+
     private static function extractHtml(string $path): ?string
     {
         $raw = @file_get_contents($path);
@@ -233,6 +831,26 @@ class FileExtractor
             return null;
         }
         return self::cleanText(self::htmlToText($raw));
+    }
+
+    /** HTML (corps d'un email) → texte nettoyé. */
+    public static function htmlToPlain(string $html): string
+    {
+        return self::cleanText(self::htmlToText($html));
+    }
+
+    /** RTF (corps d'un email Outlook) → texte nettoyé, même lecture que les fichiers .rtf. */
+    public static function rtfToPlain(string $rtf): string
+    {
+        $tmp = tempnam(sys_get_temp_dir(), 'mia_rtf_');
+        if ($tmp === false || @file_put_contents($tmp, $rtf) === false) {
+            return '';
+        }
+        try {
+            return (string)self::extractRtf($tmp);
+        } finally {
+            @unlink($tmp);
+        }
     }
 
     /** Convertit un fragment HTML en texte : retire script/style, garde les sauts. */
@@ -484,7 +1102,14 @@ class FileExtractor
             return null;
         }
         try {
-            $parser = new \Smalot\PdfParser\Parser();
+            // Ni les images (elles ne portent aucun texte : un scan de vingt
+            // pages, gardé et décompressé en mémoire, dépasse les 256 Mo de
+            // PHP — erreur fatale que rien ne rattrape), ni un flux décompressé
+            // au-delà de la borne du repli.
+            $config = new \Smalot\PdfParser\Config();
+            $config->setRetainImageContent(false);
+            $config->setDecodeMemoryLimit(self::PDF_STREAM_INFLATE_MAX);
+            $parser = new \Smalot\PdfParser\Parser([], $config);
             $pdf    = $parser->parseFile($path);
             $text   = $pdf->getText();
             return is_string($text) && $text !== '' ? $text : null;
@@ -524,25 +1149,96 @@ class FileExtractor
      * Fallback natif PHP : extrait les chaînes encapsulées dans les flux PDF
      * (opérateurs Tj, TJ). Pas parfait pour les PDF complexes / compressés lourds,
      * mais suffisant pour la majorité des PDF texte bureautiques.
+     *
+     * Lu FLUX PAR FLUX, jamais d'un bloc : c'est le dernier recours, appelé
+     * justement quand les deux autres n'ont trouvé aucun texte — un PDF
+     * scanné, fait d'images. L'ancienne version décompressait TOUS les flux
+     * FlateDecode d'un coup dans une copie du fichier : une page A4 numérisée
+     * pèse 26 Mo une fois décompressée, et un scan de quelques pages épuisait
+     * les 256 Mo de PHP (erreur fatale, envoi en échec 500, constaté chez
+     * un client le 2026-10-29). Les images, polices et index ne contiennent
+     * jamais de texte : ils sont écartés AVANT d'être recopiés, et ce qui
+     * reste est décompressé dans des bornes (PDF_STREAM_INFLATE_MAX par flux,
+     * PDF_FALLBACK_BUDGET en tout).
      */
     private static function extractPdfFallback(string $path): ?string
     {
         $raw = @file_get_contents($path);
         if ($raw === false || $raw === '') return null;
 
-        // Décompresse les flux FlateDecode si possible.
-        $decoded = preg_replace_callback(
-            '#<<[^>]*?/Filter\s*/FlateDecode[^>]*?>>\s*stream\r?\n(.*?)\r?\nendstream#s',
-            static function (array $m): string {
-                $data = @gzuncompress($m[1]);
-                return $data !== false ? $data : $m[1];
-            },
-            $raw
-        );
-        if (!is_string($decoded)) $decoded = $raw;
-
         $out = [];
+        $budget = self::PDF_FALLBACK_BUDGET;
+        foreach (self::pdfTextStreams($raw, $budget) as $decoded) {
+            foreach (self::pdfShownStrings($decoded) as $s) $out[] = $s;
+        }
 
+        if (!$out) return null;
+        return implode("\n", $out);
+    }
+
+    /** Taille maximale d'un flux une fois décompressé (repli PDF). */
+    private const PDF_STREAM_INFLATE_MAX = 8 * 1024 * 1024;
+
+    /** Total décompressé par le repli PDF, tous flux confondus. */
+    private const PDF_FALLBACK_BUDGET = 32 * 1024 * 1024;
+
+    /**
+     * Flux d'un PDF susceptibles de porter du texte, décompressés un par un.
+     * Écartés sans être recopiés : images, polices, métadonnées XML, index de
+     * références, et tout filtre que PHP ne sait pas défaire (JPEG, JPEG 2000,
+     * fax, JBIG2, LZW…). Un flux qui dépasserait PDF_STREAM_INFLATE_MAX une
+     * fois décompressé est écarté (gzuncompress s'arrête à la borne).
+     *
+     * @return \Generator<string>
+     */
+    private static function pdfTextStreams(string $raw, int &$budget): \Generator
+    {
+        if (!preg_match_all('#>>\s*stream\r?\n#', $raw, $marks, PREG_OFFSET_CAPTURE)) {
+            return;
+        }
+        foreach ($marks[0] as [$mark, $offset]) {
+            if ($budget <= 0) return;
+            $dataStart = $offset + strlen($mark);
+            $end = strpos($raw, 'endstream', $dataStart);
+            if ($end === false) continue;
+
+            // Dictionnaire du flux : depuis le dernier « obj » qui le précède.
+            $from = max(0, $offset - 4096);
+            $window = substr($raw, $from, $offset - $from + 2);
+            $objAt = strrpos($window, 'obj');
+            $dict = $objAt === false ? $window : substr($window, $objAt);
+
+            if (preg_match('#/Subtype\s*/(?:Image|Type1C|CIDFontType0C|OpenType|XML)\b|/Length[123]\b|/Type\s*/(?:XRef|Metadata|EmbeddedFile)\b#', $dict)) {
+                continue;
+            }
+            $flate = false;
+            if (preg_match('#/Filter\s*(\[[^\]]*\]|/\w+)#', $dict, $f)) {
+                $filters = preg_match_all('#/(\w+)#', $f[1], $fm) ? $fm[1] : [];
+                $filters = array_map(static fn(string $n): string => $n === 'Fl' ? 'FlateDecode' : $n, $filters);
+                if ($filters !== ['FlateDecode']) continue;
+                $flate = true;
+            }
+
+            $length = $end - $dataStart;
+            if ($length <= 0) continue;
+            $data = rtrim(substr($raw, $dataStart, $length), "\r\n");
+            if ($flate) {
+                $data = @gzuncompress($data, min(self::PDF_STREAM_INFLATE_MAX, max(1, $budget)));
+                if ($data === false) continue;
+            }
+            $budget -= strlen($data);
+            yield $data;
+        }
+    }
+
+    /**
+     * Chaînes affichées par les opérateurs Tj et TJ d'un flux de contenu.
+     *
+     * @return list<string>
+     */
+    private static function pdfShownStrings(string $decoded): array
+    {
+        $out = [];
         // Tj : ( ... ) Tj
         if (preg_match_all('/\(((?:\\\\.|[^\\\\()])*)\)\s*Tj/s', $decoded, $m)) {
             foreach ($m[1] as $s) $out[] = self::unescapePdfString($s);
@@ -557,9 +1253,7 @@ class FileExtractor
                 }
             }
         }
-
-        if (!$out) return null;
-        return implode("\n", $out);
+        return $out;
     }
 
     private static function unescapePdfString(string $s): string

@@ -426,7 +426,7 @@ final class ConnectorContextTest extends TestCase
         $pos = strpos($src, 'ConnectorRegistry::dormantConnectorsNote(');
         $this->assertNotFalse($pos);
         // Modèle à outils ET rôle qui ouvre les connecteurs (Personnes → Rôles).
-        $this->assertStringContainsString('if ($supportsTools && $connectorsAllowed) {', substr($src, $pos - 400, 400));
+        $this->assertStringContainsString('if ($supportsTools && $connectorsAllowed) {', substr($src, $pos - 1200, 1200));
     }
 
     public function testUneRegenerationAnnonceSaDegradation(): void

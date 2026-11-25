@@ -137,8 +137,9 @@ final class OutlookTools extends AbstractToolProvider
                 'name'        => 'rechercher_outlook',
                 'description' => "Recherche des emails dans la boîte Outlook PERSONNELLE de l'utilisateur. "
                     . "Accepte la syntaxe de recherche Microsoft (KQL) : from:alice@ex.fr, to:, subject:, "
-                    . "body:, received>=2026-01-15, hasAttachments:true, isRead:false, \"expression exacte\", "
-                    . "AND/OR/NOT. Laisse `requete` VIDE pour obtenir simplement les derniers messages reçus. "
+                    . "body:, cc:, received>=2026-01-15, hasAttachments:true, importance:high, AND/OR/NOT "
+                    . "(en majuscules). Pas d'expression exacte entre guillemets ni de filtre « non lu » : "
+                    . "le champ `lu` de chaque résultat le dit. Laisse `requete` VIDE pour obtenir simplement les derniers messages reçus. "
                     . "Renvoie pour chaque email : id, expéditeur, objet, date, extrait, lu et pièces jointes. "
                     . "À utiliser AVANT lire_outlook pour obtenir l'id d'un message.",
                 'parameters'  => [
@@ -260,7 +261,8 @@ final class OutlookTools extends AbstractToolProvider
                 . "N'affirme JAMAIS que le brouillon a été créé : annonce qu'il attend sa décision dans "
                 . "la carte ci-dessous, en résumant destinataire et objet — SANS recopier le corps du message : "
                 . "la carte l'affiche en entier, et l'utilisateur peut y modifier le texte ou le faire améliorer "
-                . "avant d'approuver.";
+                . "avant d'approuver. Outlook n'ajoute AUCUNE signature automatiquement : termine le corps "
+                . "par une formule de fin, signée du nom de l'utilisateur si tu le connais (jamais un nom inventé).";
         } else {
             $txt .= " Tu ne peux PAS créer de brouillons : la connexion Outlook actuelle est en lecture "
                 . "seule. Si l'utilisateur le demande, invite-le à reconnecter son Outlook dans "

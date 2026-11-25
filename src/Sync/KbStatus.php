@@ -61,6 +61,8 @@ final class KbStatus
     public const DOC_NO_TEXT    = 'no_text';     // lu, mais rien d'exploitable dedans
     public const DOC_FAILED     = 'failed';      // illisible
     public const DOC_LEXICAL    = 'lexical';     // lu, non vectorisé : recherche par mots seulement
+    public const DOC_STALLED    = 'stalled';     // traitement arrêté en route, plus rien ne tourne
+    public const DOC_EXCLUDED   = 'excluded';    // écarté de la base par une personne
 
     /** Rafraîchissement de l'écran : rapide tant que quelque chose tourne. */
     public const POLL_BUSY_MS = 3000;
@@ -88,6 +90,22 @@ final class KbStatus
         $ext    = (string)($doc['extraction_status'] ?? 'pending');
         $vec    = (string)($doc['vector_status'] ?? 'pending');
         $chunks = (int)($doc['chunk_count'] ?? 0);
+
+        // Exclu : plus un problème, plus cherché — il le dit, avec son motif.
+        if (!empty($doc['excluded_at']) || !empty($doc['excluded'])) {
+            $why = trim((string)($doc['excluded_reason'] ?? ''));
+            return self::doc(self::DOC_EXCLUDED, self::TONE_IDLE, t('Exclu'), $why !== ''
+                ? t('Retiré de la recherche — {motif}', ['motif' => $why])
+                : t('Retiré de la recherche.'));
+        }
+        // Traitement arrêté en route : plus rien ne tourne pour lui (posé par
+        // KbDocIssue::markStalled ou KbStatus::forBases), il attendrait pour
+        // toujours.
+        if (!empty($doc['stalled']) && ($ext === 'pending' || $ext === 'processing'
+                || ($ext === 'done' && ($vec === 'pending' || $vec === 'processing')))) {
+            return self::doc(self::DOC_STALLED, self::TONE_ERROR, t('Interrompu'),
+                t('Son traitement s\'est arrêté avant la fin : rien ne tourne plus pour lui.'));
+        }
 
         if ($ext === 'failed') {
             return self::doc(self::DOC_FAILED, self::TONE_ERROR, t('Illisible'),
@@ -123,17 +141,21 @@ final class KbStatus
      * documents ne se contredisent jamais.
      *
      * @param iterable<array> $rows
-     * @return array{total:int, indexed:int, no_text:int, failed:int, lexical:int, busy:int, pending:int}
+     * Un document interrompu compte parmi les échecs (il demande un geste) ;
+     * un document exclu, à part (il n'en demande plus).
+     *
+     * @return array{total:int, indexed:int, no_text:int, failed:int, lexical:int, busy:int, pending:int, excluded:int}
      */
     public static function countDocuments(iterable $rows): array
     {
-        $out = ['total' => 0, 'indexed' => 0, 'no_text' => 0, 'failed' => 0, 'lexical' => 0, 'busy' => 0, 'pending' => 0];
+        $out = ['total' => 0, 'indexed' => 0, 'no_text' => 0, 'failed' => 0, 'lexical' => 0, 'busy' => 0, 'pending' => 0, 'excluded' => 0];
         foreach ($rows as $row) {
             $n      = (int)($row['n'] ?? 1);
             $bucket = match (self::documentState($row)['key']) {
                 self::DOC_INDEXED                        => 'indexed',
                 self::DOC_NO_TEXT                        => 'no_text',
-                self::DOC_FAILED                         => 'failed',
+                self::DOC_FAILED, self::DOC_STALLED      => 'failed',
+                self::DOC_EXCLUDED                       => 'excluded',
                 self::DOC_LEXICAL                        => 'lexical',
                 self::DOC_EXTRACTING, self::DOC_INDEXING => 'busy',
                 default                                  => 'pending',
@@ -164,6 +186,11 @@ final class KbStatus
         // celui de sa connexion.
         if (KnowledgeBase::isRemote($kb)) {
             return self::summarizeRemote($kb, $counts);
+        }
+        // Table permanente : ni documents ni passages — son état, c'est son
+        // nombre de lignes.
+        if (KnowledgeBase::isTable($kb)) {
+            return self::summarizeTable($kb, $counts);
         }
 
         $provider = (string)($kb['sync_provider'] ?? '');
@@ -327,6 +354,12 @@ final class KbStatus
             $st['tone']   = self::TONE_OK;
             $st['title']  = $synced ? t('À jour') : t('Prête');
             $st['detail'] = I18n::plural($counts['indexed'], '{n} document indexé', '{n} documents indexés');
+            if ((int)($counts['excluded'] ?? 0) > 0) {
+                $st['detail'] = t('{documents} · {exclus}', [
+                    'documents' => $st['detail'],
+                    'exclus'    => I18n::plural((int)$counts['excluded'], '{n} exclu', '{n} exclus'),
+                ]);
+            }
             if ($synced && !$enabled) {
                 $st['detail'] = t('{documents} · synchronisation automatique désactivée', ['documents' => $st['detail']]);
             }
@@ -416,6 +449,49 @@ final class KbStatus
     }
 
     /**
+     * Verdict d'une TABLE permanente. Pur — lit les colonnes `table_*` jointes
+     * par KnowledgeBase::all/forManager. Deux cas : des lignes (ok), aucune
+     * (inactif : rien à compter, la table est grisée dans le chat). Jamais
+     * « occupé » : rien ne s'y passe tout seul.
+     */
+    public static function summarizeTable(array $kb, array $counts): array
+    {
+        $rows    = max(0, (int)($kb['table_rows'] ?? 0));
+        $columns = max(0, (int)($kb['table_columns'] ?? 0));
+        $age     = isset($kb['table_updated_age']) && $kb['table_updated_age'] !== null
+            ? max(0, (int)$kb['table_updated_age'])
+            : null;
+
+        return [
+            'state'       => $rows > 0 ? self::OK : self::EMPTY,
+            'tone'        => $rows > 0 ? self::TONE_OK : self::TONE_IDLE,
+            'title'       => $rows > 0 ? WorkTableView::rowsLabel($rows) : t('Table vide'),
+            // Les colonnes sont dites sur la ligne d'en dessous (kb-status.php) : pas deux fois.
+            'detail'      => $rows > 0 ? '' : t('Ajoutez des lignes à la main, ou importez un fichier Excel ou CSV.'),
+            'meta'        => $age !== null ? t('modifiée {quand}', ['quand' => self::ago($age)]) : '',
+            'progress'    => null,
+            'counts'      => $counts,
+            'synced'      => false,
+            'provider'    => KnowledgeBase::BACKEND_TABLE,
+            'enabled'     => false,
+            'syncable'    => false,
+            'error'       => null,
+            'folder'      => '',
+            'report'      => null,
+            'report_line' => '',
+            'issues'      => [],
+            'interval'    => 0,
+            'next'        => '',
+            'last'        => '',
+            'remote'      => false,
+            'table'       => true,
+            'table_rows'    => $rows,
+            'table_columns' => $columns,
+            'busy'        => false,
+        ];
+    }
+
+    /**
      * Verdicts des bases données, clés = id. Lit la base de données en QUATRE
      * requêtes quel que soit le nombre de bases (comptes groupés, âges, jobs,
      * verrous) : l'écran le rappelle toutes les quelques secondes. Ne lève
@@ -443,18 +519,33 @@ final class KbStatus
         $interval = KbSync::intervalMinutes();
 
         try {
-            // Groupes par statut et par « a des extraits » : quelques lignes par
-            // base au lieu d'une par document, classées ensuite par
-            // documentState() — la même règle que la liste des documents.
+            // Groupes par statut, « a des extraits », exclu, et « interrompu » :
+            // quelques lignes par base au lieu d'une par document, classées
+            // ensuite par documentState() — la même règle que la liste des
+            // documents. Interrompu = en attente ou en cours depuis plus de
+            // STALL_GRACE_SEC sans job d'ingestion ni de vectorisation vivant
+            // (une synchronisation ou une réindexation en cours lève le doute,
+            // plus bas).
             $stmt = $db->prepare(
-                "SELECT kb_id, extraction_status, vector_status, (chunk_count > 0) AS has_chunks, COUNT(*) AS n
-                 FROM knowledge_base_documents
-                 WHERE kb_id IN ($in)
-                 GROUP BY kb_id, extraction_status, vector_status, has_chunks"
+                "SELECT d.kb_id, d.extraction_status, d.vector_status, (d.chunk_count > 0) AS has_chunks,
+                        (d.excluded_at IS NOT NULL) AS excluded,
+                        (d.excluded_at IS NULL
+                         AND (d.extraction_status IN ('pending','processing')
+                              OR (d.extraction_status = 'done' AND d.vector_status IN ('pending','processing')))
+                         AND d.created_at < NOW() - INTERVAL " . KbDocIssue::STALL_GRACE_SEC . " SECOND
+                         AND NOT EXISTS (SELECT 1 FROM async_jobs j
+                                         WHERE j.dedup_key IN (CONCAT('kb_document:', d.id), CONCAT('kb_vectorize:', d.id))
+                                           AND j.status IN ('pending','running'))) AS stalled,
+                        COUNT(*) AS n
+                 FROM knowledge_base_documents d
+                 WHERE d.kb_id IN ($in)
+                 GROUP BY d.kb_id, d.extraction_status, d.vector_status, has_chunks, excluded, stalled"
             );
             $stmt->execute($ids);
             foreach ($stmt->fetchAll() as $row) {
                 $row['chunk_count'] = (int)$row['has_chunks'];
+                $row['excluded']    = (int)$row['excluded'];
+                $row['stalled']     = (int)$row['stalled'];
                 $groups[(int)$row['kb_id']][] = $row;
             }
 
@@ -524,7 +615,17 @@ final class KbStatus
         $out = [];
         foreach ($kbs as $kb) {
             $id  = (int)$kb['id'];
-            $out[$id] = self::summarize($kb, self::countDocuments($groups[$id] ?? []), [
+            // Une synchronisation ou une réindexation qui tourne traite ses
+            // documents elle-même : aucun n'est interrompu.
+            $baseBusy = ($locks[$id] ?? false) || isset($jobs['kb_sync:' . $id]) || isset($jobs['kb_reindex:' . $id]);
+            $rows     = $groups[$id] ?? [];
+            if ($baseBusy) {
+                foreach ($rows as &$row) {
+                    $row['stalled'] = 0;
+                }
+                unset($row);
+            }
+            $out[$id] = self::summarize($kb, self::countDocuments($rows), [
                 // Un job de sync « en cours » tient le verrou quelques instants
                 // plus tard : on ne l'affiche pas comme « en attente » entre-temps.
                 'sync_running'   => ($locks[$id] ?? false) || ($jobs['kb_sync:' . $id] ?? '') === 'running',
@@ -542,6 +643,35 @@ final class KbStatus
     // =====================================================================
     // Formes d'affichage (pures)
     // =====================================================================
+
+    /**
+     * Ce qui demande d'ouvrir la fiche sur « D'où viennent les documents » :
+     * un état à corriger (échec, passage interrompu ou en retard, documents à
+     * vérifier, connexion refusée ou injoignable), une base vide, un cerveau
+     * pas encore connecté. Un travail en cours n'en est pas un : il se suit
+     * dans la ligne de l'en-tête.
+     *
+     * Rend une SIGNATURE (état et nombre de documents en défaut, sans texte
+     * traduit), '' quand rien n'attend : la fiche rouvre le volet replié par
+     * la personne seulement quand la signature a changé depuis — un nouveau
+     * document en échec se voit, un défaut déjà vu ne s'impose pas à chaque
+     * visite.
+     */
+    public static function attention(array $status): string
+    {
+        $state  = (string)($status['state'] ?? '');
+        $tone   = (string)($status['tone'] ?? '');
+        $remote = array_key_exists('remote_host', $status);
+        $wants  = $tone === self::TONE_WARN || $tone === self::TONE_ERROR
+            || ($state === self::EMPTY && !$remote)
+            || ($state === self::WAITING && $remote);
+        if (!$wants || $state === '') {
+            return '';
+        }
+        $counts   = (array)($status['counts'] ?? []);
+        $problems = (int)($counts['failed'] ?? 0) + (int)($counts['lexical'] ?? 0) + (int)($counts['no_text'] ?? 0);
+        return $state . ':' . $problems;
+    }
 
     /** Durée écoulée : « à l'instant », « il y a 4 min », « il y a 2 h », « il y a 3 j ». */
     public static function ago(int $seconds): string

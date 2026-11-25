@@ -2,27 +2,25 @@
 /**
  * Réglages → Préférences IA.
  *
- * Trois sections, dans l'ordre où l'utilisateur se pose les questions :
+ * Quatre sections, dans l'ordre où l'utilisateur se pose les questions :
+ *   0. Qui vous répond           — le modèle par défaut de ses nouvelles
+ *                                  conversations (LlmPreference ; même
+ *                                  colonne que l'étoile du sélecteur du chat) ;
  *   1. Comment MIA vous répond   — le style de réponse ;
- *   2. Ce que MIA sait de vous   — « Votre contexte » (texte libre) puis
- *                                  « MIA pour vous » (souvenirs, carte AJAX
- *                                  partagée avec Mon profil) ;
+ *   2. Ce que MIA sait de vous   — une carte qui renvoie vers Réglages →
+ *                                  Mémoire (« Votre contexte » et les
+ *                                  souvenirs y ont leur page) ;
  *   3. À l'oral                  — la carte « Voix », seulement si la
  *                                  conversation vocale est proposée.
  *
  * UN SEUL formulaire auto-enregistré, et il est VIDE : chaque contrôle s'y
- * rattache par form="aiPrefsForm". C'est ce qui permet de poser la carte
- * « MIA pour vous » — qui s'enregistre seule, en AJAX, et dont les champs ne
- * sont rattachés à rien — sous « Votre contexte », au milieu de la page, sans
- * l'imbriquer dans le formulaire (un <form> dans un <form> est invalide, et
- * les deux chemins d'enregistrement se marcheraient dessus). autosave.js
- * délègue sur `document` et résout le formulaire par `field.form` : un champ
- * hors de son <form> s'enregistre exactement comme les autres.
+ * rattache par form="aiPrefsForm". autosave.js délègue sur `document` et
+ * résout le formulaire par `field.form` : un champ hors de son <form>
+ * s'enregistre exactement comme les autres.
  *
  * Styles : bloc « Préférences IA » de main.css (.ai-prefs-*, .ai-choice-*).
  */
 $currentStyle = (string)($user['ai_style'] ?? '');
-$currentCtx   = (string)($user['ai_user_context'] ?? '');
 // Icônes des cartes (20 px, trait courant) — même famille que « Marque &
 // apparence » et les connecteurs : un seul vocabulaire visuel.
 $aiIcon = static function (string $paths): string {
@@ -47,13 +45,14 @@ $aiIcon = static function (string $paths): string {
 
 <!-- Contenu -->
 <div class="admin-content ai-prefs-page">
+    <?php require ROOT . '/templates/partials/admin-topbar.php'; ?>
     <div class="ai-prefs-wrap">
 
-        <div class="ai-prefs-head">
-            <div class="ai-prefs-head-text">
+        <div class="ai-prefs-head page-head">
+            <div class="ai-prefs-head-text page-head-text">
                 <h1><?= te('Préférences IA') ?></h1>
-                <p class="ai-prefs-lead">
-                    <?= te('Comment MIA vous répond, ce qu\'elle sait de vous et comment elle vous parle. Ces réglages sont personnels et valent pour tous les assistants et tous les modèles.') ?>
+                <p class="ai-prefs-lead page-head-sub">
+                    <?= te('Le modèle qui vous répond, comment MIA vous répond et comment elle vous parle. Ces réglages sont personnels : ils suivent votre compte sur tous vos appareils.') ?>
                 </p>
             </div>
             <?php require ROOT . '/templates/partials/autosave-hint.php'; ?>
@@ -72,11 +71,11 @@ $aiIcon = static function (string $paths): string {
             </div>
         <?php endif; ?>
 
-        <!-- Sommaire : trois ancres, utiles surtout sur mobile où la liste des
-             souvenirs peut allonger la page. -->
+        <!-- Sommaire : les sections de la page, et la page Mémoire. -->
         <nav class="ai-prefs-nav" aria-label="<?= te('Sections de la page') ?>">
+            <a href="#modele"><?= te('Modèle par défaut') ?></a>
             <a href="#style"><?= te('Style de réponse') ?></a>
-            <a href="#contexte"><?= te('Ce que MIA sait de vous') ?></a>
+            <a href="/settings/memory"><?= te('Mémoire') ?></a>
             <?php if (!empty($voiceEnabled)): ?>
                 <a href="#voix"><?= te('Voix') ?></a>
             <?php endif; ?>
@@ -87,6 +86,72 @@ $aiIcon = static function (string $paths): string {
         <form method="POST" action="/settings/ai" id="aiPrefsForm" data-autosave>
             <?= Csrf::field() ?>
         </form>
+
+        <!-- 0. Qui vous répond : le modèle par défaut (LlmPreference). Même
+             colonne que l'étoile du sélecteur de modèle du chat. -->
+        <?php
+            $prefOrg       = (string)$llmPreference['organization'];
+            $prefSelected  = (string)$llmPreference['preferred'];
+            $prefEffective = (string)$llmPreference['effective'];
+            $prefOrgLabel  = LlmPreference::label($prefOrg, $llmChoices);
+            $llmLogoOf     = static fn (string $slug): string => (string)($llmLogos[LLMFactory::provider($slug)] ?? '');
+        ?>
+        <section class="ai-prefs-section" id="modele" aria-labelledby="aiModelTitle">
+            <div class="ai-prefs-section-head">
+                <h2 id="aiModelTitle"><?= te('Qui vous répond') ?></h2>
+                <p><?= te('Le modèle qui ouvre chacune de vos nouvelles conversations avec MIA.') ?></p>
+            </div>
+            <div class="card ai-prefs-card">
+                <div class="card-head">
+                    <span class="card-ic" aria-hidden="true"><?= $aiIcon('<polygon points="12 2.6 14.9 8.6 21.5 9.5 16.7 14.1 17.9 20.6 12 17.5 6.1 20.6 7.3 14.1 2.5 9.5 9.1 8.6 12 2.6"/>') ?></span>
+                    <div class="card-head-text">
+                        <h3><?= te('Modèle par défaut') ?></h3>
+                        <p><?= te('Pour une seule conversation, changez de modèle depuis le sélecteur du champ de saisie. Un assistant garde le modèle choisi pour lui.') ?></p>
+                    </div>
+                </div>
+
+                <?php if (!empty($llmPreference['choosable'])): ?>
+                <div class="ai-field">
+                    <div class="ai-field-head">
+                        <label for="preferredLlm"><?= te('Vos nouvelles conversations s\'ouvrent avec') ?></label>
+                    </div>
+                    <div class="ai-model-pick">
+                        <img src="<?= htmlspecialchars($llmLogoOf($prefEffective)) ?>" alt="" class="ai-model-logo" id="preferredLlmLogo">
+                        <select id="preferredLlm" name="preferred_llm" form="aiPrefsForm" class="form-select ai-model-select">
+                            <option value="" data-logo="<?= htmlspecialchars($llmLogoOf($prefOrg)) ?>" <?= $prefSelected === '' ? 'selected' : '' ?>>
+                                <?= te('Celui de votre organisation — {model}', ['model' => $prefOrgLabel]) ?>
+                            </option>
+                            <?php if (!empty($llmPreference['unavailable'])): ?>
+                                <?php // Choix qui n'est plus proposé : gardé SÉLECTIONNÉ, sinon
+                                      // l'enregistrement automatique (formulaire posté en entier)
+                                      // le remplacerait en silence au premier geste sur la page. ?>
+                                <option value="<?= htmlspecialchars($prefSelected) ?>" data-logo="<?= htmlspecialchars($llmLogoOf($prefOrg)) ?>" selected>
+                                    <?= te('{model} — n\'est plus proposé', ['model' => LlmPreference::label($prefSelected, $llmChoices)]) ?>
+                                </option>
+                            <?php endif; ?>
+                            <?php $prefGroup = null; foreach ($llmChoices as $slug => $label):
+                                $prov = LLMFactory::provider((string)$slug);
+                                if ($prov !== $prefGroup):
+                                    if ($prefGroup !== null) echo '</optgroup>';
+                                    $prefGroup = $prov; ?>
+                                <optgroup label="<?= htmlspecialchars(LLMFactory::providerLabel($prov)) ?>">
+                                <?php endif; ?>
+                                <option value="<?= htmlspecialchars((string)$slug) ?>" data-logo="<?= htmlspecialchars($llmLogoOf((string)$slug)) ?>" <?= $prefSelected === (string)$slug ? 'selected' : '' ?>>
+                                    <?= htmlspecialchars((string)$label) ?>
+                                </option>
+                            <?php endforeach; if ($prefGroup !== null) echo '</optgroup>'; ?>
+                        </select>
+                    </div>
+                    <?php if (!empty($llmPreference['unavailable'])): ?>
+                        <p class="ai-field-hint ai-field-warn"><?= te('Ce modèle n\'est plus proposé à votre compte : en attendant, vos conversations s\'ouvrent avec celui de votre organisation ({model}). Il reviendra de lui-même s\'il vous est rendu.', ['model' => $prefOrgLabel]) ?></p>
+                    <?php endif; ?>
+                    <p class="ai-field-hint"><?= teb('Plus rapide : dans le chat, touchez l\'{b}étoile{/b} à côté d\'un modèle du sélecteur pour en faire votre modèle par défaut.') ?></p>
+                </div>
+                <?php else: ?>
+                <p class="ai-field-hint"><?= te('Votre organisation vous propose un seul modèle : {model}.', ['model' => LlmPreference::label($prefEffective, $llmChoices)]) ?></p>
+                <?php endif; ?>
+            </div>
+        </section>
 
         <!-- 1. Comment MIA vous répond -->
         <section class="ai-prefs-section" id="style" aria-labelledby="aiStyleTitle">
@@ -123,44 +188,22 @@ $aiIcon = static function (string $paths): string {
             </div>
         </section>
 
-        <!-- 2. Ce que MIA sait de vous -->
-        <section class="ai-prefs-section" id="contexte" aria-labelledby="aiKnowTitle">
+        <!-- 2. Ce que MIA sait de vous : sa page, Réglages → Mémoire. -->
+        <section class="ai-prefs-section" id="memoire" aria-labelledby="aiKnowTitle">
             <div class="ai-prefs-section-head">
                 <h2 id="aiKnowTitle"><?= te('Ce que MIA sait de vous') ?></h2>
-                <p><?= te('Deux sources, relues au début de chaque conversation : le contexte que vous écrivez ici, et les souvenirs que MIA garde à votre demande. « Que sais-tu de moi ? » vous les restitue tels quels.') ?></p>
+                <p><?= te('Votre contexte et vos souvenirs ont leur page : MIA les relit au début de chaque conversation.') ?></p>
             </div>
-            <div class="card ai-prefs-card">
+            <div class="card ai-prefs-card ai-prefs-pointer">
                 <div class="card-head">
-                    <span class="card-ic" aria-hidden="true"><?= $aiIcon('<rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/>') ?></span>
+                    <span class="card-ic" aria-hidden="true"><?= $aiIcon('<path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/>') ?></span>
                     <div class="card-head-text">
-                        <h3><?= te('Votre contexte') ?></h3>
-                        <p><?= te('Votre métier, vos outils, votre cible : ce qui aide MIA à viser juste dès le premier message.') ?></p>
+                        <h3><?= te('Mémoire') ?></h3>
+                        <p><?= te('Ce que MIA retient de vous d\'une conversation à l\'autre : à relire, corriger ou retirer quand vous voulez.') ?></p>
                     </div>
-                </div>
-                <div class="ai-field">
-                    <div class="ai-field-head">
-                        <label for="aiUserContext"><?= te('En une ou deux phrases') ?></label>
-                        <span class="ctx-counter" id="aiCtxCounter">
-                            <?php /* Le compteur vivant garde son id ; le reste est UN message,
-                                     car « caractères » seul ne se traduit pas (l'ordre des mots
-                                     change, et l'unité peut précéder le nombre). */ ?>
-                            <span id="aiCtxCount">0</span> <?= te('/ {max} caractères', ['max' => (int)$maxLen]) ?>
-                        </span>
-                    </div>
-                    <textarea
-                        id="aiUserContext"
-                        name="ai_user_context"
-                        form="aiPrefsForm"
-                        class="form-input"
-                        rows="4"
-                        maxlength="<?= (int)$maxLen ?>"
-                        placeholder="<?= te('Ex. : Chef de produit chez ACME (SaaS RH). Outils : Notion, Linear, Looker. Cible : équipes RH 50-500 personnes.') ?>"><?= htmlspecialchars($currentCtx) ?></textarea>
-                    <p class="ai-field-hint"><?= te('MIA s\'en sert en arrière-plan, sans le citer. Laissé vide, il ne change rien.') ?></p>
+                    <a href="/settings/memory" class="btn-secondary"><?= te('Ouvrir la mémoire') ?></a>
                 </div>
             </div>
-
-            <!-- « MIA pour vous » : carte AJAX autonome, partagée avec Mon profil. -->
-            <?php require ROOT . '/templates/settings/partials/memory-card.php'; ?>
         </section>
 
         <?php if (!empty($voiceEnabled)): ?>
@@ -242,23 +285,6 @@ $aiIcon = static function (string $paths): string {
 </div><!-- /admin-content -->
 
 <script>
-// Compteur de caractères du contexte
-(function () {
-    const textarea = document.getElementById('aiUserContext');
-    const counter  = document.getElementById('aiCtxCount');
-    const wrapper  = document.getElementById('aiCtxCounter');
-    if (!textarea || !counter || !wrapper) return;
-    const max = parseInt(textarea.getAttribute('maxlength') || '500', 10);
-    function update() {
-        const len = [...textarea.value].length;
-        counter.textContent = len;
-        wrapper.classList.toggle('is-warn',  len >= max * 0.8 && len < max);
-        wrapper.classList.toggle('is-error', len >= max);
-    }
-    textarea.addEventListener('input', update);
-    update();
-})();
-
 // Vitesse de lecture : la valeur lue vient de la table posée par le serveur
 // (data-labels), jamais d'un formatage refait ici — le séparateur décimal
 // suit la langue de l'interface, et il ne peut pas diverger d'un écran à
@@ -275,6 +301,19 @@ $aiIcon = static function (string $paths): string {
     }
     range.addEventListener('input', refresh);
     refresh();
+})();
+
+// Modèle par défaut : le logo suit l'option choisie (data-logo, posé par le
+// serveur). L'enregistrement, lui, est celui de toute la page (aiPrefsForm).
+(function () {
+    const select = document.getElementById('preferredLlm');
+    const logo   = document.getElementById('preferredLlmLogo');
+    if (!select || !logo) return;
+    select.addEventListener('change', () => {
+        const src = select.selectedOptions[0]?.dataset.logo || '';
+        if (src) logo.src = src;
+        logo.hidden = !src;
+    });
 })();
 </script>
 </body>

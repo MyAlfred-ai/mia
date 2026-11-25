@@ -79,6 +79,15 @@ $payload = [
         <button type="button" class="wf-btn sm danger" id="wfRunCancel" title="<?= te('Arrêter') ?>"<?= $state['terminal'] ? ' hidden' : '' ?>><?= $icons['stop'] ?><span class="lbl"><?= te('Arrêter') ?></span></button>
     </div>
 
+    <?php if (!empty($state['caller'])): ?>
+        <?php /* Exécution APPELÉE par un autre workflow : d'où elle vient, et le retour vers l'appelant. */ ?>
+        <a class="wf-run-caller" href="<?= htmlspecialchars((string)$state['caller']['url']) ?>">
+            <?= $icons['back'] ?><span><?= teb('Appelée par {b}{nom}{/b}, à la brique {brique} — voir l’exécution appelante', [
+                'nom' => (string)$state['caller']['name'], 'brique' => WorkflowCall::cite((string)$state['caller']['brick']),
+            ]) ?></span>
+        </a>
+    <?php endif; ?>
+
     <div class="wf-run">
         <div class="wf-run-banner" id="wfRunBanner" aria-live="polite"></div>
         <div class="wf-run-canvas" id="wfRunCanvas">

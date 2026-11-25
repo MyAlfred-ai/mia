@@ -49,8 +49,14 @@ $icons = WorkflowCatalog::icons();
             <div class="wf-ed-actions">
                 <span id="wfStatus"></span>
                 <span class="wf-save-state" id="wfSaveState" aria-live="polite"></span>
-                <?php /* Ses lancements et le journal de chacun : l'onglet « Historique des exécutions », filtré sur ce workflow. */ ?>
-                <a class="wf-btn" id="wfHistoryBtn" href="<?= htmlspecialchars($historyUrl) ?>" title="<?= $historyCount === 0 ? te('Aucun lancement pour l’instant') : te('Historique des exécutions de ce workflow') ?>"><?= $icons['history'] ?><span class="lbl"><?= te('Historique') ?></span><?php if ($historyCount > 0): ?><span class="wf-count is-muted"><?= (int)$historyCount ?></span><?php endif; ?></a>
+                <?php /* Supprimer = droit « Workflows — Supprimer ». Loin de « Publier », et jamais sans la
+                         fenêtre de confirmation (workflows.js) : elle seule pose `confirm`, sans lequel le serveur refuse. */ ?>
+                <?php if (!empty($editor['can']['delete'])): ?>
+                <button type="button" class="wf-btn icon wf-del" id="wfDelete" title="<?= te('Supprimer ce workflow') ?>" aria-label="<?= te('Supprimer ce workflow') ?>"><?= $icons['trash'] ?></button>
+                <?php endif; ?>
+                <?php /* Ses lancements et le journal de chacun : l'onglet « Historique des exécutions », filtré sur ce workflow.
+                         L'historique des VERSIONS est le bouton « Versions » posé à côté de l'état (workflow-editor.js). */ ?>
+                <a class="wf-btn" id="wfHistoryBtn" href="<?= htmlspecialchars($historyUrl) ?>" title="<?= $historyCount === 0 ? te('Aucun lancement pour l’instant') : te('Historique des lancements de ce workflow') ?>"><?= $icons['start'] ?><span class="lbl"><?= te('Lancements') ?></span><?php if ($historyCount > 0): ?><span class="wf-count is-muted"><?= (int)$historyCount ?></span><?php endif; ?></a>
                 <button type="button" class="wf-btn" id="wfOverview" aria-haspopup="dialog"><?= $icons['settings'] ?><?= te('Réglages') ?><span class="wf-count" id="wfIssueCount" hidden></span></button>
                 <?php /* Lancer = droit « Workflows — Utiliser » (Personnes → Rôles). */ ?>
                 <?php if (!empty($editor['can']['use'])): ?>

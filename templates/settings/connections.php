@@ -16,9 +16,14 @@
 
 <!-- Contenu -->
 <div class="admin-content">
+    <?php require ROOT . '/templates/partials/admin-topbar.php'; ?>
     <div style="max-width:680px">
-        <h1 style="margin-bottom:6px"><?= te('Comptes connectés') ?></h1>
-        <p style="color:var(--text-muted);font-size:14px;margin-bottom:28px"><?= te('Connectez vos services externes pour enrichir les capacités de vos assistants.') ?></p>
+        <header class="page-head">
+        <div class="page-head-text">
+            <h1 style="margin-bottom:6px"><?= te('Comptes connectés') ?></h1>
+            <p class="page-head-sub"><?= te('Connectez vos services externes pour enrichir les capacités de vos assistants.') ?></p>
+        </div>
+        </header>
 
         <?php if (!empty($success)): ?>
             <div class="alert alert-success" style="margin-bottom:20px">
@@ -77,6 +82,9 @@
             </div>
         <?php endif; ?>
 
+        <!-- Carte : Claude dans Office (add-in Office passé par MIA) -->
+        <?php if (!empty($officeCard)) { require ROOT . '/templates/settings/partials/office-addin-card.php'; } ?>
+
         <!-- Carte : Google Drive -->
         <?php if (!empty($driveVisible)): ?>
         <div class="card" id="connector-drive">
@@ -85,7 +93,7 @@
                     <img src="/assets/img/google-drive.svg" width="26" height="23" alt="<?= te('Google Drive') ?>">
                 </div>
                 <div style="flex:1">
-                    <h3 style="margin:0 0 4px;font-size:15px"><?= te('Google Drive') ?></h3>
+                    <h3 style="margin:0 0 4px;font-size:15px"><?= te('Google Drive') ?><?= ConnectorRegistry::reconnectDotFor('drive', $connectorsToReconnect ?? []) ?></h3>
                     <p style="font-size:13px;color:var(--text-muted);margin:0 0 14px">
                         <?= teb('Permet aux assistants de rechercher et de {b}lire{/b} vos Google Docs, Sheets et autres documents pendant une conversation, et — si vous l\'autorisez — de {b}créer et modifier{/b} des Google Docs et Sheets à votre demande. Aucun fichier n\'est jamais supprimé.') ?>
                     </p>
@@ -182,7 +190,7 @@
                     <img src="/assets/img/gmail.svg" width="26" height="20" alt="<?= te('Gmail') ?>">
                 </div>
                 <div style="flex:1">
-                    <h3 style="margin:0 0 4px;font-size:15px"><?= te('Gmail') ?></h3>
+                    <h3 style="margin:0 0 4px;font-size:15px"><?= te('Gmail') ?><?= ConnectorRegistry::reconnectDotFor('gmail', $connectorsToReconnect ?? []) ?></h3>
                     <p style="font-size:13px;color:var(--text-muted);margin:0 0 14px">
                         <?= teb('Permet aux assistants de {b}rechercher{/b} et de {b}lire{/b} vos emails pendant une conversation, et — à votre demande — de préparer des {b}emails{/b} que vous relisez dans une carte avant de les {b}enregistrer en brouillon{/b} ou de les {b}envoyer{/b}. {b}Rien ne part sans votre clic{/b} : l\'assistant n\'a aucun moyen d\'envoyer de lui-même.') ?>
                     </p>
@@ -267,7 +275,7 @@
                     <img src="/assets/img/google-calendar.svg" width="24" height="24" alt="<?= te('Google Agenda') ?>">
                 </div>
                 <div style="flex:1">
-                    <h3 style="margin:0 0 4px;font-size:15px"><?= te('Google Agenda') ?></h3>
+                    <h3 style="margin:0 0 4px;font-size:15px"><?= te('Google Agenda') ?><?= ConnectorRegistry::reconnectDotFor('calendar', $connectorsToReconnect ?? []) ?></h3>
                     <p style="font-size:13px;color:var(--text-muted);margin:0 0 14px">
                         <?= teb('Permet aux assistants de {b}consulter{/b} vos agendas et évènements pendant une conversation (« quelles réunions demain ? »), et — à votre demande — de {b}créer des évènements{/b}, chacun soumis à votre approbation. {b}Aucune invitation n\'est envoyée automatiquement{/b} aux participants, et aucun évènement n\'est jamais modifié ni supprimé.') ?>
                     </p>
@@ -299,7 +307,7 @@
                                 <?= te('Lecture') ?> <?= $calendarCanRead ? '✓' : '—' ?>
                             </span>
                             <span class="badge <?= $calendarCanWrite ? 'badge-gray' : '' ?>" <?= $calendarCanWrite ? '' : 'style="opacity:.45"' ?>>
-                                <?= te('Création d\'évènements') ?> <?= $calendarCanWrite ? '✓' : '—' ?>
+                                <?= te('Création et modification d\'évènements') ?> <?= $calendarCanWrite ? '✓' : '—' ?>
                             </span>
                         </div>
                         <?php if ((!$calendarCanRead || !$calendarCanWrite) && !empty($calendarFeatureEnabled)): ?>
@@ -344,7 +352,7 @@
                     <img src="/assets/img/google-tasks.svg" width="24" height="24" alt="<?= te('Google Tasks') ?>">
                 </div>
                 <div style="flex:1">
-                    <h3 style="margin:0 0 4px;font-size:15px"><?= te('Google Tasks') ?></h3>
+                    <h3 style="margin:0 0 4px;font-size:15px"><?= te('Google Tasks') ?><?= ConnectorRegistry::reconnectDotFor('tasks', $connectorsToReconnect ?? []) ?></h3>
                     <p style="font-size:13px;color:var(--text-muted);margin:0 0 14px">
                         <?= teb('Permet aux assistants de {b}consulter{/b} vos listes de tâches (« qu\'est-ce qu\'il me reste à faire ? »), et — à votre demande — d\'en {b}ajouter{/b}, d\'en {b}modifier{/b} et d\'en {b}supprimer{/b}. Chaque écriture est soumise à votre approbation. {b}La suppression est définitive{/b} : vous pouvez la désactiver ci-dessous, l\'assistant proposera alors de marquer la tâche comme terminée.') ?>
                     </p>
@@ -546,7 +554,7 @@
                     <img src="/assets/img/outlook.svg" width="26" height="26" alt="<?= te('Outlook') ?>">
                 </div>
                 <div style="flex:1">
-                    <h3 style="margin:0 0 4px;font-size:15px"><?= te('Outlook') ?></h3>
+                    <h3 style="margin:0 0 4px;font-size:15px"><?= te('Outlook') ?><?= ConnectorRegistry::reconnectDotFor('outlook', $connectorsToReconnect ?? []) ?></h3>
                     <p style="font-size:13px;color:var(--text-muted);margin:0 0 14px">
                         <?= teb('Permet aux assistants de {b}rechercher{/b} et de {b}lire{/b} vos emails pendant une conversation, et — à votre demande — de préparer des {b}emails{/b} que vous relisez dans une carte avant de les {b}enregistrer en brouillon{/b} ou de les {b}envoyer{/b}. {b}Rien ne part sans votre clic{/b} : l\'assistant n\'a aucun moyen d\'envoyer de lui-même.') ?>
                     </p>
@@ -627,9 +635,9 @@
                     <img src="/assets/img/outlook-calendar.svg" width="26" height="26" alt="<?= te('Calendrier Outlook') ?>">
                 </div>
                 <div style="flex:1">
-                    <h3 style="margin:0 0 4px;font-size:15px"><?= te('Calendrier Outlook') ?></h3>
+                    <h3 style="margin:0 0 4px;font-size:15px"><?= te('Calendrier Outlook') ?><?= ConnectorRegistry::reconnectDotFor('mscalendar', $connectorsToReconnect ?? []) ?></h3>
                     <p style="font-size:13px;color:var(--text-muted);margin:0 0 14px">
-                        <?= teb('Permet aux assistants de {b}consulter vos évènements{/b} pendant une conversation (« suis-je libre jeudi ? », « qu\'ai-je la semaine prochaine ? ») et — à votre demande — d\'en {b}créer{/b} après votre approbation. Aucun évènement n\'est jamais modifié ni supprimé, et {b}aucune invitation n\'est envoyée{/b} : les évènements sont créés sans participant, vous les ajoutez vous-même dans Outlook.') ?>
+                        <?= teb('Permet aux assistants de {b}consulter vos évènements{/b} pendant une conversation (« suis-je libre jeudi ? », « qu\'ai-je la semaine prochaine ? ») et — à votre demande — d\'en {b}créer et d\'en modifier{/b} après votre approbation : invités, réunion Teams, récurrence, rappel. {b}Outlook envoie l\'invitation à vos invités dès que vous approuvez{/b} — la carte les nomme avant. Aucun évènement n\'est jamais supprimé ni annulé.') ?>
                     </p>
 
                     <?php if (empty($msCalendarFeatureEnabled)) { $connectorHiddenNotice('Calendrier Outlook'); } ?>
@@ -659,7 +667,7 @@
                                 <?= te('Lecture') ?> <?= $msCalendarCanRead ? '✓' : '—' ?>
                             </span>
                             <span class="badge <?= $msCalendarCanWrite ? 'badge-gray' : '' ?>" <?= $msCalendarCanWrite ? '' : 'style="opacity:.45"' ?>>
-                                <?= te('Création d\'évènements') ?> <?= $msCalendarCanWrite ? '✓' : '—' ?>
+                                <?= te('Création et modification d\'évènements') ?> <?= $msCalendarCanWrite ? '✓' : '—' ?>
                             </span>
                         </div>
                         <?php if ((!$msCalendarCanRead || !$msCalendarCanWrite) && !empty($msCalendarFeatureEnabled)): ?>
@@ -704,7 +712,7 @@
                     <img src="/assets/img/microsoft-todo.svg" width="26" height="26" alt="<?= te('Microsoft To Do') ?>">
                 </div>
                 <div style="flex:1">
-                    <h3 style="margin:0 0 4px;font-size:15px"><?= te('Microsoft To Do') ?></h3>
+                    <h3 style="margin:0 0 4px;font-size:15px"><?= te('Microsoft To Do') ?><?= ConnectorRegistry::reconnectDotFor('mstodo', $connectorsToReconnect ?? []) ?></h3>
                     <p style="font-size:13px;color:var(--text-muted);margin:0 0 14px">
                         <?= teb('Permet aux assistants de {b}consulter vos tâches{/b} pendant une conversation (« qu’ai-je à faire cette semaine ? ») et — à votre demande — d’en {b}ajouter ou de les modifier{/b} (échéance, rappel, la marquer terminée) après votre approbation. Aucune tâche n’est jamais supprimée.') ?>
                     </p>
@@ -780,7 +788,7 @@
                     <img src="/assets/img/microsoft-teams.svg" width="26" height="26" alt="<?= te('Microsoft Teams') ?>">
                 </div>
                 <div style="flex:1">
-                    <h3 style="margin:0 0 4px;font-size:15px"><?= te('Microsoft Teams') ?></h3>
+                    <h3 style="margin:0 0 4px;font-size:15px"><?= te('Microsoft Teams') ?><?= ConnectorRegistry::reconnectDotFor('teams', $connectorsToReconnect ?? []) ?></h3>
                     <p style="font-size:13px;color:var(--text-muted);margin:0 0 14px">
                         <?= teb('Permet aux assistants de {b}rechercher et lire vos conversations et les canaux de vos équipes{/b} pendant une conversation (« qu’a dit Marie sur le budget ? ») et — à votre demande — de {b}publier un message en votre nom{/b} après votre approbation. Un message publié est aussitôt visible ; aucun message n’est jamais modifié ni supprimé.') ?>
                     </p>
@@ -862,7 +870,7 @@
                     <img src="/assets/img/slack.svg" width="26" height="26" alt="<?= te('Slack') ?>">
                 </div>
                 <div style="flex:1">
-                    <h3 style="margin:0 0 4px;font-size:15px"><?= te('Slack') ?></h3>
+                    <h3 style="margin:0 0 4px;font-size:15px"><?= te('Slack') ?><?= ConnectorRegistry::reconnectDotFor('slack', $connectorsToReconnect ?? []) ?></h3>
                     <p style="font-size:13px;color:var(--text-muted);margin:0 0 14px">
                         <?= teb('Permet aux assistants de {b}rechercher et lire{/b} vos conversations Slack pendant un échange (« qu\'a-t-on dit du budget ? », « résume #projet-x »), et — à votre demande — de {b}publier un message en votre nom{/b} après votre approbation. MIA ne voit que les conversations dont vous êtes déjà membre. Un message publié est {b}immédiatement visible{/b} par le canal : il ne peut plus être ni modifié ni supprimé par MIA.') ?>
                     </p>
@@ -899,10 +907,16 @@
                             <span class="badge <?= $slackCanPost ? 'badge-gray' : '' ?>" <?= $slackCanPost ? '' : 'style="opacity:.45"' ?>>
                                 <?= te('Publication') ?> <?= $slackCanPost ? '✓' : '—' ?>
                             </span>
+                            <span class="badge <?= $slackCanDirect ? 'badge-gray' : '' ?>" <?= $slackCanDirect ? '' : 'style="opacity:.45"' ?>>
+                                <?= te('Message direct') ?> <?= $slackCanDirect ? '✓' : '—' ?>
+                            </span>
+                            <span class="badge <?= $slackCanFiles ? 'badge-gray' : '' ?>" <?= $slackCanFiles ? '' : 'style="opacity:.45"' ?>>
+                                <?= te('Fichiers joints') ?> <?= $slackCanFiles ? '✓' : '—' ?>
+                            </span>
                         </div>
-                        <?php if ((!$slackCanSearch || !$slackCanRead || !$slackCanPost) && !empty($slackFeatureEnabled)): ?>
+                        <?php if ((!$slackCanSearch || !$slackCanRead || !$slackCanPost || !$slackCanDirect || !$slackCanFiles) && !empty($slackFeatureEnabled)): ?>
                             <div style="display:flex;align-items:center;gap:10px;margin-top:10px;padding:10px 12px;background:var(--bg-surface);border-radius:8px;font-size:13px;color:var(--text-muted);flex-wrap:wrap">
-                                <span><?= te('Une autorisation n\'a pas été accordée lors du consentement — sur certains espaces de travail, un administrateur Slack doit approuver l\'application. Pour un fonctionnement complet :') ?></span>
+                                <span><?= te('Une autorisation manque : refusée lors du consentement, ou ajoutée à MIA depuis votre connexion — sur certains espaces de travail, un administrateur Slack doit approuver l’application. Pour un fonctionnement complet :') ?></span>
                                 <a href="/settings/slack/connect" class="btn-secondary" style="font-size:12px;text-decoration:none"><?= te('Reconnecter et autoriser') ?></a>
                             </div>
                         <?php endif; ?>
@@ -943,7 +957,7 @@
                     <img src="/assets/img/onedrive.svg" width="26" height="26" alt="<?= te('OneDrive') ?>">
                 </div>
                 <div style="flex:1">
-                    <h3 style="margin:0 0 4px;font-size:15px"><?= te('OneDrive') ?></h3>
+                    <h3 style="margin:0 0 4px;font-size:15px"><?= te('OneDrive') ?><?= ConnectorRegistry::reconnectDotFor('onedrive', $connectorsToReconnect ?? []) ?></h3>
                     <p style="font-size:13px;color:var(--text-muted);margin:0 0 14px">
                         <?= te('Permet de') ?> <strong><?= te('parcourir vos dossiers') ?></strong> <?= te('OneDrive (et ceux partagés avec vous) pour en faire la source d\'une') ?> <strong><?= te('base de connaissances') ?></strong> <?= te(': les documents du dossier choisi sont indexés et interrogés par vos assistants.') ?>
                         <strong><?= te('Lecture seule') ?></strong> <?= te('— rien n\'est jamais créé, modifié ni supprimé chez Microsoft.') ?>

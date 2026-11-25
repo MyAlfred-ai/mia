@@ -115,7 +115,7 @@ $pieceCard = static function (array $p, string $scope = 'piece') use ($icons, $i
                 <button type="button" class="wf-btn sm" data-launch="<?= (int)$relaunch['id'] ?>"<?php if ($relaunch['values'] !== []): ?> data-launch-values="<?= htmlspecialchars((string)json_encode($relaunch['values'], JSON_UNESCAPED_UNICODE)) ?>" title="<?= te('Rouvre la fenêtre de lancement, remplie avec les données de ce lancement') ?>"<?php endif; ?>><?= $icons['spark'] ?><?= te('Relancer') ?></button>
             <?php endif; ?>
             <?php if ($head['parent'] !== null): ?>
-                <a class="wf-btn sm ghost" href="<?= htmlspecialchars($head['parent']) ?>"><?= $icons['chain'] ?><?= te('Lancement précédent') ?></a>
+                <a class="wf-btn sm ghost" href="<?= htmlspecialchars($head['parent']) ?>"><?= $icons['chain'] ?><?= htmlspecialchars($head['parent_label'] ?? t('Lancement précédent')) ?></a>
             <?php endif; ?>
         </div>
     </header>
@@ -136,7 +136,9 @@ $pieceCard = static function (array $p, string $scope = 'piece') use ($icons, $i
                 </div>
                 <?php if ($e['who'] !== ''): ?><div class="wf-tl-who"><?= htmlspecialchars($e['who']) ?></div><?php endif; ?>
                 <p class="wf-tl-status"><?= htmlspecialchars($e['status']) ?></p>
-                <?php if ($e['tone'] === 'wait'): ?>
+                <?php if (($e['link'] ?? null) !== null): ?>
+                <a class="wf-tl-cta" href="<?= htmlspecialchars($e['link']['href']) ?>"><?= htmlspecialchars($e['link']['label']) ?><?= $icons['chev'] ?></a>
+                <?php elseif ($e['tone'] === 'wait'): ?>
                 <a class="wf-tl-cta" href="<?= htmlspecialchars($head['href']) ?>"><?= te('Décider dans l’exécution') ?><?= $icons['chev'] ?></a>
                 <?php endif; ?>
                 <?php if ($e['chips'] !== []): ?>

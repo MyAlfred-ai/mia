@@ -14,7 +14,7 @@ declare(strict_types=1);
  * bascule masquait la panne : tout le monde répondait, au prix d'un autre
  * modèle, et personne ne rechargeait le compte. Ici, chaque refus de ce genre
  * est consigné ; « Points à régler » (AdminAttention) en fait une pastille sur
- * Modèles IA › Clés API, et le tableau de bord une alerte.
+ * Modèles IA › Fournisseurs et modèles, et le tableau de bord une alerte.
  *
  * Règles :
  *   - seuls les incidents de COMPTE, qui valent pour tous les modèles du

@@ -99,6 +99,19 @@ final class ChoiceButtons
     }
 
     /**
+     * La réponse se termine-t-elle sur des choix en boutons ? Lecture large
+     * (toute ligne d'ouverture ```choix, ```choices, ```choice, avec ou sans
+     * drapeau « multiple ») : sert à ne rien poser d'autre sous une réponse
+     * qui attend déjà une décision (question de la mémoire, MemoryQuestions).
+     * Statique et pure.
+     */
+    public static function hasBlock(string $text): bool
+    {
+        $langs = implode('|', array_map(static fn(string $l): string => preg_quote($l, '/'), self::LANGUAGES));
+        return preg_match('/^[ \t]*(?:`{3,}|~{3,})[ \t]*(?:' . $langs . ')\b/mi', $text) === 1;
+    }
+
+    /**
      * Fragment du prompt système : quand et comment proposer des choix.
      *
      * Traduit, comme celui des fichiers livrés : l'exemple d'options se lit

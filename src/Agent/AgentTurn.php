@@ -22,7 +22,12 @@ declare(strict_types=1);
  *     du serveur s'applique). Le serveur tourne en UTC : les heures d'agenda
  *     (recherche, créneaux libres, création) se lisent dans ce fuseau ;
  *   - `scope` : le périmètre IMPOSÉ aux recherches et aux écritures (filtres
- *     d'une brique de workflow, SearchScope) — vide dans le chat ordinaire.
+ *     d'une brique de workflow, SearchScope) — vide dans le chat ordinaire ;
+ *   - `userMessage` : le message de l'utilisateur pour CE tour (l'outil
+ *     `memoriser` n'enregistre directement que sur une demande explicite) ;
+ *   - `externalRead` : un contenu écrit par un tiers (email, fichier, page) a-t-il
+ *     été lu pendant le tour ? Relu au moment de l'appel : après une telle
+ *     lecture, ce que le modèle veut retenir attend une confirmation.
  */
 final class AgentTurn
 {
@@ -30,6 +35,7 @@ final class AgentTurn
      * @param array<string, mixed>                  $user
      * @param \Closure(array<string, mixed>): void  $emit
      * @param \Closure(string, array, ?array): array $queueWrite
+     * @param (\Closure(): bool)|null               $externalRead
      */
     public function __construct(
         public readonly int $userId,
@@ -40,6 +46,8 @@ final class AgentTurn
         public readonly \Closure $queueWrite,
         public readonly string $timeZone = '',
         private readonly ?SearchScope $scope = null,
+        public readonly string $userMessage = '',
+        private readonly ?\Closure $externalRead = null,
     ) {
     }
 
@@ -47,5 +55,11 @@ final class AgentTurn
     public function scope(): SearchScope
     {
         return $this->scope ?? SearchScope::none();
+    }
+
+    /** Un contenu écrit par un tiers a-t-il été lu pendant ce tour ? */
+    public function externalContentRead(): bool
+    {
+        return $this->externalRead !== null && ($this->externalRead)() === true;
     }
 }

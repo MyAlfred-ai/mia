@@ -30,6 +30,15 @@
     - `genre`   : nouveaute | amelioration | correctif
     - `pour`    : tous | createurs | administrateurs  (informatif : tout le
                   monde voit toute la liste)
+    - `majeure` : oui — facultatif, RARE. Seulement l'ARRIVÉE d'une
+                  fonctionnalité entière (les workflows, Claude dans Office),
+                  jamais une amélioration ni un correctif. Elle est alors aussi
+                  montrée une seule fois à chaque personne qui peut s'en servir,
+                  dans la fenêtre « Quoi de neuf » (titre court, deux phrases,
+                  un schéma animé sur un exemple concret), puis signalée par une pastille verte sur
+                  l'endroit où la trouver. Sa présentation s'écrit dans
+                  src/Changelog/MajorFeatures.php (CATALOG), sous le même `id` —
+                  un test vérifie que les deux se répondent.
     - `date`, `version` : facultatives. Posées automatiquement depuis
                   l'historique git ; ne les écrire à la main que pour les
                   entrées antérieures à la mise en place de ce fichier.
@@ -46,6 +55,435 @@
   L'ordre du fichier fait foi : le plus récent en tête. Les 20 premières sont
   publiées, les suivantes restent ici comme mémoire du produit.
 -->
+
+## Workflows : une pièce se corrige aussi dans la discussion
+<!-- id: workflow-piece-corrigee-discussion | genre: correctif | pour: createurs -->
+
+Pendant une validation, donnez ou corrigez les valeurs directement dans la conversation de l'exécution (« l'Ad Spend d'octobre est de 15 539 € HT ») : MIA met à jour la pièce relue, la carte de validation montre la nouvelle version, et la suite du workflow la lit. Avant, ces valeurs restaient dans la discussion et la suite écrivait encore « en attente de saisie ». MIA ne mène plus non plus elle-même les étapes du workflow quand vous lui écrivez : elle ne prépare plus d'email en double.
+
+## Les tableaux d'un email arrivent en vrais tableaux
+<!-- id: emails-tableaux | genre: correctif | pour: tous -->
+
+Un tableau rédigé par MIA dans un email (Gmail, Outlook, livrable d'un workflow) arrive mis en forme chez le destinataire, avec ses bordures et ses colonnes de chiffres alignées. Avant, il s'affichait en lignes de barres verticales illisibles.
+
+## Plus besoin de se reconnecter après une mise à jour
+<!-- id: sessions-persistantes | genre: correctif | pour: tous -->
+
+Chaque mise à jour de MIA déconnectait tout le monde, et une connexion expirait au bout de sept jours, même pour qui venait tous les jours. Vous restez désormais connecté tant que vous revenez au moins une fois tous les 30 jours, mises à jour comprises.
+
+## Version soignée par Claude : beaucoup moins de crédits
+<!-- id: version-soignee-claude-cache | genre: correctif | pour: tous -->
+
+Une présentation, un classeur ou un document mis en page par un modèle Claude coûte désormais bien moins cher : Claude relit son travail déjà fait au lieu de le repayer à chaque étape. Le coût annoncé avant de lancer s'appuie aussi sur les réalisations de votre organisation, et un plafond est affiché : au-delà, la mise en page s'arrête et le fichier déjà prêt vous est livré.
+
+## Workflows : l'étape qui lit un email reçu reçoit ses pièces jointes
+<!-- id: workflow-email-pieces-jointes | genre: correctif | pour: createurs -->
+
+Une étape qui cite « Email reçu » reçoit désormais ses pièces jointes en fichiers : un classeur Excel se lit en entier et se compte ligne à ligne, sans rien cocher dans « Peut consulter ». Avant, l'étape ne voyait que le nom du fichier et répondait qu'elle n'y avait pas accès. Une étape ou une tâche à qui manque un service indique aussi le bon geste (« Peut consulter », « Avec quoi ») au lieu du menu « + » du chat.
+
+## Comptes : filtrer par groupe
+<!-- id: comptes-filtre-groupe | genre: amelioration | pour: administrateurs -->
+
+Dans **Personnes → Comptes**, un filtre **groupe** rejoint ceux du rôle, du statut et de la connexion : choisissez un groupe pour n'afficher que ses membres, ou **Sans autre groupe** pour retrouver les comptes à qui aucun groupe n'a encore été donné. Il se combine avec la recherche et les autres filtres, et **Copier les emails** ne prend que les comptes affichés.
+
+## Groupes : la recherche de membres filtre à nouveau la liste
+<!-- id: groupes-recherche-membres | genre: correctif | pour: administrateurs -->
+
+Dans **Personnes → Groupes**, taper un nom ou une adresse dans la recherche des membres laissait toute la liste affichée : seules les personnes qui correspondent restent désormais visibles, en création comme en modification d'un groupe. Les accents ne comptent plus : « helene » trouve « Hélène ».
+
+## Une page par assistant, et une fiche plus claire
+<!-- id: assistant-page-et-fiche | genre: amelioration | pour: createurs -->
+
+Chaque assistant a désormais **sa page** : son état, qui le voit, une case **Posez-lui une question** qui ouvre la conversation la question prête, ses chiffres des 30 derniers jours, sa consigne, ce qu'il connaît, son modèle, ses outils et son schéma — chaque bloc mène à son réglage. Sa **fiche** de création et de modification prend la mise en page des bases de connaissances : une barre en haut qui reste en vue, un menu de sections (Identité, Consigne, Modèle, Capacités, Connaissances) et le schéma tout en bas ; les documents de référence se déposent sur une zone, plusieurs à la fois.
+
+## Vos tables ne sont plus copiées dans la conversation
+<!-- id: tables-sans-copie | genre: amelioration | pour: tous -->
+
+Quand vous demandez « les clients de Lyon » ou « trie par chiffre d'affaires » sur une table cochée, MIA n'en fait plus de copie : elle en fait une **vue**, qui suit votre table quand elle change. Faire lire chaque ligne ou préparer une action par ligne s'applique directement à votre table, et une carte propose d'y écrire les valeurs calculées. Le volet **Tables** sépare **Vos tables** des **Résultats de MIA**, temporaires ; un résultat tiré d'une table qui a changé depuis est marqué **Périmé**, et **Garder** propose d'ajouter à votre table les colonnes qu'il apporte plutôt que d'en créer une seconde.
+
+## La page des assistants, épurée : une recherche d'abord
+<!-- id: assistants-recherche-d-abord | genre: amelioration | pour: createurs -->
+
+La page **Assistants** s'ouvre sur une recherche — par nom, description, modèle ou créateur — et deux cartes pour en créer un : **Nouvel assistant** (le formulaire) ou **Le décrire à MIA** (une conversation s'ouvre, la demande déjà commencée). Chaque assistant tient sur une ligne : son avatar, son modèle, ce qu'il connaît, une icône pour qui le voit et son état. Sa description apparaît en bulle quand la souris s'y attarde, ou sur le petit **?** qui suit son nom (au doigt, touchez le **?**). Cliquez la ligne pour ouvrir sa page ; au survol, **Discuter** et le menu **⋯**. La bibliothèque d'avatars s'ouvre depuis un lien en bas de la page.
+
+## Gemini 4 Neon au catalogue, Gemini Embedding 2 pour les bases
+<!-- id: catalogue-google-19-novembre-2026 | genre: nouveaute | pour: administrateurs -->
+
+**Gemini 4 Neon**, le nouveau modèle de Google placé entre Gemini 4 Hydrogen et Gemini 4 Carbon, s'active dans **Modèles IA → Fournisseurs et modèles** ; il ne devient pas le modèle par défaut. Pour les bases de connaissances, **Gemini Embedding 2**, le modèle que Google recommande désormais, est proposé à la création d'une base vectorisée par Gemini ; les bases existantes gardent le leur, et **Réindexer avec** permet d'en changer.
+
+## L'historique d'une table, et revenir en arrière
+<!-- id: table-historique | genre: nouveaute | pour: createurs -->
+
+La page d'une table dit quand elle a été créée et modifiée, et par qui. Son bouton **Historique** liste chaque changement — import, cellules corrigées, modification de MIA ou d'un workflow — et montre la table telle qu'elle était à un moment, cellules changées surlignées. **Revenir à cet état** la remet ainsi sans rien effacer, et s'annule pendant un quart d'heure.
+
+## Comprendre et corriger un document qui ne s'indexe pas
+<!-- id: kb-fiche-document | genre: amelioration | pour: createurs -->
+
+Dans une base de connaissances, chaque document dit quand il a été indexé pour la dernière fois ; cliquez-le : sa fiche montre ses étapes et ses extraits, et, s'il pose problème, dit pourquoi en clair (document numérisé, fichier protégé, fournisseur indisponible…). **Réessayer** le relance quand un nouvel essai peut réussir ; sinon, **Exclure de la base** l'écarte des recherches et des problèmes de la base, et **Rétablir** le reprend.
+
+## Essayer un workflow sur un de vos derniers emails
+<!-- id: workflow-essai-email-recent | genre: amelioration | pour: createurs -->
+
+Pour essayer à la main un workflow qui démarre à l'arrivée d'un email, la fenêtre de lancement propose maintenant vos dix derniers emails : choisissez-en un, il est traité comme s'il venait d'arriver, avec son expéditeur, ses pièces jointes et la réponse possible dans son fil. Si vous lancez sans rien choisir, MIA vous prévient que le workflow n'aura aucun email à traiter.
+
+## Quota mensuel : le plus généreux l'emporte toujours
+<!-- id: quota-le-plus-genereux | genre: correctif | pour: administrateurs -->
+
+Relever le quota d'un groupe relève désormais tous ses membres, même ceux qui avaient un ancien quota individuel plus bas : MIA retient le plus élevé entre le quota de la personne et ceux de ses groupes actifs. Un quota individuel sert à relever quelqu'un au-dessus de ses groupes, plus à le limiter en dessous ; la fiche du compte dit, pendant la saisie, lequel s'appliquera.
+
+## Bases de connaissances : une recherche d'abord, une page par base, trois visibilités
+<!-- id: bases-recherche-page-visibilites | genre: amelioration | pour: createurs -->
+
+La page des bases s'ouvre sur une recherche qui trouve une base par son nom, un document, un créateur ou un assistant, et chaque base a désormais sa propre page : son état, ce qu'elle sait — une recherche dans ses extraits, gratuite —, qui s'en sert, et son schéma en bas. Une icône dit qui la voit : **Privée** (vous seul), **Commune** (vous, les administrateurs et ceux à qui vous la partagez) ou **Publique** (toute l'organisation la coche dans le chat). Créer et modifier une base ou une table se fait sur la même fiche, avec un menu de sections et le schéma qui suit vos réglages en direct.
+
+## Réunions Google Agenda : répétition, invités, privée ou publique — et modification
+<!-- id: agenda-google-reunions | genre: amelioration | pour: tous -->
+
+Avec **Agenda Google**, MIA prépare de vraies réunions : elle les fait répéter comme vous le dites (« un mardi sur deux », « le premier lundi du mois », « chaque jour ouvré jusqu'à fin juin, sauf le 25 décembre »), invite les personnes nommées en obligatoire ou en facultatif, les rend **privées** ou **publiques**, et vous montre **disponible** ou **occupé** pendant la réunion. Elle sait aussi modifier un évènement existant — ajouter ou retirer quelqu'un, le décaler, le passer en privé. Par défaut, Google Agenda envoie l'invitation dès votre approbation : la carte nomme chaque invité avant.
+
+## Supprimer un workflow depuis sa vignette
+<!-- id: supprimer-un-workflow-vignette | genre: amelioration | pour: createurs -->
+
+Une corbeille sur chaque vignette de **Mes workflows**, et en haut de l'éditeur, supprime un workflow — il fallait jusqu'ici la chercher au bas de ses Réglages. Une fenêtre dit d'abord ce qui part (ses versions, l'historique de ses lancements) et quelles exécutions en cours s'arrêtent ; rien n'est supprimé sans votre confirmation, et les conversations des lancements restent.
+
+## GPT-6.2, Gemini 4 Hydrogen et Gemini 4 Carbon au catalogue
+<!-- id: catalogue-llm-17-novembre-2026 | genre: nouveaute | pour: administrateurs -->
+
+De nouveaux modèles s'activent dans **Modèles IA → Fournisseurs et modèles** : **GPT-6.2 Astra**, le plus capable d'OpenAI et moins cher que GPT-6 Astra, **GPT-6.2 Sol**, son modèle de tous les jours, **Gemini 4 Hydrogen**, le modèle généraliste de Google, et **Gemini 4 Carbon**, son plus capable ; aucun ne devient le modèle par défaut. **Mistral Large (latest)**, le modèle par défaut de Mistral, répond désormais avec Mistral Large 4 : il est compté à ce tarif et ne s'arrêtera plus le 30 avril 2027. Et **DeepSeek** cherche maintenant sur Internet, en citant ses sources.
+
+## Vos tables dans les workflows
+<!-- id: workflow-tables | genre: nouveaute | pour: createurs -->
+
+Une table de vos bases de connaissances se branche maintenant sur un workflow : une étape la lit en entier pour compter, filtrer ou croiser, et remet son résultat comme un Tableau sans recopier ses lignes ; une boucle la parcourt ligne par ligne ; une livraison y écrit à la fin (ajouter, mettre à jour un statut, tout remplacer), après votre accord sur une carte qui montre les valeurs avant et après. Les tables établies par une étape restent disponibles pour les suivantes.
+
+## Le logo de MIA sur ce qu'elle fait dans vos workflows
+<!-- id: workflow-logo-mia | genre: amelioration | pour: createurs -->
+
+Sur le rail d'un workflow, une étape sans assistant porte désormais le logo de MIA quand elle travaille avec le modèle de votre organisation, et le logo de l'éditeur du modèle quand elle en impose un autre. Les questions et les décisions de MIA portent son petit logo au coin de leur pictogramme : on voit d'un coup d'œil qui fait quoi.
+
+## Un workflow peut en appeler un autre
+<!-- id: workflow-appelle-workflow | genre: nouveaute | pour: createurs -->
+
+La brique **Appeler un workflow** lance un autre de vos workflows au milieu du vôtre : vous lui donnez ses paramètres (une valeur, une pièce ou un champ du dossier), et son résultat revient comme une pièce. MIA vous prévient avant de publier si un paramètre manque ou n'est pas de la bonne nature, si le workflow appelé n'est pas publié, ou si deux workflows s'appelleraient sans fin. Sur le rail, elle se reconnaît d'un coup d'œil : l'icône de l'espace Workflows, une pile de cartes, le workflow appelé en miniature.
+
+## Des tables permanentes dans vos bases de connaissances
+<!-- id: tables-permanentes | genre: nouveaute | pour: tous -->
+
+Un fichier clients, une grille de tarifs, un suivi : gardez-les comme **tables** dans Bases de connaissances — depuis un fichier Excel ou CSV, à la main, ou en cliquant « Garder » sur un résultat établi par MIA dans une conversation. Cochée dans le chat ou liée à un assistant, une table est lue ligne par ligne : MIA compte, filtre et croise jusqu'à 20 000 lignes sans en oublier, et vous l'ouvrez en entier par « Voir » sous sa réponse. Demandez-lui de la modifier — changer des valeurs, ajouter ou supprimer des lignes ou une colonne : elle le fait dans la table même, après votre accord sur une carte qui montre le changement ; la version d'avant reste récupérable.
+
+## Recoupez des centaines de mails, de fichiers ou de lignes sans rien perdre
+<!-- id: tables-de-travail | genre: nouveaute | pour: tous -->
+
+Demandez à MIA un travail complet sur beaucoup d'éléments — « parmi les clients de ce fichier, lesquels ne m'ont pas écrit depuis septembre ? » : elle range tout dans une liste de la conversation (mails Gmail ou Outlook, fichiers d'un dossier Drive, lignes d'un classeur — un gros classeur joint y va d'office), puis croise, filtre et compte sans rien oublier. Elle peut lire chaque ligne pour la classer ou la résumer, et préparer un brouillon ou une tâche pour chacune : vous approuvez une seule carte. La liste reste hors du fil : sous la réponse, « Voir » l'ouvre dans un volet où vous la parcourez, la filtrez, la téléchargez, la renommez, la supprimez ou la gardez.
+
+## Une pastille vous invite à vous présenter à MIA
+<!-- id: contexte-pastille | genre: amelioration | pour: tous -->
+
+Tant que « Votre contexte » est vide, une pastille bleue le signale sur le bouton **Réglages**, l'entrée **Mémoire** et la carte elle-même. Survolez-la pour lire à quoi il sert : quelques mots sur votre métier, vos outils et votre public, que MIA relit au début de chaque conversation pour vous répondre au plus juste.
+
+## MIA remarque vos habitudes et vous propose d'en faire des préférences
+<!-- id: memoire-gestes | genre: nouveaute | pour: tous -->
+
+Vous redemandez souvent « plus court » ou « en tableau » après une réponse, vous passez vos brouillons d'email au vouvoiement, vous choisissez toujours « Plus formel » ? Au bout de trois fois, MIA vous propose d'en faire une habitude — pour vos emails, vos documents ou toutes vos réponses —, et rien ne change sans votre « oui ». Dans **Réglages → Mémoire**, chaque souvenir dit aussi à quoi il s'applique : partout, emails, documents et fichiers, ou code.
+
+## Les pastilles mènent jusqu'à ce qui est concerné
+<!-- id: pastilles-jusqu-a-l-element | genre: amelioration | pour: administrateurs -->
+
+Une pastille de l'administration ne s'arrête plus au menu : sur la page, la carte, la ligne ou la section concernée (un outil, un modèle, un compte, un groupe, une base, un connecteur) porte la sienne, qui dit ce qui ne va pas pour lui seul, et « Régler → » du tableau de bord y mène directement. Le texte d'une pastille (points à régler, nouveautés, connexions à reconnecter) s'affiche désormais en info-bulle, au survol ou d'un toucher sur la pastille, jamais en texte toujours visible.
+
+## La mise à jour des prix prend quelques secondes
+<!-- id: mise-a-jour-prix-rapide | genre: amelioration | pour: administrateurs -->
+
+« Mettre à jour coûts Internet (USD) », dans Coûts → Tarifs & crédits, ne cherche plus en ligne que ce que le catalogue de MIA ne tarife pas, en petits lots menés en même temps : quelques secondes au lieu de plusieurs minutes. Les outils sans prix unitaire (pages web, cartes, Gamma, n8n, modèles locaux) ne sont plus cherchés, et un modèle d'image facturé au jeton retrouve son calcul image par image. Elle fonctionne aussi avec beaucoup de modèles activés — au-delà d'une vingtaine, l'enregistrement échouait — et un échec dit désormais sa cause.
+
+## À la voix : coupez la parole à MIA, et laissez-la se servir de vos connecteurs
+<!-- id: conversation-vocale-fluide | genre: amelioration | pour: tous -->
+
+En conversation vocale, la voix de MIA baisse dès que vous commencez à parler et « stop » est compris en une seconde environ — ce que vous dites dans la foulée (« stop, et pour demain ? ») part comme la question suivante ; la barre d'espace, Échap, un toucher sur le bandeau ou le bouton de votre casque l'interrompent aussi, sur-le-champ. Vos connecteurs reliés s'activent d'eux-mêmes quand votre demande en a besoin — le bandeau dit lesquels —, et « active Gmail » ou « coupe l'agenda » les règlent à la voix. Avant d'approuver une action ou d'envoyer un email, dites « lis-le » : MIA vous lit la carte.
+
+## Votre modèle par défaut, d'une étoile
+<!-- id: modele-par-defaut-personnel | genre: nouveaute | pour: tous -->
+
+Dans le sélecteur de modèle, touchez l'étoile au bout d'une ligne : ce modèle ouvre désormais chacune de vos nouvelles conversations, sur tous vos appareils. Le même choix se fait dans Réglages → Préférences IA, et retoucher l'étoile revient au modèle de votre organisation ; un assistant garde toujours le sien.
+
+## Réunions Outlook : invités, salle, Teams, répétition — et modification
+<!-- id: outlook-reunions-invites | genre: amelioration | pour: tous -->
+
+Avec le calendrier Outlook, MIA prépare désormais de vraies réunions : invités obligatoires ou facultatifs, **salle de réunion** réservée (par son nom, en vérifiant qu'elle est libre — *« quelles salles sont libres jeudi à 10 h ? »*), **réunion Teams**, répétition (chaque jour, chaque semaine, chaque mois…), rappel et disponibilité. Elle sait aussi **modifier** un évènement existant — le décaler, changer de salle ou de lieu, ajouter ou retirer un invité, le passer en Teams. Outlook écrit aux invités dès que vous approuvez : la carte les nomme, dit qui sera prévenu et si la salle est libre avant que rien ne parte — c'est ensuite la salle qui accepte ou refuse, d'elle-même.
+
+## Réponses Outlook et fils Teams plus fiables
+<!-- id: outlook-teams-fiabilite | genre: correctif | pour: tous -->
+
+Une réponse préparée dans Outlook à un message en texte simple garde les sauts de ligne du message cité, et suit l'adresse de réponse indiquée par l'expéditeur ; « Améliorer » ne retire plus votre formule de fin. Dans Teams, après une réponse dans un fil, MIA continue dans le bon fil ; un fil dont le premier message a été supprimé reste lisible, et un message publié dans une conversation garde son lien.
+
+## Les dates d'arrêt d'OpenAI relevées chaque jour
+<!-- id: openai-dates-arret-relevees | genre: amelioration | pour: administrateurs -->
+
+Avec une clé OpenAI, MIA demande chaque jour à OpenAI les dates d'arrêt qu'il annonce pour ses modèles. Un arrêt annoncé par courriel mais encore inconnu de MIA apparaît désormais dans **Modèles IA → Fournisseurs et modèles** — badge **Arrêt le …**, mention « Date relevée chez OpenAI » et point à régler — et le modèle quitte le chat à sa date, au lieu d'échouer à chaque message. Le panneau d'OpenAI dit quand les dates ont été relevées pour la dernière fois.
+
+## OpenAI arrête o3 et GPT-5 le 11 décembre
+<!-- id: openai-arret-decembre-2026 | genre: correctif | pour: administrateurs -->
+
+OpenAI coupe le 11 décembre 2026 o3, o3-pro et la première génération de GPT-5 (GPT-5, mini, nano et pro). Dans **Modèles IA → Fournisseurs et modèles**, ceux que vous proposez affichent leur date et leur remplaçant, à activer dès maintenant — GPT-6.1 Sol et GPT-6 Luna coûtent moins cher que les remplaçants désignés par OpenAI. Un modèle activé que MIA ne propose plus, comme o4-mini, DeepSeek V3, Mistral Medium 3.1 ou Gemini 2.0 Flash, restait dans le chat et échouait à chaque message : il est désormais listé dans le panneau de son fournisseur, avec la mention « Hors du catalogue de MIA », pour être éteint, et il quitte le chat à sa date d'arrêt.
+
+## Le bouton Stop arrête la réponse sur-le-champ
+<!-- id: stop-immediat | genre: correctif | pour: tous -->
+
+Cliquer **Arrêter la génération** semblait parfois sans effet : la réponse continuait de s'écrire plusieurs secondes, surtout quand MIA réfléchissait ou consultait une source. Désormais elle s'arrête au clic, marquée « Réponse interrompue », et le bouton d'envoi revient aussitôt ; c'est cette réponse, telle que vous l'avez vue, qui reste dans la conversation. Pour une image ou une page web, le bouton indique « Arrêt en cours… » le temps que la génération se termine.
+
+## Conversation vocale : choisissez la voix qui lit les réponses
+<!-- id: voix-de-lecture | genre: amelioration | pour: administrateurs -->
+
+OpenAI arrête le 6 janvier 2027 la voix qui lit les réponses de la conversation vocale. Choisissez dès maintenant sa remplaçante sur la carte **Conversation vocale** de **Capacités → Outils** : **OpenAI Realtime**, celle qu'OpenAI désigne pour la suite, ou **Voxtral** de Mistral, facturée au texte lu ; chacune n'est retenue qu'après un essai réussi. Sans choix de votre part, la lecture passe d'elle-même sur OpenAI Realtime le 6 janvier 2027, et un point à régler vous le rappelle d'ici là.
+
+## Claude Fable 5.2, Gemini 4 Argon, GPT-6.1 Terra et des tarifs corrigés
+<!-- id: catalogue-llm-novembre-2026 | genre: nouveaute | pour: administrateurs | majeure: oui -->
+
+Les derniers modèles s'activent dans **Modèles IA → Fournisseurs et modèles** : Claude Fable 5.2, plus capable et moins cher que Fable 5.1, Claude Haiku 5.5, le plus économique d'Anthropic, Gemini 4 Argon, le modèle de raisonnement de Google, et GPT-6.1 Terra ; côté images, GPT Image 2.6 et Nano Banana 2.1. Mistral Large 4 est désormais compté à son vrai tarif, deux fois moins cher qu'avant, la promotion de GPT-5.6 Sol court jusqu'au 30 novembre, et les recherches Internet d'OpenAI ne sont plus surcomptées. Les modèles que leur éditeur remplace (Gemini 3.7 et 3.5 Flash, bientôt Gemini 2.5, Mistral Large 3 et Medium 3.5, GPT Image 2) portent leur date d'arrêt et le nom de leur remplaçant.
+
+## Une barre latérale plus claire, qui se replie
+<!-- id: volet-repliable | genre: amelioration | pour: tous -->
+
+Vos espaces deviennent de grandes tuiles colorées qui disent l'essentiel d'un coup d'œil : assistants et bases à votre disposition, tâches actives, workflows qui vous attendent. Espaces, Épinglées, Historique et chaque période de l'historique se replient d'un clic, ou tous ensemble avec le bouton **Tout replier** en haut de la barre ; repliés, les espaces restent une rangée d'icônes cliquables. La carte de votre compte, tout en bas, se replie aussi en une ligne : votre avatar, cerclé de vos crédits restants, et les boutons Réglages et Admin. Ce que vous repliez le reste, et vos choix suivent votre compte d'un appareil à l'autre.
+
+## Votre historique d'usage, mois après mois
+<!-- id: historique-des-usages | genre: nouveaute | pour: tous -->
+
+La page **Usage & crédits** a un onglet **Historique** : toutes vos opérations depuis votre première utilisation, sur la période de votre choix (douze mois par défaut, ou vos propres dates). Filtrez par origine — conversations, workflows, tâches programmées, Claude dans Office —, par type d'usage (réponses, recherches Internet, images, pages web, voix…), par modèle d'IA ou par assistant, cherchez une conversation, un workflow ou un modèle par son nom, et exportez le résultat en CSV. Chaque opération rouvre sa conversation ou son exécution d'un clic.
+
+## Les petites consommations ne se perdent plus dans « Autres »
+<!-- id: petites-consommations-visibles | genre: correctif | pour: tous -->
+
+Dans **Réglages → Usage & crédits**, la part **Autres** des camemberts détaille désormais ce qu'elle regroupe, avec les crédits de chacun : quelques demandes de **Claude dans Office** à côté de beaucoup de conversations y restent lisibles. Côté administration, la vue d'ensemble de **Consommation** nomme sous sa carte les catégories trop petites pour porter leur nom.
+
+## Workflows : une conversation qui suit mieux, des fiches lisibles
+<!-- id: workflow-recette-navigateur | genre: correctif | pour: createurs -->
+
+Après un renvoi avec remarque, la validation suivante apparaît aussitôt dans la conversation, et une carte tranchée ou arrêtée ailleurs n'y garde plus ses boutons. Les Fiches remises par une étape s'affichent avec le nom de leurs champs, une étape confiée à un assistant ne crée plus d'image en plus de la brique prévue pour cela, et « Regénérer » n'est plus proposé dans la conversation d'un workflow, où il effaçait les messages des étapes.
+
+## Les grandes nouveautés vous sont présentées
+<!-- id: quoi-de-neuf-majeures | genre: nouveaute | pour: tous -->
+
+Quand une fonctionnalité importante arrive — les workflows, Claude dans Office —, une fenêtre **Quoi de neuf** vous la présente à votre prochaine visite : une seule fois, et seulement si vous pouvez vous en servir, en deux phrases, un **schéma animé** qui la montre sur un exemple concret — un email reçu qui devient une réponse envoyée, une question posée à Claude dans un classeur Excel — et un bouton **Aller voir**. Une **pastille verte** reste ensuite sur l'endroit où la trouver (une tuile des **Espaces**, le bouton **Réglages**…) jusqu'à ce que vous l'ouvriez.
+
+## Claude dans Excel, Word et PowerPoint, guidé pas à pas
+<!-- id: claude-dans-office-pas-a-pas | genre: amelioration | pour: tous -->
+
+Relier l'add-in Claude à Excel, Word ou PowerPoint se fait désormais en suivant un guide illustré : sur la carte **Claude dans Office** de **Réglages → Comptes connectés**, le bouton **Me guider pas à pas** ouvre l'assistant **MIA : mode d'emploi**, qui vous accompagne depuis le début, captures d'écran à l'appui. Il répond aussi en images quand vous lui demandez *« comment relier Excel à Claude ? »*.
+
+## Claude dans Office, avec votre compte MIA
+<!-- id: claude-dans-excel | genre: nouveaute | pour: tous | majeure: oui -->
+
+L'add-in **Claude** passe par MIA dans **Excel, Word et PowerPoint** : plus de compte Claude à créer, ses demandes comptent dans vos crédits MIA à leur coût réel — leur propre catégorie dans **Usage & crédits** — et il propose les modèles Claude ouverts à votre compte. Votre organisation le déploie une fois pour tous avec la connexion Microsoft, en choisissant les applications qui le reçoivent ; sinon, générez votre jeton dans **Réglages → Comptes connectés** et collez-le dans l'add-in. Côté administration : **Capacités → Connecteurs → Claude dans Office**.
+
+## Un écran de conversation plus clair
+<!-- id: chat-fond-clair | genre: amelioration | pour: tous -->
+
+En thème clair, l'écran de conversation prend le fond blanc de l'administration et de vos réglages, et la barre latérale le même gris très léger : on passe de l'un à l'autre sans changement de teinte.
+
+## Les tableaux des réponses sont fermés en bas
+<!-- id: tableaux-fermes-en-bas | genre: correctif | pour: tous -->
+
+Un tableau rédigé par MIA s'affichait sans son dernier trait : la ligne du bas restait ouverte, comme coupée. Il est désormais encadré jusqu'en bas, dans la conversation comme dans le suivi des workflows.
+
+## Un workflow se suit dans sa conversation
+<!-- id: workflow-suivi-dans-la-conversation | genre: nouveaute | pour: createurs -->
+
+Lancer un workflow vous amène dans **sa conversation** : un volet **Avancement** montre les étapes une à une, la voie prise par chaque condition et ce qui vous attend. Les décisions se prennent sans quitter la discussion — approuver, **renvoyer l'étape avec une remarque**, **choisir une autre voie** quand MIA hésite, **reprendre** après une erreur — et les réponses de chaque étape s'y ajoutent au fil de l'exécution. Le **Suivi détaillé** reste à un clic.
+
+## Un workflow vérifie tout avant de démarrer
+<!-- id: workflow-pre-controle | genre: amelioration | pour: createurs -->
+
+Avant de lancer un workflow, MIA vérifie qu'il pourra aller au bout : un compte à relier (Gmail pour l'email de remise, Google Drive pour une étape…), un outil retiré, un modèle disparu. La fenêtre de lancement liste ce qui est **à régler avant de lancer**, avec un lien **Relier**, et rien ne part — ni temps ni crédits perdus. Un workflow programmé ou déclenché par un email ne démarre pas non plus, et vous prévient.
+
+## Les versions d'un workflow se revoient
+<!-- id: workflow-historique-versions | genre: nouveaute | pour: createurs -->
+
+Chaque publication d'un workflow est gardée : le bouton **Versions** de l'éditeur les liste, montre le déroulé de chacune et permet d'en **faire repartir le brouillon**, sans toucher à la version en service tant que vous ne republiez pas. Le bouton **Lancements** ouvre, lui, l'historique des exécutions.
+
+## Des documents de référence et ce que MIA sait de votre entreprise, dans les workflows
+<!-- id: workflow-documents-reference | genre: nouveaute | pour: createurs -->
+
+Un champ **Fichier** du départ peut porter un **document de référence** fourni d'office à chaque lancement — un modèle de réponse, un texte de loi, vos références — que les étapes citent avec @. Une condition ou une décision posée à MIA lit la présentation de votre entreprise et peut consulter les **bases de connaissances** de votre choix : « cet appel d'offres correspond-il à notre offre ? » trouve enfin de quoi répondre.
+
+## Les conditions par règle disent ce qu'elles font
+<!-- id: workflow-regles-claires | genre: correctif | pour: createurs -->
+
+Trois lignes « Départ est égal à Oui », « … à Non », « … à Peut-être » réunies par « Toutes les conditions » ne pouvaient jamais être vraies : le workflow prenait toujours la voie « Si non », « Oui » saisi compris. Une phrase dit désormais quand la voie « Si oui » est prise, une règle contradictoire est signalée avant de publier, un champ Choix propose ses options et une condition accepte jusqu'à huit lignes. Le verdict « Oui » ou « Non » prend la couleur de la voie suivie, et « Lancé », « Fait », « Livré » passent en vert.
+
+## Les PDF avec le logo de l'entreprise se téléchargent à nouveau
+<!-- id: pdf-logo-demesure | genre: correctif | pour: tous -->
+
+Un document téléchargé en PDF avec le logo de l'entreprise pouvait échouer sur « Une erreur interne est survenue », quel que soit son contenu, quand le logo était une très grande image. Le logo est maintenant mis à la bonne taille avant la mise en page : le PDF se crée, logo compris. Si un fichier ne peut pas être créé, la carte le dit et propose un autre format.
+
+## Chaque conversation a son repère, et la recherche Internet se voit
+<!-- id: repere-conversations-internet-visible | genre: amelioration | pour: tous -->
+
+Dans la barre latérale, chaque conversation porte un repère à gauche de son titre — l'horloge d'une tâche, l'icône des workflows, la couleur de l'assistant ou un petit anneau — : les titres sont alignés et aucune ne se perd parmi les autres. La **Recherche Internet** apparaît à côté de vos connecteurs, dans la pastille des sources actives près du bouton +, et la couper ne pose plus de point orange sur le +.
+
+## Workflows et tâches demandés dans la conversation : prêts tels que vous les décrivez
+<!-- id: workflow-tache-depuis-chat-fiables | genre: correctif | pour: createurs -->
+
+Un workflow décrit dans la conversation confiait parfois ses étapes à MIA au lieu de l'assistant demandé, restait en brouillon « déclenché par son adresse » alors qu'il devait se lancer à la main, ou laissait en clair un champ cité comme « Email client » : il arrive désormais avec les bons assistants, le bon départ, chaque champ relié, et programmé à votre heure plutôt qu'à celle du serveur. Une règle « montant supérieur à 0 » ne met plus de côté toutes les lignes d'un fichier Excel. Une tâche programmée « toutes les deux semaines » est maintenant comprise (MIA propose le rythme le plus proche), et une tâche qui prépare un brouillon d'email inclut votre messagerie dans ce qu'elle consulte.
+
+## Un workflow démarre dès qu'un email arrive, sur les emails que vous choisissez
+<!-- id: workflow-email-instantane | genre: nouveaute | pour: createurs -->
+
+Un workflow qui démarre sur un email part dès l'arrivée du message quand votre organisation a activé les notifications de Gmail ou d'Outlook, sinon la boîte est vérifiée chaque minute. Le départ se règle d'une question, **Quand démarre-t-il ?** : **De**, **Objet contient** et **Avec une pièce jointe** sont à portée de main, **Plus de critères** ajoute **Sauf de**, **Adressés à** et **Contient les mots**, et une phrase dit en clair ce qui lancera le workflow. **Tester sur mes derniers emails** montre lesquels le lanceraient, et pourquoi les autres seraient écartés ; une pièce jointe envoyée par l'iPhone ou Apple Mail compte.
+
+## Les champs à choix du départ d'un workflow fonctionnent
+<!-- id: workflow-champ-choix | genre: correctif | pour: createurs -->
+
+Dans l'éditeur d'un workflow, ajouter au départ un champ **Choix** faisait perdre ses options et figeait le volet dès qu'on passait à une autre brique. Les options sont maintenant gardées, et la valeur par défaut d'un champ Choix se choisit dans la liste de ses options.
+
+## Une mémoire qui apprend, sous votre contrôle
+<!-- id: memoire-geree-par-mia | genre: nouveaute | pour: tous -->
+
+« MIA pour vous » devient la **Mémoire**, page **Réglages → Mémoire** : vos souvenirs par thème, à corriger ou retirer d'un clic. MIA **apprend d'elle-même** ce que vous dites de vous (votre métier, vos préférences) ; ce qu'elle déduit attend votre accord, et vous pouvez refuser. Faites aussi **corriger** ou **oublier** un souvenir en conversation (*« oublie que j'habite à Lyon »*). De temps en temps, une courte **question** vous demande ce que vous préférez : un clic, et c'est retenu.
+
+## Images à fond transparent, au format de votre choix
+<!-- id: images-fond-transparent-format | genre: nouveaute | pour: tous -->
+
+Un outil image peut désormais produire des images à **fond transparent** — un logo, un pictogramme, un produit détouré —, enregistrées en PNG, ainsi qu'un **format du fichier** (PNG, JPEG ou WebP) et une **orientation** (carré, paysage, portrait). L'administrateur les règle dans la fiche de l'outil, un assistant peut les préciser pour ses propres images, et la brique de création d'image d'un workflow aussi. Seuls les réglages que le moteur d'image accepte sont proposés.
+
+## Des réponses qui s'écrivent avec fluidité
+<!-- id: reponses-fluides | genre: amelioration | pour: tous -->
+
+Les réponses de MIA apparaissent désormais lettre à lettre, de façon continue, au lieu d'arriver par blocs, et elles commencent plus vite : votre message s'affiche à l'instant où vous l'envoyez, et le premier mot arrive sans le délai qui s'ajoutait à celui du modèle. Pendant que MIA réfléchit ou cherche, une petite animation géométrique aux couleurs de votre organisation accompagne ce qu'elle est en train de faire. Le fil suit le texte en glissant, sans à-coups.
+
+## Version rapide ou version soignée, au choix avant l'écriture
+<!-- id: version-soignee-avant-ecriture | genre: nouveaute | pour: tous -->
+
+Quand vous demandez un PDF, un document Word ou une présentation, MIA vous propose d'abord deux boutons : **Version rapide**, prête tout de suite, ou **Version soignée**, mise en page par un modèle dont le nom et le coût estimé sont affichés. Choisie, la version soignée part dès que le contenu est rédigé : le document n'est fabriqué qu'une fois. Le bouton **Version soignée** existe aussi désormais sur la carte d'un PDF ou d'un document Word. Et si votre entreprise a déposé son modèle ou son logo, une ligne **Embarquer** vous laisse les garder ou non, avant de télécharger comme avant de lancer la version soignée — qui reçoit désormais le modèle en premier, puis vos fichiers et votre demande.
+
+## Des PDF qui ne débordent plus
+<!-- id: pdf-mise-en-page-propre | genre: correctif | pour: tous -->
+
+Dans les PDF créés par MIA, le texte collait au bord de la feuille, le pied de page de l'entreprise n'apparaissait pas, les titres en gras perdaient certains caractères et les tableaux larges sortaient de la page. Les PDF ont maintenant de vraies marges, leur pied de page, et des tableaux dont chaque colonne prend la largeur de son contenu — en paysage au-delà de six colonnes.
+
+## Les versions soignées rejoignent Mes créations
+<!-- id: versions-soignees-dans-creations | genre: amelioration | pour: tous -->
+
+Les présentations et classeurs réalisés par un modèle avec **Version soignée**, et les présentations Gamma, apparaissent désormais dans **Mes créations**, sous le type **Version soignée**. Un clic télécharge le fichier tant qu'il est disponible (30 jours) ; une présentation Gamma s'ouvre sur gamma.app, avec son export PDF ou PowerPoint.
+
+## PDF jusqu'à 20 Mo et présentations PowerPoint jusqu'à 50 Mo
+<!-- id: pdf-20-pptx-50 | genre: amelioration | pour: tous -->
+
+Vous pouvez joindre à une conversation un PDF jusqu'à 20 Mo et une présentation PowerPoint (.pptx) jusqu'à 50 Mo ; les autres fichiers restent limités à 10 Mo. Un fichier trop lourd est refusé dès que vous le joignez, avec son poids, la limite qui s'applique, la raison de cette limite et la façon de réduire le fichier.
+
+## Les PDF numérisés se joignent sans erreur
+<!-- id: pdf-scanne-sans-erreur | genre: correctif | pour: tous -->
+
+Un PDF fait de pages numérisées (un scan, une facture photographiée) faisait échouer l'envoi : la pièce jointe n'arrivait jamais dans la conversation ni dans une base de connaissances. Il se joint désormais comme les autres, quel que soit son nombre de pages.
+
+## Des pages d'administration plus claires, sur ordinateur comme sur téléphone
+<!-- id: admin-socle-commun | genre: amelioration | pour: administrateurs -->
+
+Toutes les pages de l'administration et de vos réglages suivent désormais le même plan : une barre du haut qui dit où vous êtes, si vos modifications sont enregistrées et donne accès à la recherche, puis le titre de la page, sa phrase d'explication et ses boutons. En thème clair, le fond est blanc et les cadres sont nets ; sur téléphone, le bouton principal de la page reste sous le pouce et les listes s'affichent en cartes.
+
+## Emails, anciens PowerPoint, archives ZIP et photos HEIC se lisent
+<!-- id: emails-ppt-zip-heic | genre: nouveaute | pour: tous -->
+
+Un email enregistré (.eml, .msg d'Outlook) se joint et se lit avec son objet, son expéditeur, ses destinataires, son texte et ses pièces jointes ; un email joint à un mail Gmail ou Outlook aussi. Les anciennes présentations PowerPoint (.ppt) se lisent diapositive par diapositive, notes comprises, et une archive ZIP montre son contenu puis MIA en lit les fichiers. Une photo HEIC d'iPhone ou de Mac, une image AVIF, TIFF ou BMP est convertie en JPEG à l'envoi.
+
+## Tout fichier texte se lit, et la conversation accepte les mêmes formats que les bases
+<!-- id: tout-fichier-texte | genre: amelioration | pour: tous -->
+
+Un fichier dont le contenu est du texte se joint et se lit maintenant quelle que soit son extension : code, données, journaux, configuration, agenda, sous-titres… La conversation accepte aussi PowerPoint, OpenDocument, EPUB, pages web et RTF, comme les bases de connaissances ; les pièces jointes des emails, les fichiers Drive et les liens suivent la même règle. Un très long fichier texte n'est envoyé au modèle qu'en partie et MIA en lit la suite quand votre question l'exige ; un format non lu est refusé avec un message qui le nomme.
+
+## Modèles IA : fournisseurs, clés et modèles sur une seule page
+<!-- id: modeles-ia-une-page | genre: amelioration | pour: administrateurs -->
+Les pages des clés et des modèles n'en font plus qu'une, **Fournisseurs et modèles** : une carte par fournisseur avec son logo et son état, la clé se colle directement dans sa carte, et ses modèles s'activent d'un interrupteur, coût par réponse à l'appui. En tête, un schéma montre qui répond par défaut et qui prend le relais en cas de panne.
+
+## Workflows : une brique pour créer un fichier de tout format
+<!-- id: workflow-brique-fichier | genre: nouveaute | pour: createurs -->
+
+Dans l'éditeur d'un workflow, le groupe **Créer** propose **Un fichier** : une étape qui écrit un fichier du format de votre choix — script Python, Markdown, CSV, page HTML, requête SQL… ou tout autre fichier texte. Vous réglez son type, sa consigne, son assistant, ses sources et sa relecture comme pour une étape ; le fichier se télécharge tel quel et part en pièce jointe d'un email ou d'un message Slack.
+
+## Les anciens fichiers Word et Excel (.doc, .xls) se lisent
+<!-- id: anciens-doc-xls | genre: nouveaute | pour: tous -->
+
+Un document Word ou un classeur Excel enregistré dans l'ancien format (.doc, .xls, Office 97-2003) se joint maintenant à un message, se dépose dans une base de connaissances ou parmi les documents d'un assistant : il était refusé avec « Type de fichier non supporté ». MIA en lit le texte, les tableaux et les notes de bas de page, chaque onglet d'un classeur avec ses dates, et aussi dans les pièces jointes d'un email ou un dossier synchronisé ; seul un fichier protégé par un mot de passe reste illisible.
+
+## Une fenêtre des nouveautés repensée, avec tout l'historique
+<!-- id: nouveautes-historique | genre: amelioration | pour: tous -->
+
+Cliquer le numéro de version ouvre une fenêtre **Nouveautés** plus lisible : rangée par mois, filtrable entre **Nouveautés**, **Améliorations** et **Correctifs**, avec une recherche. Le bouton **Voir les nouveautés plus anciennes** déroule tout l'historique, et ce qui est arrivé depuis votre dernière visite porte **Nouveau pour vous**.
+
+## La dictée peut passer par Voxtral, de Mistral
+<!-- id: dictee-voxtral | genre: nouveaute | pour: administrateurs -->
+
+Sur la carte **Dictée vocale** de la page **Outils**, l'administrateur choisit désormais le moteur de transcription : OpenAI, qui écrit au fil de la parole, ou **Voxtral** de Mistral, qui écrit chaque phrase dès que vous marquez une pause. Voxtral n'est proposé qu'avec une clé Mistral, et n'est retenu qu'après un essai réussi de cette clé. Pour les utilisateurs, rien ne change : le même bouton micro, le même texte à relire avant d'envoyer. La conversation à voix haute passe toujours par OpenAI : sans compte OpenAI relié, son bouton porte une pastille rouge et dit pourquoi, au lieu de disparaître.
+
+## Un service relié s'allume tout seul dans le chat
+<!-- id: connecteur-allume-a-la-connexion | genre: amelioration | pour: tous -->
+
+Quand vous reliez un service dans **Réglages → Comptes connectés** — Google Drive, Gmail, Outlook, vos agendas, vos tâches, Teams ou Slack —, son interrupteur du menu **+** s'allume de lui-même : MIA peut s'en servir dès votre prochain message. Vous l'éteignez comme d'habitude dans le volet **Connecteurs**, et il reste éteint ; une nouvelle connexion le rallume.
+
+## Des conseils pour une base de connaissances efficace
+<!-- id: kb-conseils | genre: nouveaute | pour: createurs -->
+
+La fiche d'une base explique, en quelques lignes, ce qui la rend utile à un assistant : un sujet par base, du vrai texte, une seule version de chaque document, des titres clairs. Et quand une base sert mal — des scans sans texte, presque rien à lire, deux versions d'un même document, surtout des tableaux —, une pastille « À améliorer » le signale sur sa carte et dit quoi changer.
+
+## Les extraits d'un document, d'un clic
+<!-- id: kb-extraits-document | genre: amelioration | pour: createurs -->
+
+Sur la fiche d'une base, cliquez un document indexé : ses extraits s'ouvrent dans un volet, à droite, avec une recherche dans le document et le passage au document suivant. C'est ce que l'assistant lit vraiment quand il consulte la base.
+
+## Les scripts .bat, .cmd et .ps1 se joignent enfin
+<!-- id: scripts-joints-comme-texte | genre: correctif | pour: tous -->
+
+Un script Windows (.bat, .cmd, .ps1, .vbs) ou Unix (.sh, .py…) se joint désormais à un message ou se dépose dans une base de connaissances : il était refusé avec « Type de fichier non supporté », et le bouton **Joindre des fichiers** ne le proposait pas. MIA le lit comme du texte, sans jamais l'exécuter, accents compris quand Windows l'a enregistré en « Unicode » ou en « ANSI ».
+
+## La fiche d'une base de connaissances, en trois questions
+<!-- id: kb-fiche-trois-questions | genre: amelioration | pour: createurs -->
+
+Créer ou modifier une base de connaissances se fait désormais en trois questions : ce qu'elle contient, d'où viennent ses documents, qui s'en sert. Seules les sources configurées sont proposées, le détail de chaque réglage est dans le petit **ⓘ**, et qui s'en sert apparaît en pastilles. Chaque question se replie sur une ligne qui la résume — la fiche s'en souvient, et rouvre les documents à chaque problème nouveau —, et la liste des documents montre d'abord ceux à vérifier, cinq à la fois, avec filtres et recherche.
+
+## Une base de connaissances réservée à vous seul
+<!-- id: base-uniquement-pour-moi | genre: nouveaute | pour: createurs -->
+
+Le créateur d'une base peut la réserver à lui seul : en la rendant **Privée**, dans « Qui la voit » sur sa fiche, personne d'autre — pas même un administrateur — ne la voit, ne la coche dans le chat, ne la partage ni ne l'interroge, même à travers un assistant que d'autres ouvrent. Lui seul peut lever la réserve ; la poser retire les partages accordés.
+
+## La version soignée se suit dans une carte, et le fichier y arrive
+<!-- id: version-soignee-carte-de-realisation | genre: amelioration | pour: tous -->
+
+Quand un modèle réalise la version soignée d'une présentation ou d'un classeur, une carte suit son travail dans la conversation : le modèle à l'œuvre, le temps écoulé, l'étape en cours et une barre d'avancement, avec un bouton **Arrêter**. Le fichier arrive dans la même carte, devenue **Présentation prête** ou **Classeur prêt**, avec un bouton **Télécharger** ; on peut continuer à discuter ou recharger la page entre-temps.
+
+## Des comptes de démonstration, avec une enveloppe de crédits
+<!-- id: comptes-demo | genre: nouveaute | pour: administrateurs -->
+
+Un administrateur peut créer un compte de démonstration pour faire découvrir MIA : une enveloppe de crédits (5 000 par défaut, modifiable) utilisable une seule fois, sans renouvellement mensuel. Une fois les crédits épuisés, MIA cesse de répondre, la personne garde ses conversations et un message l'invite à prendre contact ; Personnes → Comptes signale les démos épuisées, et un clic convertit le compte en compte normal, historique conservé.
+
+## Workflows : la brique Slack publie ou lit, l'un ou l'autre
+<!-- id: workflows-brique-slack | genre: nouveaute | pour: createurs -->
+
+La brique Slack d'un workflow s'ouvre sur un choix : publier un message ou lire des messages, chacun avec ses propres réglages. Elle publie dans un canal ou directement à une personne, avec des images ou des documents du dossier en pièces jointes ; elle lit un canal, une conversation ou une recherche sur une période, et en tire une pièce. Dans une conversation aussi, MIA peut maintenant écrire à une personne sur Slack : reliez à nouveau votre Slack pour l'autoriser.
+
+## Workflows : leurs conversations se repèrent dans l'historique
+<!-- id: workflows-icone-historique | genre: amelioration | pour: createurs -->
+
+Dans l'historique de la barre latérale, la conversation d'une exécution de workflow porte désormais l'icône des workflows à gauche de son titre, comme l'horloge d'une tâche programmée.
+
+## Workflows : plus de fausse alerte sur les étapes confiées à un assistant
+<!-- id: workflows-alerte-etape-assistant | genre: correctif | pour: createurs -->
+
+Une étape confiée à un assistant, ou qui consulte Internet, n'affiche plus « aucun outil n'est relié » dans **À régler** : l'assistant travaille avec ses propres bases, documents et outils. L'alerte ne reste que pour une étape qui n'a vraiment rien pour travailler.
+
+## Workflows : une étape peut remettre une image, une page web ou une carte
+<!-- id: workflows-etape-image | genre: nouveaute | pour: createurs -->
+
+Dans **Remet au dossier**, une étape propose désormais **Image**, **Page web** et **Carte**, à côté du texte et des documents — selon les outils de création que vos groupes vous ouvrent ; une forme sans outil en service est grisée avec sa raison. L'étape prépare la demande avec son assistant, ses sources et ses bases, puis l'outil choisi fabrique la pièce : une affiche aux couleurs de la marque, la page d'un produit rédigée d'après vos documents. Le reste suit comme pour une création : relecture, dossier, livraisons, **Mes créations**, et MIA sait le proposer quand elle compose un workflow.
+
+## Workflows : un canal Slack introuvable est signalé avant de publier
+<!-- id: workflows-canal-slack-verifie | genre: correctif | pour: createurs -->
+
+Un workflow pouvait finir en échec sur « canal Slack introuvable » alors que son message était bien publié : une action l'avait publié, et la livraison du livrable visait un canal qui n'existe pas. Le canal d'une livraison est désormais cherché avant de publier, l'erreur dit que c'est la livraison et comment la corriger, **À régler** refuse un canal qui n'en est pas un (« Canal Slack ») et signale qu'une action publie déjà dans Slack. « Décrire à MIA » ne remplit plus un canal que vous n'avez pas donné.
+
+## Workflows : ce que coûte une exécution, expliqué
+<!-- id: workflows-cout-explique | genre: amelioration | pour: createurs -->
+
+Le coût estimé d'un workflow se détaille désormais brique par brique, avec ce sur quoi chaque chiffre repose, et montre ce qu'ont réellement coûté ses dernières exécutions. Il s'appuie sur les étapes de workflow déjà menées, plus longues qu'une réponse de chat, et compte la rédaction d'une demande d'image. Après coup, **Réglages → Usage & crédits** et, pour les administrateurs, **Consommation** donnent ce que chaque workflow a consommé.
 
 ## Workflows : l'email contient vraiment les pièces citées
 <!-- id: workflows-pieces-dans-email | genre: correctif | pour: createurs -->
@@ -223,7 +661,7 @@ Une nouvelle brique **Décision de MIA** lit une pièce, suit vos critères et c
 Un workflow peut maintenant démarrer tout seul — à l'arrivée d'un email ou d'un fichier dans Drive, à l'appel de son adresse par un autre logiciel, à la fin d'un autre workflow —, répéter des étapes pour chaque élément d'une liste ou jusqu'à un bon résultat, attendre une date et vous prévenir en route. Le livrable part par email avec ses pièces jointes, dans Drive, Slack ou une base de connaissances. Une panne passagère est réessayée seule, une brique facultative peut être passée, et une exécution arrêtée se reprend là où elle en était, avec la dernière version du workflow si vous l'avez corrigé.
 
 ## Les workflows : un travail en plusieurs étapes, mené toujours de la même façon
-<!-- id: workflows | genre: nouveaute | pour: createurs -->
+<!-- id: workflows | genre: nouveaute | pour: createurs | majeure: oui -->
 
 Nouvelle entrée **Workflows** dans la barre latérale, en bêta : décrivez un processus à MIA (ou partez d'un modèle), elle le dessine en étapes confiées à MIA ou à vos assistants, qui se passent des pièces — fiche, tableau, document au modèle de l'entreprise — jusqu'au livrable. Ajoutez conditions, validations (relire, corriger, renvoyer avec une remarque) et actions dans vos outils ; lancez-le à la main, depuis le chat avec « @ » ou à heure fixe. Une ligne par étape, le détail dans un volet.
 

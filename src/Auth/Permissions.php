@@ -117,6 +117,7 @@ final class Permissions
         'tools.manage'      => 'Les outils appartiennent à l’organisation : « Modifier » les règle, les groupes décident qui s’en sert.',
         'connectors.create' => 'Les connecteurs sont livrés avec MIA : on les propose ou on les masque (« Modifier »), on ne les crée pas.',
         'connectors.delete' => 'Les connecteurs sont livrés avec MIA : on les masque (« Modifier »), on ne les supprime pas.',
+        'office_addin.view' => 'Rien à afficher dans le menu : l’add-in vit dans Excel, Word et PowerPoint ; sa carte de Réglages → Comptes connectés vient avec « Utiliser ». Son réglage pour l’organisation est dans Connecteurs.',
         'use'               => 'Rien à lancer depuis cet écran.',
         'create'            => 'Rien à ajouter sur cet écran.',
         'edit'              => 'Rien à régler sur cet écran : il se consulte.',
@@ -271,6 +272,15 @@ final class Permissions
                 self::EDIT => [self::VIEW],
             ],
         ],
+        'office_addin' => [
+            'section' => self::SECTION_FEATURES,
+            'label'   => 'Claude dans Office',
+            'summary' => 'L’add-in Claude d’Excel, de Word et de PowerPoint, branché sur MIA : sans compte Claude, ses réponses comptent dans les crédits de la personne.',
+            'actions' => [
+                self::USE => 'Se servir de Claude dans Excel, Word et PowerPoint avec son compte MIA, une fois l’add-in déployé par l’organisation, et générer son jeton personnel (Réglages → Comptes connectés).',
+            ],
+            'requires' => [],
+        ],
 
         // ---- Administration ---------------------------------------------
         'dashboard' => [
@@ -413,6 +423,7 @@ final class Permissions
             'schedules.view', 'schedules.use', 'schedules.create', 'schedules.edit', 'schedules.delete',
             'tools.use',
             'connectors.use',
+            'office_addin.use',
         ],
         'creator' => [
             'assistants.use', 'assistants.view', 'assistants.create', 'assistants.edit', 'assistants.delete',
@@ -421,6 +432,7 @@ final class Permissions
             'workflows.view', 'workflows.use', 'workflows.create', 'workflows.edit', 'workflows.delete',
             'tools.use',
             'connectors.use',
+            'office_addin.use',
         ],
     ];
 

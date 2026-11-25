@@ -9,6 +9,8 @@ storage/uploads/
 storage/logs/
 storage/cache/
 storage/ratelimit/
+# Sessions de développement : jamais dans l'image (elles y seraient valides).
+storage/sessions/
 storage/profile_documents/
 storage/branding/
 public/assets/img/generated/
@@ -16,3 +18,5 @@ public/assets/img/generated/
 .vscode/
 .DS_Store
 .claude/
+# Vidéos de présentation (dépôt privé seulement) : jamais dans les images.
+videos/

@@ -276,7 +276,7 @@ final class WorkflowChatCreationTest extends TestCase
         $wc = self::src('src/Controllers/WorkflowController.php');
         $this->assertStringContainsString('WorkflowFit::apply($args[\'definition\'], WorkflowCatalog::choices($user))', self::methode($wc, 'createFromCardArgs'));
         $this->assertStringContainsString('WorkflowDraft::colorFor($draft[\'name\'])', self::methode($wc, 'create'));
-        $this->assertStringContainsString('WorkflowFit::apply($def, $choices, $notes)', self::methode(self::src('src/Workflow/WorkflowDraft.php'), 'fromArgs'));
+        $this->assertStringContainsString('WorkflowFit::apply($def, $choices, $notes)', self::methode(self::src('src/Workflow/WorkflowDraft.php'), 'convert'));
     }
 
     public function testLaCarteOuvreLEditeurApresUnClic(): void

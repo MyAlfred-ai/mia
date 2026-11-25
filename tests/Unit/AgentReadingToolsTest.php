@@ -143,7 +143,7 @@ final class AgentReadingToolsTest extends TestCase
         ]);
         $this->assertSame(['fichier', 'email', 'lien'], array_column($list, 'piece'));
         $this->assertNull(MailAttachments::unreadableReason($list[0]), 'Un .docx annoncé en octet-stream se lit par son extension.');
-        $this->assertStringContainsString('email joint', (string)MailAttachments::unreadableReason($list[1]));
+        $this->assertNull(MailAttachments::unreadableReason($list[1]), 'Un email joint se lit par son contenu MIME.');
         $this->assertStringContainsString('lien de partage', (string)MailAttachments::unreadableReason($list[2]));
     }
 
@@ -180,9 +180,19 @@ final class AgentReadingToolsTest extends TestCase
         $this->assertStringContainsString('trop volumineuse', (string)MailAttachments::unreadableReason(
             ['nom' => 'gros.pdf', 'type' => 'application/pdf', 'taille' => MailAttachments::MAX_BYTES + 1, 'piece' => 'fichier']));
         $this->assertStringContainsString('pas un format lisible', (string)MailAttachments::unreadableReason(
-            ['nom' => 'vieux.doc', 'type' => 'application/msword', 'taille' => 10, 'piece' => 'fichier']));
-        $this->assertStringContainsString('Formats lus', (string)MailAttachments::unreadableReason(
+            ['nom' => 'plan.dwg', 'type' => 'application/acad', 'taille' => 10, 'piece' => 'fichier']));
+        // PowerPoint 97-2003 et archives ZIP se lisent.
+        $this->assertNull(MailAttachments::unreadableReason(
+            ['nom' => 'vieux.ppt', 'type' => 'application/vnd.ms-powerpoint', 'taille' => 10, 'piece' => 'fichier']));
+        $this->assertNull(MailAttachments::unreadableReason(
             ['nom' => 'archive.zip', 'type' => 'application/zip', 'taille' => 10, 'piece' => 'fichier']));
+        // Word et Excel 97-2003 se lisent (LegacyOffice), même annoncés en type générique.
+        $this->assertNull(MailAttachments::unreadableReason(
+            ['nom' => 'vieux.doc', 'type' => 'application/msword', 'taille' => 10, 'piece' => 'fichier']));
+        $this->assertNull(MailAttachments::unreadableReason(
+            ['nom' => 'budget.xls', 'type' => 'application/octet-stream', 'taille' => 10, 'piece' => 'fichier']));
+        $this->assertStringContainsString('Formats lus', (string)MailAttachments::unreadableReason(
+            ['nom' => 'archive.7z', 'type' => 'application/x-7z-compressed', 'taille' => 10, 'piece' => 'fichier']));
     }
 
     public function testUnTexteEnWindows1252RessortEnUtf8Valide(): void
@@ -197,7 +207,7 @@ final class AgentReadingToolsTest extends TestCase
     public function testUnFormatNonLisibleEstRefuseAvantToutFichierTemporaire(): void
     {
         $this->expectException(\RuntimeException::class);
-        MailAttachments::extractText('PK…', 'application/zip', 'archive.zip');
+        MailAttachments::extractText('7z…', 'application/x-7z-compressed', 'archive.7z');
     }
 
     public function testDecodageBase64UrlEtTailles(): void

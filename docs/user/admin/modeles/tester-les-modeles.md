@@ -48,7 +48,7 @@ en crédits.
 | Résultat | Quoi faire |
 |---|---|
 | ✗ **Requête refusée** | Le modèle n'existe plus chez son éditeur : activer son successeur, puis retirer l'ancien. |
-| ✗ **Accès au service refusé** | La clé est refusée : la vérifier dans **Clés API**. |
+| ✗ **Accès au service refusé** | La clé est refusée : la vérifier dans **Fournisseurs et modèles**. |
 | ✗ **Service momentanément saturé** ou **indisponible** | Incident chez l'éditeur : relancer plus tard. |
 | ✗ **Configuration requise** | La clé de l'éditeur a été supprimée : la réenregistrer, ou retirer le modèle. |
 | ✗ **Conservation des données requise** | L'organisation ne conserve pas les données chez l'éditeur : voir [Activer les modèles](activer-les-modeles.md), section « Un modèle qui exige la conservation des données ». Le chat fait déjà répondre un autre modèle à la place. |

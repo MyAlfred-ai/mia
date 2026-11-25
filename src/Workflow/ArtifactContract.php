@@ -18,9 +18,16 @@ declare(strict_types=1);
  *   fiche    → { fields: clé → valeur typée }       (cf. WorkflowValues::coerce)
  *   document → { format, filename, language, source } — fabriqué au
  *              téléchargement par FileFactory, comme un fichier livré dans
- *              le chat (même convention : un bloc de code NOMMÉ)
+ *              le chat (même convention : un bloc de code NOMMÉ). Un
+ *              document Word, PDF, PowerPoint, Excel ou Markdown est rédigé
+ *              (Markdown, tableau) ; tout autre format (.py, .json, .csv…,
+ *              brique « Fichier » du menu Créer) est un FICHIER BRUT : son
+ *              contenu exact, recopié tel quel (isRawFile)
  *   file     → { name, type, path, text }           (fichier reçu au départ)
- *   image, page, map → remises par une brique Création (WorkflowCreations)
+ *   image, page, map → fabriquées par un outil de création (WorkflowCreations) :
+ *              une brique Création, ou une étape — dont la réponse est alors
+ *              la DEMANDE rédigée que l'outil reçoit (`instruction()` le dit au
+ *              modèle, `extract()` la lit : { text }), pas la pièce elle-même
  *
  * `render()` donne le texte d'une pièce tel qu'une étape suivante le reçoit,
  * borné : une pièce ne peut pas manger à elle seule la fenêtre du modèle.
@@ -29,6 +36,10 @@ final class ArtifactContract
 {
     /** Taille d'une pièce injectée dans le prompt d'une étape (caractères). */
     public const PROMPT_CHARS = 40000;
+
+    /** Demande rédigée par une étape pour un outil de création : celle d'une image, celle d'une page ou d'une carte (caractères). */
+    public const BRIEF_IMAGE_CHARS = 4000;
+    public const BRIEF_CHARS = 20000;
 
     /** Langage de bloc attendu pour un format de document. */
     public const DOC_LANGUAGE = ['docx' => 'markdown', 'pdf' => 'markdown', 'pptx' => 'markdown', 'md' => 'markdown', 'xlsx' => 'csv'];
@@ -57,8 +68,35 @@ final class ArtifactContract
             'pptx' => 'PowerPoint',
             'xlsx' => 'Excel',
             'md'   => 'Markdown',
-            default => strtoupper($format),
+            // Un fichier : le nom court du catalogue (Python, JSON…), sinon l'extension.
+            default => $format !== '' ? FileFormats::get($format)['short'] : '',
         };
+    }
+
+    /**
+     * Formats d'une pièce Document qui se RÉDIGENT (Markdown, tableau) et se
+     * convertissent ; les autres sont des fichiers bruts, écrits tels quels.
+     */
+    private const REDACTED_FORMATS = ['docx', 'pdf', 'rtf', 'pptx', 'md', 'xlsx'];
+
+    /** Un fichier brut (script, données, page…) plutôt qu'un document rédigé ? */
+    public static function isRawFile(string $format): bool
+    {
+        return $format !== '' && !in_array($format, self::REDACTED_FORMATS, true);
+    }
+
+    /** Langage du bloc de code d'un format (celui que lit le chat : python, json…). */
+    public static function languageFor(string $format): string
+    {
+        if (isset(self::DOC_LANGUAGE[$format])) {
+            return self::DOC_LANGUAGE[$format];
+        }
+        $named = ['py' => 'python', 'js' => 'javascript', 'ts' => 'typescript', 'sh' => 'bash', 'ps1' => 'powershell',
+            'tex' => 'latex', 'yml' => 'yaml', 'bat' => 'batch', 'vcf' => 'vcard'];
+        if (isset($named[$format])) {
+            return $named[$format];
+        }
+        return FileFormats::extensionForLanguage($format) === $format ? $format : 'text';
     }
 
     /** Nom de fichier d'une pièce Document. */
@@ -76,6 +114,9 @@ final class ArtifactContract
     {
         $name = (string)$piece['name'];
         $head = "Ta réponse devient la pièce « {$name} » du dossier. ";
+        if (WorkflowSpec::isCreationForm((string)$piece['form'])) {
+            return self::briefInstruction($piece);
+        }
         switch ($piece['form']) {
             case 'list':
                 return $head . "Forme attendue : une LISTE — une puce par élément (« - … »), un élément par ligne, rien d'autre (ni titre, ni conclusion).";
@@ -83,8 +124,11 @@ final class ArtifactContract
                 return $head . "Forme attendue : un TABLEAU Markdown, avec une ligne d'en-tête, rien d'autre autour.";
             case 'fiche':
                 $spec = [];
-                foreach ((array)($piece['fields'] ?? []) as $f) {
-                    $spec[] = '"' . $f['key'] . '": ' . self::typeHint((string)$f['type']) . '  // ' . $f['label'];
+                $ficheFields = array_values((array)($piece['fields'] ?? []));
+                foreach (self::ficheJsonKeys($piece) as $i => $name) {
+                    $f = $ficheFields[$i];
+                    $spec[] = json_encode($name, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . ': ' . self::typeHint((string)$f['type'])
+                        . ($name !== (string)$f['label'] ? '  // ' . $f['label'] : '');
                 }
                 return $head . "Forme attendue : une FICHE. Écris d'abord, si utile, deux ou trois phrases de synthèse ; puis TERMINE par un bloc ```json contenant EXACTEMENT ces clés :\n"
                     . "{\n  " . implode(",\n  ", $spec) . "\n}\n"
@@ -92,6 +136,13 @@ final class ArtifactContract
             case 'document':
                 $format = (string)($piece['format'] ?? 'docx');
                 $file   = self::filename($piece);
+                if (self::isRawFile($format)) {
+                    $lang = self::languageFor($format);
+                    $label = self::formatLabel($format);
+                    return $head . "Forme attendue : un FICHIER {$label} (.{$format}). Écris son contenu EXACT et COMPLET, prêt à l'emploi tel quel "
+                        . "(jamais d'extrait, de « … » ni de partie à compléter), dans UN bloc de code nommé :\n````{$lang} fichier=\"{$file}\"\n…\n````\n"
+                        . "Avant le bloc, une phrase au plus. Rien après. Tout ce qui doit figurer dans le fichier (commentaires, explications) est DANS le bloc.";
+                }
                 if ($format === 'xlsx') {
                     return $head . "Forme attendue : un CLASSEUR Excel. Écris ses données dans UN bloc de code nommé, ligne d'en-tête comprise :\n```csv fichier=\"{$file}\"\n…\n```\n"
                         . "Avant le bloc, une phrase au plus. Rien après.";
@@ -104,6 +155,60 @@ final class ArtifactContract
             default:
                 return $head . "Forme attendue : un TEXTE rédigé, prêt à être lu tel quel — sans préambule (« Voici… »), sans question à l'utilisateur.";
         }
+    }
+
+    /**
+     * Une étape qui remet une création : elle rédige la DEMANDE, l'outil de
+     * création la fabrique juste après son tour (WorkflowEngine).
+     */
+    private static function briefInstruction(array $piece): string
+    {
+        $name = (string)$piece['name'];
+        $head = "La pièce « {$name} » du dossier sera fabriquée par un outil de création juste après ton tour, d'après ta réponse : "
+            . "ta réponse est la DEMANDE que cet outil reçoit, rien d'autre. Ne fabrique pas la pièce toi-même, n'appelle aucun outil pour cela, "
+            . "ne dis pas que tu ne sais pas le faire. ";
+        return $head . match ((string)$piece['form']) {
+            'image' => "Forme attendue : la DESCRIPTION VISUELLE précise de l'image — sujet, composition et cadrage, style, couleurs, ambiance, "
+                . "et le texte à y écrire mot pour mot s'il y en a un (court) — en un ou deux paragraphes, sans préambule ni question. "
+                . "Appuie-toi sur les pièces du dossier et tes sources : ce qu'elles disent compte, pas ce que tu imagines.",
+            'page' => "Forme attendue : TOUT LE CONTENU de la page web, prêt à être mis en page — titre, sections, textes, chiffres, "
+                . "appels à l'action — en Markdown structuré (titres « # » et « ## », paragraphes, listes). Pas de HTML ni de code : "
+                . "l'outil fait la mise en page. N'invente aucune donnée que les pièces ou tes sources ne donnent pas.",
+            default => "Forme attendue : l'ITINÉRAIRE à tracer — une liste numérotée des étapes dans l'ordre, chacune avec un lieu précis "
+                . "(nom et ville, ou adresse), puis le mode de déplacement et les conseils utiles. Rien d'autre.",
+        };
+    }
+
+    /**
+     * Noms des clés du bloc json demandé pour une Fiche, dans l'ordre des
+     * champs : leurs LIBELLÉS (« Priorité »), lisibles dans la conversation où
+     * la réponse s'affiche. Les clés techniques des champs ajoutés dans
+     * l'éditeur sont tirées au hasard (« fh5v4d ») : demandées telles quelles,
+     * elles s'affichaient en clair sous la réponse de chaque étape (recette du
+     * 2026-11-09). La lecture retrouve un champ par son libellé (byLabel).
+     * Repli sur les clés si un libellé est vide, si deux libellés se
+     * confondent, ou si un libellé vaut la clé d'un AUTRE champ — la lecture
+     * essaie la clé d'abord, elle attribuerait la valeur au mauvais champ.
+     *
+     * @return list<string>
+     */
+    public static function ficheJsonKeys(array $piece): array
+    {
+        $fields = array_values((array)($piece['fields'] ?? []));
+        $keys = array_map(static fn($f) => (string)($f['key'] ?? ''), $fields);
+        $labels = [];
+        $seen = [];
+        foreach ($fields as $i => $f) {
+            $label = trim((string)($f['label'] ?? ''));
+            $slug = WorkflowSpec::slug($label);
+            $other = array_diff_key($keys, [$i => true]);
+            if ($label === '' || $slug === '' || isset($seen[$slug]) || in_array($label, $other, true)) {
+                return $keys;
+            }
+            $seen[$slug] = true;
+            $labels[] = $label;
+        }
+        return $labels;
     }
 
     private static function typeHint(string $type): string
@@ -126,8 +231,17 @@ final class ArtifactContract
     public static function extract(array $piece, string $reply): array
     {
         $reply = str_replace(["\r\n", "\r"], "\n", trim($reply));
-        if ($reply === '' || str_starts_with($reply, '⚠')) {
+        // Une erreur d'adaptateur (« [Erreur OpenAI (503) : …] ») n'est jamais une pièce :
+        // un fichier brut, sans longueur minimale, la prendrait sinon pour son contenu.
+        if ($reply === '' || str_starts_with($reply, '⚠') || (str_starts_with($reply, '[') && LlmErrorPresenter::parse($reply) !== null)) {
             return self::fail("la réponse est vide ou en erreur");
+        }
+        if (WorkflowSpec::isCreationForm((string)$piece['form'])) {
+            // La demande d'une création (étape) : un texte, sans image collée ni enveloppe.
+            $brief = trim((string)preg_replace('/!\[[^\]]*\]\([^)]*\)/u', '', self::stripOuterFence($reply)));
+            return $brief === ''
+                ? self::fail("la réponse ne contient pas la demande à transmettre à l'outil de création")
+                : self::ok(['text' => mb_substr($brief, 0, $piece['form'] === 'image' ? self::BRIEF_IMAGE_CHARS : self::BRIEF_CHARS)]);
         }
         switch ($piece['form']) {
             case 'list':
@@ -149,8 +263,14 @@ final class ArtifactContract
                 }
                 $fields = [];
                 $found = 0;
+                // Demandée par libellés : le libellé d'abord (une clé technique
+                // écrite en minuscules ne doit jamais capter la valeur d'un autre
+                // champ), la clé ensuite (réponses d'avant, repli sur les clés).
+                $byLabels = self::ficheJsonKeys($piece) !== array_map(static fn($f) => (string)($f['key'] ?? ''), array_values((array)($piece['fields'] ?? [])));
                 foreach ((array)($piece['fields'] ?? []) as $f) {
-                    $raw = $json[$f['key']] ?? self::byLabel($json, (string)$f['label']);
+                    $raw = $byLabels
+                        ? (self::byLabel($json, (string)$f['label']) ?? $json[$f['key']] ?? null)
+                        : ($json[$f['key']] ?? self::byLabel($json, (string)$f['label']));
                     $value = WorkflowValues::coerce($raw, (string)$f['type']);
                     if ($value !== null && $value !== '' && $value !== []) {
                         $found++;
@@ -158,7 +278,7 @@ final class ArtifactContract
                     $fields[$f['key']] = $value;
                 }
                 if ($found === 0 && $piece['fields'] !== []) {
-                    return self::fail("le bloc json ne contient aucune des clés attendues (" . implode(', ', array_column($piece['fields'], 'key')) . ")");
+                    return self::fail("le bloc json ne contient aucune des clés attendues (" . implode(', ', self::ficheJsonKeys($piece)) . ")");
                 }
                 $summary = trim((string)preg_replace('/```json.*$/s', '', $reply));
                 return self::ok(['fields' => $fields, 'summary' => mb_substr($summary, 0, 2000)]);
@@ -166,6 +286,11 @@ final class ArtifactContract
             case 'document':
                 $block = self::namedBlock($reply);
                 $format = (string)($piece['format'] ?? 'docx');
+                $raw = self::isRawFile($format);
+                if ($block === null && $raw) {
+                    // Un fichier brut sans nom de bloc : son seul bloc de code, sinon la réponse entière.
+                    $block = self::singleBlock($reply) ?? ['language' => '', 'source' => self::stripOuterFence($reply)];
+                }
                 if ($block === null) {
                     // Tolérance : une réponse sans bloc mais substantielle est le document.
                     if (mb_strlen($reply) < 200) {
@@ -179,7 +304,7 @@ final class ArtifactContract
                 return self::ok([
                     'format'   => $format,
                     'filename' => self::filename($piece),
-                    'language' => $block['language'] !== '' ? $block['language'] : (self::DOC_LANGUAGE[$format] ?? 'markdown'),
+                    'language' => $block['language'] !== '' ? $block['language'] : ($raw ? self::languageFor($format) : (self::DOC_LANGUAGE[$format] ?? 'markdown')),
                     'source'   => $block['source'],
                 ]);
 
@@ -233,15 +358,52 @@ final class ArtifactContract
             'list'  => I18n::plural(count((array)($content['items'] ?? [])), '{n} élément', '{n} éléments'),
             'table' => I18n::plural(max(0, count((array)($content['rows'] ?? [])) - 1), '{n} ligne', '{n} lignes'),
             'fiche' => I18n::plural(count(array_filter((array)($content['fields'] ?? []), static fn($v) => $v !== null && $v !== '' && $v !== [])), '{n} champ renseigné', '{n} champs renseignés'),
-            'document' => self::formatLabel((string)($content['format'] ?? 'docx')) . ' · ' . I18n::plural(self::wordCount((string)($content['source'] ?? '')), '{n} mot', '{n} mots'),
+            'document' => self::isRawFile((string)($content['format'] ?? 'docx'))
+                ? self::formatLabel((string)$content['format']) . ' · ' . I18n::plural(self::lineCount((string)($content['source'] ?? '')), '{n} ligne', '{n} lignes')
+                : self::formatLabel((string)($content['format'] ?? 'docx')) . ' · ' . I18n::plural(self::wordCount((string)($content['source'] ?? '')), '{n} mot', '{n} mots'),
             'file'  => (string)($content['name'] ?? ''),
             default => I18n::plural(self::wordCount((string)($content['text'] ?? '')), '{n} mot', '{n} mots'),
         };
     }
 
+    private static function lineCount(string $s): int
+    {
+        $s = trim($s, "\n");
+        return $s === '' ? 0 : substr_count($s, "\n") + 1;
+    }
+
     private static function wordCount(string $s): int
     {
         return count(preg_split('/\s+/u', trim($s), -1, PREG_SPLIT_NO_EMPTY) ?: []);
+    }
+
+    /**
+     * Fiche corrigée après coup (« Ajuster » sur la page de l'exécution, ou
+     * la discussion de la conversation, WorkflowChat) : les champs donnés
+     * remplacent les anciens. Le RÉSUMÉ a été écrit avec les anciennes
+     * valeurs : réécrit (`$summary`), il remplace l'ancien ; sinon il est
+     * retiré dès qu'un champ change — « Statut : en attente de saisie »
+     * laissé au-dessus d'un montant saisi faisait encore écrire « en
+     * attente » à la suite du workflow (constaté chez un client, 2026-11-24).
+     *
+     * @param array<string, mixed> $fields
+     */
+    public static function withCorrectedFields(array $piece, array $content, array $fields, ?string $summary = null): array
+    {
+        $before = (array)($content['fields'] ?? []);
+        $after = $before;
+        foreach ((array)($piece['fields'] ?? []) as $f) {
+            if (array_key_exists((string)$f['key'], $fields)) {
+                $after[(string)$f['key']] = $fields[(string)$f['key']];
+            }
+        }
+        $content['fields'] = $after;
+        if ($summary !== null) {
+            $content['summary'] = mb_substr(trim($summary), 0, 2000);
+        } elseif ($after !== $before) {
+            unset($content['summary']);
+        }
+        return $content;
     }
 
     public static function ficheText(array $piece, array $content): string
@@ -386,6 +548,20 @@ final class ArtifactContract
         }
         $body = array_slice($lines, $open + 1, ($close ?? count($lines)) - $open - 1);
         return ['language' => $lang, 'source' => trim(implode("\n", $body), "\n")];
+    }
+
+    /**
+     * Le bloc de code d'une réponse qui n'en porte qu'UN (non nommé), ou null :
+     * « Voici le script : ```python … ``` » — la phrase autour n'en fait pas partie.
+     *
+     * @return array{language: string, source: string}|null
+     */
+    public static function singleBlock(string $reply): ?array
+    {
+        if (preg_match_all('/^(`{3,}|~{3,})[ \t]*([A-Za-z0-9_+.-]*)[^\n]*\n(.*?)\n\1[ \t]*$/ms', $reply, $m, PREG_SET_ORDER) !== 1) {
+            return null;
+        }
+        return ['language' => strtolower($m[0][2]), 'source' => trim($m[0][3], "\n")];
     }
 
     /** Retire un bloc de code qui envelopperait TOUTE la réponse. */

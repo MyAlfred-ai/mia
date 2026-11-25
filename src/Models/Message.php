@@ -37,6 +37,12 @@ class Message
     public const ACTION_DETAIL_MAX = 120;
 
     /**
+     * Début du message persisté par GammaService::summarizeResultMessage
+     * (toujours en français) : la galerie « Mes créations » le repère.
+     */
+    public const GAMMA_RESULT_PREFIX = 'Présentation Gamma prête : [« ';
+
+    /**
      * $files : tableau de ['name','type','extracted','path'] — 0, 1 ou plusieurs fichiers.
      * $llmProvider / $llmModel : trace du LLM (ou outil) ayant généré la réponse — pour
      * messages assistant uniquement, NULL sinon.
@@ -157,6 +163,18 @@ class Message
     }
 
     /**
+     * Remplace les fichiers joints d'un message (`files_json` seul : les
+     * colonnes historiques ne sont lues qu'en son absence). Sert aux pièces
+     * jointes de l'email qui lance un workflow, jointes à l'étape qui le lit
+     * au moment de son tour (WorkflowEventFiles).
+     */
+    public static function setFiles(int $messageId, array $files): void
+    {
+        Database::getInstance()->prepare('UPDATE messages SET files_json = ? WHERE id = ?')
+            ->execute([$files === [] ? null : json_encode(array_values($files), JSON_INVALID_UTF8_SUBSTITUTE), $messageId]);
+    }
+
+    /**
      * Persiste l'état « agent » d'un message assistant (plan de travail,
      * possibilité de poursuivre) — no-op si vide. Le contenu est déjà
      * normalisé par l'appelant (PlanTools::normalize).
@@ -185,6 +203,52 @@ class Message
     }
 
     /**
+     * État de la réalisation d'une « Version soignée » (NativeDeckRun) DANS
+     * l'état « agent » du message d'attente : JSON_SET fusionne, le reste de
+     * l'état (suggestion…) est gardé ; un état illisible repart de {}.
+     *
+     * @param array<string, mixed> $run
+     */
+    public static function setRun(int $messageId, array $run): void
+    {
+        Database::getInstance()->prepare(
+            "UPDATE messages SET agent_json = JSON_SET(IF(JSON_VALID(agent_json), agent_json, '{}'), '$.progress', CAST(? AS JSON))"
+            . " WHERE id = ? AND role = 'assistant'"
+        )->execute([json_encode($run, JSON_UNESCAPED_UNICODE), $messageId]);
+    }
+
+    /**
+     * Réponses d'une conversation qui nomment des tables de travail (état
+     * « agent », clé `tables`) — lecture LÉGÈRE : ni contenu ni pièces
+     * jointes. Sert à remettre à jour, après un renommage ou une suppression,
+     * la ligne « Voir » des réponses déjà affichées (WorkTableView).
+     *
+     * @return list<array{id: int|string, role: string, agent_json: string}>
+     */
+    public static function withTableRefs(int $conversationId): array
+    {
+        $stmt = Database::getInstance()->prepare(
+            "SELECT id, role, agent_json FROM messages"
+            . " WHERE conversation_id = ? AND role = 'assistant' AND agent_json LIKE '%\"tables\"%'"
+            . " ORDER BY id"
+        );
+        $stmt->execute([$conversationId]);
+        return $stmt->fetchAll(\PDO::FETCH_ASSOC) ?: [];
+    }
+
+    /**
+     * Job de la réalisation, connu après l'enfilage : seul ce champ est
+     * écrit — un job déjà fini ne voit pas son état ramené à « en cours ».
+     */
+    public static function setRunJob(int $messageId, int $jobId): void
+    {
+        Database::getInstance()->prepare(
+            "UPDATE messages SET agent_json = JSON_SET(agent_json, '$.progress.job_id', CAST(? AS UNSIGNED))"
+            . " WHERE id = ? AND role = 'assistant' AND JSON_VALID(agent_json) AND JSON_CONTAINS_PATH(agent_json, 'one', '$.progress')"
+        )->execute([$jobId, $messageId]);
+    }
+
+    /**
      * Derniers messages d'une conversation, du plus ancien au plus récent,
      * pour la suggestion de suite : contenu borné, types et noms des fichiers
      * lus par MySQL (jamais le base64 d'une pièce jointe), âge calculé par la
@@ -203,6 +267,39 @@ class Message
         );
         $stmt->execute([$conversationId]);
         return array_reverse($stmt->fetchAll());
+    }
+
+    /**
+     * Lecture LÉGÈRE pour l'apprentissage de la mémoire (MemoryLearner) : les
+     * `$limit` derniers messages après `$afterId`, dans l'ordre, sans fichiers
+     * ni trace — seulement le rôle et le début du texte. `last_id` = dernier
+     * message de la conversation, pour avancer le repère au-delà de ce qui
+     * n'est pas relu.
+     *
+     * @return array{messages: list<array{id:int, role:string, content:string, length:int}>, last_id:int}
+     */
+    public static function sinceForMemory(int $conversationId, int $afterId, int $limit): array
+    {
+        $db   = Database::getInstance();
+        $stmt = $db->prepare(
+            'SELECT id, role, LEFT(content, 4000) AS content, CHAR_LENGTH(content) AS length
+               FROM messages WHERE conversation_id = ? AND id > ?
+              ORDER BY id DESC LIMIT ' . max(1, min(200, $limit))
+        );
+        $stmt->execute([$conversationId, $afterId]);
+        $rows = array_reverse($stmt->fetchAll() ?: []);
+        $last = $db->prepare('SELECT MAX(id) FROM messages WHERE conversation_id = ?');
+        $last->execute([$conversationId]);
+
+        return [
+            'messages' => array_map(static fn(array $r): array => [
+                'id'      => (int)$r['id'],
+                'role'    => (string)$r['role'],
+                'content' => (string)$r['content'],
+                'length'  => (int)$r['length'],
+            ], $rows),
+            'last_id'  => (int)($last->fetchColumn() ?: 0),
+        ];
     }
 
     /** État « agent » décodé d'une ligne `messages` (tableau vide sinon). */
@@ -512,6 +609,95 @@ class Message
         $stmt->execute([$userId]);
 
         return $stmt->fetchAll(PDO::FETCH_ASSOC);
+    }
+
+    /**
+     * Versions soignées de l'utilisateur (galerie « Mes créations ») : messages
+     * qui annoncent un fichier réalisé par un modèle (présentation ou classeur,
+     * lien `/chat/{id}/presentation/{jeton}`) ou une présentation Gamma.
+     *
+     * Volontairement HORS de creationPredicateSql : ces messages n'ont ni
+     * média sous /assets ni type riche à neutraliser — le fichier d'un modèle
+     * vit sa propre durée (NativeDeckStore::RETENTION_DAYS), celui de Gamma
+     * chez Gamma. Les mêler à l'élagage laisserait des messages éligibles
+     * qu'aucune neutralisation ne ferait sortir du prédicat.
+     */
+    public static function polishedForUser(int $userId, int $limit = 500): array
+    {
+        $limit = max(1, (int)$limit);
+        $stmt  = Database::getInstance()->prepare(
+            "SELECT m.id, m.conversation_id, m.created_at,
+                    LEFT(m.content, 4000) AS content,
+                    IF(JSON_VALID(m.agent_json),
+                       JSON_UNQUOTE(JSON_EXTRACT(m.agent_json, '$.progress.model')), NULL) AS run_model,
+                    c.title AS conversation_title
+             FROM messages m
+             JOIN conversations c ON c.id = m.conversation_id AND c.user_id = ?
+             WHERE m.role = 'assistant'
+               AND (m.content LIKE '%](/chat/%/presentation/%'
+                    OR m.content LIKE ?)
+             ORDER BY m.created_at DESC, m.id DESC
+             LIMIT " . $limit
+        );
+        $stmt->execute([$userId, '%' . self::GAMMA_RESULT_PREFIX . '%']);
+
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+    }
+
+    /**
+     * Fichiers réalisés par un modèle annoncés dans un message de CETTE
+     * conversation : `[nom](/chat/{conv}/presentation/{jeton})`. Un lien vers
+     * une autre conversation est ignoré (le téléchargement le refuserait). Pure.
+     *
+     * @return list<array{token: string, label: string, url: string}>
+     */
+    public static function nativeFileLinks(string $content, int $convId): array
+    {
+        preg_match_all('#\[([^\]\n]*)\]\(/chat/(\d+)/presentation/([0-9a-f]{32})\)#u', $content, $all, PREG_SET_ORDER);
+        $out  = [];
+        $seen = [];
+        foreach ($all as $m) {
+            if ((int)$m[2] !== $convId || isset($seen[$m[3]])) {
+                continue;
+            }
+            $seen[$m[3]] = true;
+            $out[] = [
+                'token' => $m[3],
+                'label' => trim($m[1]),
+                'url'   => '/chat/' . $convId . '/presentation/' . $m[3],
+            ];
+        }
+
+        return $out;
+    }
+
+    /**
+     * Présentation Gamma annoncée par un message (titre, lien gamma.app, lien
+     * d'export PDF ou PowerPoint). Seuls des liens https sont retenus. Pure.
+     *
+     * @return array{title: string, url: string, export: string, export_ext: string}|null
+     */
+    public static function gammaResult(string $content): ?array
+    {
+        $prefix = preg_quote(self::GAMMA_RESULT_PREFIX, '#');
+        if (preg_match('#' . $prefix . '(.+?) »\]\((https://[^)\s]+)\)#u', $content, $m) !== 1) {
+            return null;
+        }
+        $export = '';
+        $ext    = '';
+        if (preg_match('#\]\((https://[^)\s]+)\) \(lien valable#u', $content, $e) === 1) {
+            $export = $e[1];
+            $path   = (string)parse_url($export, PHP_URL_PATH);
+            $guess  = strtolower((string)pathinfo($path, PATHINFO_EXTENSION));
+            $ext    = in_array($guess, ['pdf', 'pptx'], true) ? $guess : '';
+        }
+
+        return [
+            'title'      => mb_substr(trim($m[1]), 0, 150),
+            'url'        => $m[2],
+            'export'     => $export,
+            'export_ext' => $ext,
+        ];
     }
 
     /**

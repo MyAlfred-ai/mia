@@ -35,13 +35,15 @@ workflow](creer-un-workflow.md).
 
 ## 2. Choisir le départ
 
-Deux questions : **quand** le workflow démarre, et **ce qu'il faut lui donner**.
+Deux questions : **quand** le workflow démarre, et **ce qu'il faut lui donner**. Le volet du départ
+s'ouvre sur **Quand démarre-t-il ?** : une ligne par façon de démarrer, chacune avec son
+interrupteur.
 
-- **À la main** (et, si vous cochez **Depuis le chat**, avec « @ » dans la zone de saisie) : vous
-  remplissez ses champs au lancement.
-- **Programmé** : chaque jour, chaque semaine… avec les valeurs par défaut de ses champs.
-- **Sur un évènement** : un email qui arrive, un fichier déposé dans Drive, un logiciel qui appelle son
-  adresse, un autre workflow qui se termine — voir [Démarrer sur un évènement](demarrer-sur-un-evenement.md).
+- **Quand vous le lancez** (toujours possible) et, si vous l'allumez, **Depuis le chat**, avec « @ »
+  dans la zone de saisie : vous remplissez ses champs au lancement.
+- **À heure fixe** : chaque jour, chaque semaine… avec les valeurs par défaut de ses champs.
+- **Quand quelque chose arrive** : un email qui arrive, un fichier déposé dans Drive, un logiciel qui
+  appelle son adresse, un autre workflow qui se termine — voir [Démarrer sur un évènement](demarrer-sur-un-evenement.md).
 
 Les **champs du départ** (texte, date, nombre, choix, email, oui/non, fichier) forment la **Fiche de
 départ** ; un champ **Fichier** devient une pièce à lui seul. Ne demandez que ce que MIA ne peut pas
@@ -62,7 +64,8 @@ Choisissez la **forme** de chaque pièce selon l'usage qui suit :
 | lire un texte rédigé | **Texte** |
 | parcourir plusieurs éléments | **Liste** ou **Tableau** |
 | tester un montant, une date, un oui/non, écrire à une adresse | **Fiche** (des champs nommés et typés) |
-| obtenir un fichier Word, PDF, PowerPoint, Excel | **Document** |
+| obtenir un fichier Word, PDF, PowerPoint, Excel — ou un script Python, un Markdown, un JSON, un CSV… | **Document**, avec son type de fichier (voir [Créer un fichier de tout format](creer-un-fichier.md)) |
+| obtenir une image, une page web, un itinéraire | **Image**, **Page web** ou **Carte** (faite par un outil de création d'après ce que l'étape prépare) |
 
 Donnez aux pièces des **noms parlants** (« Fiche facture », « Relance ») : vous les citerez partout.
 
@@ -71,12 +74,14 @@ Donnez aux pièces des **noms parlants** (« Fiche facture », « Relance ») : 
 Dans le volet d'une étape :
 
 - **Qui fait le travail** : MIA avec le modèle de votre choix, ou un **assistant** — il travaille alors
-  avec son prompt, son modèle, ses bases et ses outils.
+  avec son prompt, son modèle, ses bases et ses outils, sauf son outil image : une image se fait par
+  une brique **Création** ou une étape qui remet une image.
 - **Ce qu'elle peut consulter** : Internet, vos connecteurs, jusqu'à trois bases de connaissances, un
   outil par type. Pour vos emails et vos fichiers, des **filtres** limitent ce qu'elle voit : voir
   [Filtrer les emails et les fichiers](filtrer-emails-et-fichiers.md).
 - **Ce qu'elle peut faire dans les outils** : lire et rédiger (par défaut), préparer des actions à
-  approuver, ou agir sans validation.
+  approuver, ou agir sans validation. **À régler** ne vous le signale que si l'étape n'a rien pour
+  travailler : ni assistant, ni Internet, ni connecteur, ni outil.
 
 ## 5. Écrire de bonnes consignes
 
@@ -117,7 +122,10 @@ notifications](boucles-et-attentes.md).
 
 ## 8. Agir dans vos outils
 
-Une **action** écrit un email, crée un évènement, une tâche, un message Slack, un document Drive. Par
+Une **action** écrit un email, crée un évènement, une tâche, un message Slack, un document Drive. La
+brique **Slack** fait l'un ou l'autre : elle **publie** (dans un canal ou à une personne, avec des
+fichiers joints) ou elle **lit** un canal pour en tirer une pièce — voir
+[Lire ou publier dans Slack](lire-ou-publier-dans-slack.md). Par
 défaut, elle **prépare** : une carte attend votre accord. Ne la réglez sur **Agir sans validation**
 que pour des gestes sans risque, et jamais sur un workflow lancé par un email reçu — un contenu venu de
 l'extérieur peut tenter de détourner un assistant.
@@ -133,6 +141,8 @@ de connaissances — voir [Envoyer le livrable](envoyer-le-livrable.md).
 **Réglages** liste ce qui empêche de publier (une consigne vide, une pièce citée qui n'existe pas
 encore à cet endroit, un service non relié…) et ce qui mérite un coup d'œil ; un clic mène au réglage.
 Le **coût estimé** d'une exécution y figure aussi : une boucle le multiplie par son nombre d'éléments.
+**Détail de l'estimation** dit ce que coûte chaque brique et sur quoi le chiffre repose ; une fois le
+workflow lancé quelques fois, le coût réel des dernières exécutions s'affiche à côté.
 
 ## 11. Publier, essayer, ajuster
 

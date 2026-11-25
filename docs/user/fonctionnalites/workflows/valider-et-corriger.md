@@ -21,6 +21,10 @@ réglé (sept jours par défaut), elle s'arrête.
    - **Approuver et continuer** : le workflow reprend.
    - **Corriger** une pièce (si la validation le permet) : dans le volet, modifiez-la, **Enregistrer**,
      puis approuvez. Les étapes suivantes liront votre version.
+   - **Ou corrigez-la dans la discussion** : dans la conversation de l'exécution, donnez les valeurs
+     qui manquent ou qui changent (« l'Ad Spend d'octobre est de 15 539 € HT », un fichier joint).
+     MIA met à jour la pièce relue, la carte de validation se redessine avec la nouvelle version,
+     puis approuvez la carte.
    - **Renvoyer avec une remarque** : dites ce qu'il faut changer ; l'étape recommence avec votre
      remarque et remet une nouvelle version de sa pièce. Deux fois au plus par validation.
    - **Arrêter** : l'exécution s'arrête, le dossier reste.
@@ -29,6 +33,11 @@ réglé (sept jours par défaut), elle s'arrête.
 
 ## Ce qu'il faut savoir
 
+- **Ce que vous écrivez dans la conversation ne fait pas avancer le workflow** : seule la carte de
+  validation le fait (**Approuver**). MIA ne mène pas non plus les étapes à sa place — elle ne
+  prépare ni email ni document qui doublerait le workflow.
+- **Une fiche corrigée perd son résumé** quand ses valeurs changent (il avait été écrit avec les
+  anciennes) ; corrigée dans la discussion, MIA en écrit un nouveau.
 - **Des actions à approuver** (un email, un évènement préparés par une étape) se décident dans la
   **conversation de l'exécution**, comme toute carte du chat : le workflow reprend dès qu'elles sont
   approuvées ou annulées.

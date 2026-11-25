@@ -14,7 +14,9 @@ declare(strict_types=1);
  *              devient la pièce de départ de celui-ci).
  *
  * Boîte mail et dossier sont SURVEILLÉS : le planificateur (tick) enfile,
- * toutes les WATCH_SEC, un job `workflow` op `watch` par workflow à vérifier ;
+ * toutes les WATCH_EMAIL_SEC pour une boîte mail (WATCH_PUSH_SEC quand elle
+ * prévient MIA elle-même, MailPush), WATCH_SEC pour un dossier, un job
+ * `workflow` op `watch` par workflow à vérifier ;
  * le job liste les nouveautés et lance une exécution par nouveauté, dans
  * l'ordre d'arrivée. Ce qui existait AVANT l'activation ne lance rien (la
  * première vérification pose la ligne de base). Un même email ne lance
@@ -27,10 +29,26 @@ declare(strict_types=1);
  */
 final class WorkflowTriggers
 {
-    /** Délai entre deux vérifications d'une boîte ou d'un dossier. */
+    /** Délai entre deux vérifications d'un dossier Drive. */
     public const WATCH_SEC = 300;
-    /** Workflows vérifiés par passage du planificateur. */
-    public const WATCH_PER_TICK = 10;
+    /**
+     * Boîte mail sans notification instantanée : chaque minute. Une
+     * vérification ne coûte qu'un appel (les identifiants des derniers
+     * messages ; les en-têtes des seuls nouveaux).
+     */
+    public const WATCH_EMAIL_SEC = 60;
+    /** Boîte suivie en push (MailPush) : la vérification n'est plus qu'un secours. */
+    public const WATCH_PUSH_SEC = 3600;
+    /** Messages récents lus par une vérification d'emails (identifiants seulement). */
+    public const WATCH_LIST_MAX = 50;
+    /** Nouveaux emails examinés au plus par vérification (filtres compris). */
+    public const WATCH_EXAMINE_MAX = 25;
+    /** Lectures d'un nouvel élément tentées avant de l'écarter. */
+    public const READ_ATTEMPTS = 3;
+    /** Tolérance sur l'heure de réception face à la ligne de base. */
+    public const BASELINE_SLACK_SEC = 120;
+    /** Workflows vérifiés par passage du planificateur (toutes les 30 s). */
+    public const WATCH_PER_TICK = 30;
     /** Exécutions lancées au plus par vérification (les suivantes attendent la prochaine). */
     public const WATCH_LAUNCH_MAX = 5;
     /** Identifiants retenus comme « déjà vus ». */
@@ -54,9 +72,19 @@ final class WorkflowTriggers
     /** Empreinte de ce qui est surveillé : une autre boîte, un autre filtre, un autre dossier → nouvelle ligne de base. */
     public static function watchSignature(array $event): string
     {
+        $filters = (array)($event['filters'] ?? []);
+        // Filtres ajoutés après coup (sauf de, adressé à) : laissés vides, ils
+        // ne changent pas l'empreinte — sinon chaque surveillance existante
+        // reposerait sa ligne de base au déploiement, et un email arrivé
+        // entre-temps ne lancerait rien.
+        foreach (['exclude', 'to'] as $k) {
+            if (isset($filters['mail']) && is_array($filters['mail']) && trim((string)($filters['mail'][$k] ?? '')) === '') {
+                unset($filters['mail'][$k]);
+            }
+        }
         return sha1((string)json_encode([
             $event['kind'] ?? '', $event['source'] ?? '', trim((string)($event['query'] ?? '')), trim((string)($event['folder'] ?? '')),
-            WorkflowFilters::isEmpty((array)($event['filters'] ?? [])) ? null : $event['filters'],
+            WorkflowFilters::isEmpty((array)($event['filters'] ?? [])) ? null : $filters,
         ]));
     }
 
@@ -78,7 +106,7 @@ final class WorkflowTriggers
                         $db->rollBack();
                         continue;
                     }
-                    Workflow::setWatchNext($id, self::watches($wf['published']) ? $now->modify('+' . self::WATCH_SEC . ' seconds') : null);
+                    Workflow::setWatchNext($id, self::watches($wf['published']) ? $now->modify('+' . self::watchInterval($wf) . ' seconds') : null);
                     $db->commit();
                 } catch (\Throwable $e) {
                     if ($db->inTransaction()) {
@@ -104,6 +132,21 @@ final class WorkflowTriggers
         return $n;
     }
 
+    /**
+     * Délai avant la prochaine vérification : une heure quand la boîte
+     * prévient MIA elle-même (push en service), une minute sinon pour une
+     * boîte mail, cinq minutes pour un dossier Drive.
+     */
+    public static function watchInterval(array $wf): int
+    {
+        $event = $wf['published']['start']['event'] ?? null;
+        if (is_array($event) && ($event['kind'] ?? '') === 'email') {
+            return MailPush::isLive((int)$wf['user_id'], ($event['source'] ?? '') === 'outlook' ? 'outlook' : 'gmail')
+                ? self::WATCH_PUSH_SEC : self::WATCH_EMAIL_SEC;
+        }
+        return self::WATCH_SEC;
+    }
+
     /** Job `watch` : vérifier la boîte ou le dossier, lancer une exécution par nouveauté. */
     public static function runWatchJob(array $payload, ?object $service = null): array
     {
@@ -118,6 +161,7 @@ final class WorkflowTriggers
         $event = $wf['published']['start']['event'];
         $tz = self::timezoneOf($wf['published']);
         $state = Workflow::watchState($wf);
+        $prevError = (string)($state['error'] ?? '');
         $sig = self::watchSignature($event);
         $now = new \DateTimeImmutable('now', new \DateTimeZone('UTC'));
 
@@ -151,11 +195,44 @@ final class WorkflowTriggers
         $new = array_values(array_filter($items, static fn(array $i): bool => !in_array((string)$i['id'], $seen, true)));
         // Plus anciens d'abord : les listes arrivent des plus récents aux plus anciens.
         $new = array_reverse($new);
+        // Pré-contrôle (un compte à relier, un outil retiré) : rien ne part,
+        // rien n'est marqué vu — les nouveautés attendront que ce soit réglé.
+        // La personne est prévenue une fois, la surveillance le dit.
+        if ($new !== []) {
+            try {
+                WorkflowEngine::asUser($user, static fn() => WorkflowEngine::assertReady($wf, $user, true));
+            } catch (WorkflowPreflightException $e) {
+                $cause = $e->getMessage();
+                if ($prevError === '') {
+                    WorkflowNotifier::notStarted($wf, $cause);
+                }
+                $state['error'] = mb_substr($cause, 0, 300);
+                Workflow::saveWatchState($wf['id'], $state);
+                error_log('[Workflows] évènement de #' . $wf['id'] . ' non lancé (pré-contrôle) : ' . $cause);
+                return ['error' => $cause, 'preflight' => true];
+            }
+        }
         $launched = 0;
-        foreach (array_slice($new, 0, self::WATCH_LAUNCH_MAX) as $item) {
+        $examined = 0;
+        $fails = array_map('intval', (array)($state['fails'] ?? []));
+        $baselineAt = ScheduledTask::fromSqlUtc((string)($state['baseline_at'] ?? ''));
+        foreach ($new as $item) {
+            if ($launched >= self::WATCH_LAUNCH_MAX || $examined >= self::WATCH_EXAMINE_MAX) {
+                break; // la suite à la prochaine vérification
+            }
+            $examined++;
             $ref = $event['kind'] === 'email' ? $event['source'] . ':' . $item['id'] : 'drive:' . $item['id'];
             try {
-                $content = self::eventContent($event, $svc, $item, $tz);
+                if ($event['kind'] === 'email') {
+                    $content = self::matchingEmail($event, $svc, $item, $tz, $baselineAt);
+                    if ($content === null) {
+                        // Pas pour ce workflow (filtres), ou arrivé avant lui : vu, jamais lancé.
+                        $seen[] = (string)$item['id'];
+                        continue;
+                    }
+                } else {
+                    $content = self::eventContent($event, $svc, $item, $tz);
+                }
                 $res = WorkflowEngine::launch($wf, $user, [], [], $event['kind'], null, $tz, $content, $ref);
                 $seen[] = (string)$item['id'];
                 if ($res !== null) {
@@ -169,11 +246,19 @@ final class WorkflowTriggers
                 error_log('[Workflows] évènement de #' . $wf['id'] . ' non lancé : ' . $e->getMessage());
                 break;
             } catch (\RuntimeException $e) {
-                // Contenu illisible : l'évènement est écarté, pas rejoué sans fin.
-                $seen[] = (string)$item['id'];
-                error_log('[Workflows] évènement de #' . $wf['id'] . ' illisible : ' . $e->getMessage());
+                // Illisible : écarté au troisième échec, pas rejoué sans fin —
+                // mais une panne passagère (service injoignable le temps d'une
+                // vérification) ne fait pas perdre l'email.
+                $id = (string)$item['id'];
+                $fails[$id] = (int)($fails[$id] ?? 0) + 1;
+                if ($fails[$id] >= self::READ_ATTEMPTS) {
+                    $seen[] = $id;
+                    unset($fails[$id]);
+                }
+                error_log('[Workflows] évènement de #' . $wf['id'] . ' illisible (' . ($fails[$id] ?? self::READ_ATTEMPTS) . '/' . self::READ_ATTEMPTS . ') : ' . $e->getMessage());
             }
         }
+        $state['fails'] = array_slice(array_diff_key($fails, array_flip($seen)), -50, null, true);
         $state['seen'] = array_slice(array_values(array_unique($seen)), -self::SEEN_MAX);
         $state['launched'] = (int)($state['launched'] ?? 0) + $launched;
         Workflow::saveWatchState($wf['id'], $state);
@@ -213,21 +298,203 @@ final class WorkflowTriggers
     /**
      * Ce qui est là maintenant : des emails (récents d'abord) ou les fichiers
      * du dossier. @return list<array{id: string, …}>
+     *
+     * Emails : les messages récents de la boîte de réception (seule la
+     * recherche avancée, facultative, passe par le fournisseur). Les filtres
+     * du déclencheur ne sont PAS confiés à la recherche : MIA les applique
+     * elle-même au message (matchingEmail), la même règle pour Gmail et
+     * Outlook.
      */
     private static function listItems(array $event, object $svc): array
     {
-        // Filtres du déclencheur : composés avec la requête (emails), ou
-        // appliqués aux fichiers du dossier (nature, nom).
-        $scope = SearchScope::fromFilters((array)($event['filters'] ?? []));
         if ($event['kind'] === 'email') {
-            if ($event['source'] === 'outlook') {
-                return array_values(array_filter($scope->filterOutlook($svc->search($scope->outlookQuery((string)$event['query']), 20)), static fn($m) => (string)($m['id'] ?? '') !== ''));
+            $query = trim((string)$event['query']);
+            if (method_exists($svc, 'watchList')) {
+                // Sans recherche avancée : la boîte de réception elle-même (Gmail
+                // par son libellé, sans le retard de l'index de recherche).
+                $list = $svc->watchList($event['source'] === 'outlook' || $query === '' ? $query : self::gmailQuery($query), self::WATCH_LIST_MAX);
+            } else {
+                $list = $svc->search($event['source'] === 'outlook' ? $query : self::gmailQuery($query), 20);
             }
-            return array_values(array_filter($svc->search(self::gmailQuery($scope->gmailQuery((string)$event['query'])), 20), static fn($m) => (string)($m['id'] ?? '') !== ''));
+            return array_values(array_filter($list, static fn($m) => is_array($m) && (string)($m['id'] ?? '') !== ''));
         }
+        // Fichiers du dossier : nature et nom du filtre.
+        $scope = SearchScope::fromFilters((array)($event['filters'] ?? []));
         $list = $svc->listFolder((string)$event['folder'], 100);
         $files = array_values(array_filter((array)($list['elements'] ?? []), static fn($f) => empty($f['dossier']) && (string)($f['id'] ?? '') !== ''));
         return $scope->filterDrive($files);
+    }
+
+    // ==================================================================
+    // Essai des filtres (éditeur)
+    // ==================================================================
+
+    /** Emails récents jugés par l'essai des filtres. */
+    public const FILTER_TEST_MAX = 10;
+
+    /**
+     * Les derniers emails de la boîte, jugés par les filtres du déclencheur
+     * avec la MÊME règle que la surveillance (WorkflowFilters) — rien n'est
+     * lancé, rien n'est gardé. La ligne de base ne compte pas ici : publié,
+     * le workflow ne réagira qu'aux emails arrivés ensuite.
+     *
+     * @return array{items: list<array{de:string, objet:string, received:?int, match:bool, reason:string}>, matched:int}
+     */
+    public static function testEmailFilters(array $event, object $svc, int $limit = self::FILTER_TEST_MAX): array
+    {
+        $filters = (array)(($event['filters'] ?? [])['mail'] ?? []);
+        $query = trim((string)($event['query'] ?? ''));
+        if ($query !== '' && ($event['source'] ?? '') !== 'outlook' && !preg_match('/\b(in|label):/i', $query)) {
+            $query = 'in:inbox ' . $query; // toute la boîte de réception, sans la fenêtre de trois jours
+        }
+        $list = method_exists($svc, 'watchList') ? $svc->watchList($query, $limit) : $svc->search($query !== '' ? $query : 'in:inbox', $limit);
+        $items = [];
+        $matched = 0;
+        foreach (array_slice(array_values(array_filter($list, static fn($m) => is_array($m) && (string)($m['id'] ?? '') !== '')), 0, $limit) as $item) {
+            $meta = $item;
+            try {
+                if (!array_key_exists('received', $meta) && method_exists($svc, 'watchMeta')) {
+                    $meta = $svc->watchMeta((string)$item['id']) + $item;
+                }
+                $why = WorkflowFilters::emailMismatch($filters, $meta, false);
+                if ($why === null && WorkflowFilters::needsFullMessage($filters, $meta)) {
+                    $why = WorkflowFilters::emailMismatch($filters, self::mergeMessage($svc->readMessage((string)$item['id'], 3000), $meta), true);
+                }
+                $reason = $why === null ? '' : WorkflowFilters::mismatchLabel($why, $filters);
+            } catch (\RuntimeException $e) {
+                $why = 'unreadable';
+                $reason = t('illisible : {cause}', ['cause' => $e->getMessage()]);
+            }
+            $items[] = [
+                'id' => (string)$item['id'],
+                'de' => (string)($meta['de'] ?? ''),
+                'objet' => (string)($meta['objet'] ?? ''),
+                'received' => isset($meta['received']) ? (int)$meta['received'] : null,
+                'match' => $why === null,
+                'reason' => $reason,
+            ];
+            $matched += $why === null ? 1 : 0;
+        }
+        return ['items' => $items, 'matched' => $matched];
+    }
+
+    /**
+     * Le message lu en entier, complété par ses en-têtes : une valeur VIDE
+     * de la lecture (en-tête absent du format complet) n'efface pas celle
+     * des en-têtes. Pure.
+     */
+    public static function mergeMessage(array $msg, array $meta): array
+    {
+        foreach ($meta as $k => $v) {
+            if (!array_key_exists($k, $msg) || $msg[$k] === '' || $msg[$k] === null) {
+                $msg[$k] = $v;
+            }
+        }
+        return $msg;
+    }
+
+    /** Le résultat de l'essai, rendu une fois côté serveur (traduit, échappé). Pure. */
+    public static function filterTestHtml(array $res, string $service, string $tz): string
+    {
+        $e = static fn(string $s): string => htmlspecialchars($s, ENT_QUOTES, 'UTF-8');
+        $items = (array)($res['items'] ?? []);
+        if ($items === []) {
+            return '<div class="wf-ftest-res"><p class="wf-ftest-sum">' . $e(t('Aucun email dans la boîte de réception {service} (avec la recherche avancée, s’il y en a une).', ['service' => $service])) . '</p></div>';
+        }
+        $zone = Recurrence::zone(ScheduledTask::normalizeTimezone($tz));
+        $rows = '';
+        foreach ($items as $it) {
+            $from = (string)$it['de'];
+            $name = trim((string)preg_replace('/\s*<[^>]*>\s*$/', '', $from), " \t\"'");
+            $addr = UserGmailService::extractAddress($from);
+            $when = $it['received'] !== null ? Format::shortDateTime((new \DateTimeImmutable('@' . (int)$it['received']))->setTimezone($zone)) : '';
+            $rows .= '<li class="' . ($it['match'] ? 'is-match' : 'is-skip') . '">'
+                . '<span class="wf-ftest-mark" aria-hidden="true">' . ($it['match'] ? '✓' : '✕') . '</span>'
+                . '<span class="wf-ftest-main"><b>' . $e((string)$it['objet'] !== '' ? (string)$it['objet'] : t('(sans objet)')) . '</b>'
+                . '<span class="wf-ftest-meta">' . $e($name !== '' ? $name : $addr) . ($name !== '' && $addr !== '' && $addr !== $name ? ' · ' . $e($addr) : '') . ($when !== '' ? ' · ' . $e($when) : '') . '</span>'
+                . '<span class="wf-ftest-why">' . $e($it['match'] ? t('lancerait le workflow') : (string)$it['reason']) . '</span></span></li>';
+        }
+        $n = count($items);
+        $m = (int)($res['matched'] ?? 0);
+        $sum = $m === 0
+            ? t('Aucun des {n} derniers emails ne correspond aux filtres.', ['n' => $n])
+            : I18n::plural($m, '{n} des {total} derniers emails correspond aux filtres.', '{n} des {total} derniers emails correspondent aux filtres.', ['total' => $n]);
+        return '<div class="wf-ftest-res"><p class="wf-ftest-sum">' . $e($sum) . '</p><ul class="wf-ftest-list">' . $rows . '</ul>'
+            . '<p class="wf-ftest-note">' . $e(t('Rien n’est lancé par cet essai. Publié, le workflow ne réagira qu’aux emails arrivés après.')) . '</p></div>';
+    }
+
+    // ==================================================================
+    // Essai à la main sur un email récent (fenêtre de lancement)
+    // ==================================================================
+
+    /** Emails récents proposés dans la fenêtre de lancement. */
+    public const RECENT_EMAILS_MAX = 10;
+
+    /**
+     * La liste des derniers emails de la boîte, à choisir pour un essai à la
+     * main (boutons radio `event_message`), rendue une fois côté serveur
+     * (traduite, échappée). Chaque email dit s'il lancerait le workflow —
+     * la même règle que la surveillance (testEmailFilters). Rien n'est coché
+     * d'office : lancer sur un email que la personne n'a pas choisi
+     * préparerait une réponse à un message qu'elle n'a pas désigné. Pure.
+     */
+    public static function recentEmailsHtml(array $res, string $service, string $tz): string
+    {
+        $e = static fn(string $s): string => htmlspecialchars($s, ENT_QUOTES, 'UTF-8');
+        $items = array_values(array_filter((array)($res['items'] ?? []), static fn($it): bool => is_array($it) && (string)($it['id'] ?? '') !== ''));
+        if ($items === []) {
+            return '<p class="wf-recent-empty">' . $e(t('Aucun email dans la boîte de réception {service}.', ['service' => $service])) . '</p>';
+        }
+        $zone = Recurrence::zone(ScheduledTask::normalizeTimezone($tz));
+        $rows = '';
+        foreach ($items as $it) {
+            $from = (string)($it['de'] ?? '');
+            $name = trim((string)preg_replace('/\s*<[^>]*>\s*$/', '', $from), " \t\"'");
+            $addr = UserGmailService::extractAddress($from);
+            $who = $name !== '' ? $name : $addr;
+            $when = ($it['received'] ?? null) !== null ? Format::shortDateTime((new \DateTimeImmutable('@' . (int)$it['received']))->setTimezone($zone)) : '';
+            $match = !empty($it['match']);
+            $rows .= '<li><label class="wf-recent-item' . ($match ? '' : ' is-skip') . '">'
+                . '<input type="radio" name="event_message" value="' . $e((string)$it['id']) . '">'
+                . '<span class="wf-recent-main"><b>' . $e((string)($it['objet'] ?? '') !== '' ? (string)$it['objet'] : t('(sans objet)')) . '</b>'
+                . '<span class="wf-recent-meta">' . $e($who) . ($when !== '' ? ' · ' . $e($when) : '') . '</span>'
+                . ($match ? '' : '<span class="wf-recent-why">' . $e(t('Ne lancerait pas le workflow : {raison}', ['raison' => (string)($it['reason'] ?? '')])) . '</span>')
+                . '</span></label></li>';
+        }
+        return '<ul class="wf-recent-list" role="radiogroup" aria-label="' . $e(t('Vos derniers emails')) . '">' . $rows . '</ul>';
+    }
+
+    /**
+     * Pièce « Email reçu » d'un email CHOISI dans la fenêtre de lancement :
+     * exactement celle qu'aurait remise la surveillance (expéditeur, objet,
+     * date, contenu, pièces jointes, identifiant du message — de quoi
+     * répondre dans le fil). Le message est lu avec la connexion de la
+     * personne : un identifiant qui n'est pas dans SA boîte n'est pas lu.
+     * Les filtres du déclencheur ne s'appliquent pas : c'est un essai, la
+     * personne a choisi l'email.
+     *
+     * @throws \InvalidArgumentException message présentable
+     */
+    public static function chosenEmailEvent(array $def, int $userId, string $messageId, ?object $service = null): array
+    {
+        $event = $def['start']['event'] ?? null;
+        if (!is_array($event) || ($event['kind'] ?? '') !== 'email') {
+            throw new \InvalidArgumentException(t('Requête invalide.'));
+        }
+        $messageId = trim($messageId);
+        if ($messageId === '' || strlen($messageId) > 512 || !preg_match('/^[A-Za-z0-9=_\-+\/.]+$/', $messageId)) {
+            throw new \InvalidArgumentException(t('Requête invalide.'));
+        }
+        $tz = self::timezoneOf($def);
+        try {
+            $svc = $service ?? self::serviceFor($event, $userId);
+            $msg = $svc->readMessage($messageId, 6000);
+        } catch (\RuntimeException $e) {
+            throw new \InvalidArgumentException(t('L’email choisi n’a pas pu être lu : {cause}', ['cause' => $e->getMessage()]));
+        }
+        $content = self::emailContent($event, ['id' => $messageId], $msg, $tz);
+        $content['summary'] = t('Email choisi dans {service} pour un essai à la main.', ['service' => $event['source'] === 'outlook' ? 'Outlook' : 'Gmail']) . ' ' . $content['summary'];
+        return $content;
     }
 
     /** Requête Gmail d'une surveillance : la boîte de réception sauf mention contraire, les trois derniers jours. */
@@ -243,34 +510,73 @@ final class WorkflowTriggers
         return trim($q);
     }
 
+    /**
+     * Un nouvel email lance-t-il ce workflow ? Arrivé avant la surveillance
+     * (ramené des archives, ligne de base manquée), ou écarté par ses filtres
+     * → null. Les en-têtes d'abord (une lecture légère, et seulement pour les
+     * messages jamais vus), le message entier ensuite (mots, pièce jointe) —
+     * c'est lui qui devient la pièce d'évènement.
+     */
+    private static function matchingEmail(array $event, object $svc, array $item, string $tz, ?\DateTimeImmutable $baselineAt): ?array
+    {
+        $filters = (array)(($event['filters'] ?? [])['mail'] ?? []);
+        $meta = $item;
+        if (!array_key_exists('received', $meta) && method_exists($svc, 'watchMeta')) {
+            $meta = $svc->watchMeta((string)$item['id']) + $item;
+        }
+        if (isset($meta['received']) && $baselineAt !== null
+            && (int)$meta['received'] < $baselineAt->getTimestamp() - self::BASELINE_SLACK_SEC) {
+            return null;
+        }
+        if (!WorkflowFilters::emailMatches($filters, $meta, false)) {
+            return null;
+        }
+        $msg = $svc->readMessage((string)$item['id'], 6000);
+        if (!WorkflowFilters::emailMatches($filters, self::mergeMessage($msg, $meta), true)) {
+            return null;
+        }
+        return self::emailContent($event, $item, $msg, $tz);
+    }
+
     /** Contenu de la pièce d'évènement d'un email ou d'un fichier. */
     private static function eventContent(array $event, object $svc, array $item, string $tz): array
     {
         if ($event['kind'] === 'email') {
-            $msg = $svc->readMessage((string)$item['id'], 6000);
-            $from = (string)($msg['de'] ?? $item['de'] ?? '');
-            $address = UserGmailService::extractAddress($from);
-            $subject = (string)($msg['objet'] ?? $item['objet'] ?? '');
-            $service = $event['source'] === 'outlook' ? 'Outlook' : 'Gmail';
-            $files = array_values(array_map(static fn($a): string => (string)($a['nom'] ?? ''), (array)($msg['pieces_jointes'] ?? [])));
-            return [
-                // De quoi relire le message (ses pièces jointes, une boucle qui les parcourt).
-                'message_id' => (string)$item['id'],
-                'service'    => $event['source'] === 'outlook' ? 'outlook' : 'gmail',
-                'fields' => [
-                    'expediteur'     => WorkflowValues::email($address),
-                    'objet'          => $subject,
-                    'recu_le'        => self::dateOf((string)($msg['date'] ?? $item['date'] ?? ''), $tz),
-                    'contenu'        => mb_substr((string)($msg['contenu'] ?? ''), 0, 24000),
-                    'pieces_jointes' => array_values(array_filter($files, static fn($n) => $n !== '')),
-                ],
-                'summary'  => t('Email reçu dans {service} de {de} (identifiant du message : {id}). Une étape qui consulte {service} peut le relire, lire ses pièces jointes ou y répondre dans le fil.', [
-                    'service' => $service, 'de' => $from !== '' ? $from : '—', 'id' => (string)$item['id'],
-                ]),
-                'headline' => ($subject !== '' ? '« ' . $subject . ' »' : t('(sans objet)')) . ($from !== '' ? ' — ' . $from : ''),
-                'provenance' => [t('Email de {de}', ['de' => $from])],
-            ];
+            return self::emailContent($event, $item, $svc->readMessage((string)$item['id'], 6000), $tz);
         }
+        return self::fileContent($svc, $item);
+    }
+
+    /** Pièce d'évènement d'un email (déjà lu). */
+    private static function emailContent(array $event, array $item, array $msg, string $tz): array
+    {
+        $from = (string)($msg['de'] ?? $item['de'] ?? '');
+        $address = UserGmailService::extractAddress($from);
+        $subject = (string)($msg['objet'] ?? $item['objet'] ?? '');
+        $service = $event['source'] === 'outlook' ? 'Outlook' : 'Gmail';
+        $files = array_values(array_map(static fn($a): string => (string)($a['nom'] ?? ''), (array)($msg['pieces_jointes'] ?? [])));
+        return [
+            // De quoi relire le message (ses pièces jointes, une boucle qui les parcourt).
+            'message_id' => (string)$item['id'],
+            'service'    => $event['source'] === 'outlook' ? 'outlook' : 'gmail',
+            'fields' => [
+                'expediteur'     => WorkflowValues::email($address),
+                'objet'          => $subject,
+                'recu_le'        => self::dateOf((string)($msg['date'] ?? $item['date'] ?? ''), $tz),
+                'contenu'        => mb_substr((string)($msg['contenu'] ?? ''), 0, 24000),
+                'pieces_jointes' => array_values(array_filter($files, static fn($n) => $n !== '')),
+            ],
+            'summary'  => t('Email reçu dans {service} de {de} (identifiant du message : {id}). Ses pièces jointes sont jointes à chaque étape qui le lit ; une étape qui consulte {service} peut aussi le relire en entier ou y répondre dans le fil.', [
+                'service' => $service, 'de' => $from !== '' ? $from : '—', 'id' => (string)$item['id'],
+            ]),
+            'headline' => ($subject !== '' ? '« ' . $subject . ' »' : t('(sans objet)')) . ($from !== '' ? ' — ' . $from : ''),
+            'provenance' => [t('Email de {de}', ['de' => $from])],
+        ];
+    }
+
+    /** Pièce d'évènement d'un fichier Drive. */
+    private static function fileContent(object $svc, array $item): array
+    {
         $text = '';
         try {
             $read = $svc->readFile((string)$item['id'], 20000);
@@ -410,6 +716,7 @@ final class WorkflowTriggers
                     continue;
                 }
                 try {
+                    WorkflowEngine::asUser($user, static fn() => WorkflowEngine::assertReady($wf, $user));
                     $res = WorkflowEngine::launch($wf, $user, [], [], 'workflow', null, (string)$run['timezone'], [
                         'text' => $text,
                         'headline' => t('Après « {nom} »', ['nom' => (string)($source['name'] ?? '')]),

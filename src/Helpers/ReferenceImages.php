@@ -474,7 +474,7 @@ final class ReferenceImages
 
             $kbNames = [];
             foreach ($kbs as $kb) {
-                if (!KnowledgeBase::isRemote($kb) && (int)($kb['id'] ?? 0) > 0) {
+                if (KnowledgeBase::holdsDocuments($kb) && (int)($kb['id'] ?? 0) > 0) {
                     $kbNames[(int)$kb['id']] = (string)($kb['name'] ?? '');
                 }
             }

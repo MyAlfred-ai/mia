@@ -1,8 +1,8 @@
 ---
 title: Régler les workflows
-description: Proposer ou suspendre les workflows des créateurs et administrateurs, décider s'ils peuvent agir sans validation, borner leurs boucles, et savoir ce qu'ils coûtent.
+description: Proposer ou suspendre les workflows des créateurs et administrateurs, décider s'ils peuvent agir sans validation, borner leurs boucles, les faire démarrer dès qu'un email arrive, et savoir ce qu'ils coûtent.
 sidebar:
-  order: 7
+  order: 8
 ---
 
 Un workflow est un travail en plusieurs étapes que MIA et les assistants mènent pour un créateur ou
@@ -33,6 +33,20 @@ choisi.
   suivants sont signalés dans la conversation de l'exécution, pas traités. Chaque créateur règle en
   plus le maximum de chacune de ses boucles, sous ce plafond. Le changement vaut pour les prochaines
   boucles qui démarrent.
+- **Démarrer dès qu'un email arrive** : case **Démarrer dès qu'un email arrive (notifications
+  instantanées)**, cochée par défaut. Un workflow qui démarre sur un email est alors prévenu par la
+  boîte à l'arrivée du message, au lieu de la vérifier chaque minute (une vérification de
+  secours passe encore toutes les heures, et une seconde suit chaque notification de près).
+  **Gmail n'est instantané qu'une fois le topic Pub/Sub relié** (ci-dessous) : sans lui, la ligne
+  Gmail le dit et la boîte est vérifiée chaque minute. Sous la case, une ligne par service dit s'il est prêt.
+  - **Outlook** : rien à régler — la permission de lecture des emails du connecteur suffit.
+  - **Gmail** : Google passe par un **topic Google Cloud Pub/Sub** que vous créez une fois, dans le
+    projet Google Cloud de la connexion Google de MIA. Activez Cloud Pub/Sub, créez un topic, donnez
+    au compte `gmail-api-push@system.gserviceaccount.com` le rôle **Pub/Sub Publisher** sur ce topic, <!-- secret-scan:ignore : adresse publique de Google, à recopier telle quelle -->
+    collez son nom complet (`projects/<projet>/topics/<topic>`) dans **Gmail : relier un topic
+    Google Cloud Pub/Sub**, puis créez dans Google Cloud un abonnement **push** du topic vers
+    l'adresse que MIA affiche alors. **Tester le topic** l'essaie sur votre propre boîte Gmail
+    (reliez-la d'abord dans **Réglages → Comptes connectés**).
 
 ## Ce qu'il faut savoir
 
@@ -54,5 +68,11 @@ choisi.
 - **Les fichiers lus par une boucle** (une pièce jointe, un fichier d'un dossier Drive) sont copiés
   dans le stockage des pièces jointes le temps de l'exécution, et suivent la même rétention que les
   conversations (élagage).
+- **Les notifications instantanées exigent une adresse publique** : MIA doit être joignable depuis
+  Internet en HTTPS, à l'adresse déclarée pour l'instance. Sinon, ou si la case est décochée, les
+  boîtes sont vérifiées chaque minute. Une notification ne fait que réveiller la
+  vérification : les emails sont toujours relus avec le compte de la personne, et une adresse qui
+  fuiterait ne permettrait au pire que de déclencher une vérification de plus. **Changer
+  d'adresse** (Gmail) en crée une nouvelle, à reporter dans l'abonnement push de Google Cloud.
 - **La sauvegarde** : les workflows et leurs exécutions n'en font pas partie, comme les tâches
-  programmées et les conversations.
+  programmées et les conversations — ni les abonnements des boîtes mail, recréés d'eux-mêmes.

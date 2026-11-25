@@ -22,9 +22,11 @@ engage la conversation : [Les outils](index.md).
 L'image apparaît avec ses actions : **Copier**, **Regénérer**, **Télécharger l'image** et
 **Partager**.
 
-Le format — carré, portrait, paysage — et la qualité sont réglés par votre administrateur sur
-l'outil. Pour un autre format, demandez-le dans votre description : le moteur en tient compte s'il
-le peut.
+Le format — carré, portrait, paysage —, la qualité, le **fond transparent** et le **format du
+fichier** (PNG, JPEG, WebP) sont réglés par votre administrateur sur l'outil ; un assistant peut
+les préciser pour ses propres images. Pour un autre format, demandez-le dans votre description : le
+moteur en tient compte s'il le peut. Une image à fond transparent s'enregistre en PNG (ou WebP) et
+se pose telle quelle sur un document ou une page.
 
 ## Ajuster sans tout recommencer
 

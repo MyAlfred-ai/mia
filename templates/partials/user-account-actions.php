@@ -9,6 +9,10 @@
  *     menu des rubriques à gauche. Il porte la pastille des points à régler
  *     (AdminAttention, ceux des pages ouvertes) — jamais l'avatar, réservé aux
  *     connexions à reconnecter.
+ * Chacun porte aussi la pastille VERTE d'une nouveauté majeure à découvrir
+ * de son côté (MajorFeatures : Mon compte, administration). « Réglages »
+ * porte en plus la pastille BLEUE d'info tant que « Votre contexte » est vide
+ * (UserPreferences::contextDot) : elle mène, par l'entrée Mémoire, à la carte.
  * Inclus par user-account-trigger.php, dans sa carte `.user-dock`.
  */
 $uaUser = $currentUser ?? Session::currentUser();
@@ -30,13 +34,16 @@ $uaOnAdmin    = ($uaPath === '/admin' || str_starts_with($uaPath, '/admin/')) &&
        title="<?= te('Réglages de votre compte') ?>"<?= $uaOnSettings ? ' aria-current="page"' : '' ?>>
         <?= NavRegistry::icon('gear', 16) ?>
         <span class="user-action-label"><?= te('Réglages') ?></span>
+        <?= MajorFeatures::dotAt(MajorFeatures::PLACE_ACCOUNT) ?>
+        <?= UserPreferences::contextDot($uaUser, true) ?>
     </a>
     <?php if ($uaHasAdmin): ?>
     <a href="/admin" class="user-action-btn is-admin" id="adminMenuBtn"
        title="<?= htmlspecialchars($uaAdminTitle) ?>"<?= $uaOnAdmin ? ' aria-current="page"' : '' ?>>
         <?= NavRegistry::icon('shield', 16) ?>
         <span class="user-action-label"><?= te('Admin') ?></span>
-        <?php if ($uaBadge !== null): ?><span class="user-action-count <?= $uaBadge['level'] === AdminAttention::ALERT ? 'is-alert' : 'is-warn' ?>" aria-hidden="true"><?= (int)$uaBadge['count'] ?></span><?php endif; ?>
+        <?= MajorFeatures::dotAt(MajorFeatures::PLACE_ADMIN) ?>
+        <?php if ($uaBadge !== null): ?><span class="user-action-count <?= $uaBadge['level'] === AdminAttention::ALERT ? 'is-alert' : 'is-warn' ?>" aria-hidden="true" data-tip="<?= htmlspecialchars(I18n::plural($uaBadge['count'], '{n} point à régler', '{n} points à régler')) ?>" data-tip-tone="<?= $uaBadge['level'] === AdminAttention::ALERT ? 'alert' : 'warn' ?>"><?= (int)$uaBadge['count'] ?></span><?php endif; ?>
     </a>
     <?php endif; ?>
 </div>

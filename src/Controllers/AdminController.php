@@ -22,6 +22,16 @@ class AdminController
         . 'à chaque message. Il n\'y a ni document à déposer ni rien à réindexer ici — '
         . 'c\'est dans MyBrain que le cerveau se nourrit.';
 
+    /** Même refus pour une table permanente : elle porte des lignes, pas des documents. */
+    private const TABLE_KB_NO_DOCUMENTS = 'Table : elle contient des lignes, pas des documents — ni dépôt de fichier à vectoriser, '
+        . 'ni réindexation. Ses lignes se gèrent dans sa fiche.';
+
+    /** Pourquoi une base sans documents refuse un geste réservé aux documents. */
+    private static function noDocumentsMessage(array $kb): string
+    {
+        return t(KnowledgeBase::isTable($kb) ? self::TABLE_KB_NO_DOCUMENTS : self::REMOTE_KB_NO_DOCUMENTS);
+    }
+
     // Refus opposé à la suppression manuelle d'un document piloté par une sync distante.
     private const SYNCED_DOC_MESSAGE = 'Document synchronisé depuis un dossier en ligne : supprimez-le '
         . 'du dossier source (sinon il serait re-téléchargé au prochain cycle), ou désactivez la '
@@ -185,7 +195,84 @@ class AdminController
         $canEditUser    = Session::can('users.edit');
         $canDeleteUser  = Session::can('users.delete');
         $canOpenRoles   = Session::isAdmin();
+        // Comptes de démonstration : enveloppe et consommation depuis LEUR
+        // début (une requête pour toute la page). Adresse de contact citée par
+        // l'aide : c'est elle que verra la personne en fin de démo.
+        $demoAccounts       = DemoAccount::accounts();
+        $demoDefaultCredits = DemoAccount::DEFAULT_CREDITS;
+        $demoContactEmail   = DemoAccount::contactEmail();
         require ROOT . '/templates/admin/users.php';
+    }
+
+    /**
+     * Enveloppe de démo saisie dans un formulaire de compte : null (avec le
+     * message dans $why) si elle n'est pas un nombre de crédits valide.
+     */
+    private function checkedDemoCredits(mixed $raw, ?string &$why): ?int
+    {
+        $credits = DemoAccount::normalizeCredits($raw);
+        if ($credits === null) {
+            $why = t('Crédits de démo : indiquez un nombre entier entre 1 et {max}.', ['max' => Format::credits(DemoAccount::MAX_CREDITS)]);
+        }
+        return $credits;
+    }
+
+    /**
+     * Passe un compte existant en compte de démo : enveloppe neuve, décompte à
+     * partir de maintenant (rien de ce qui a été consommé avant ne compte).
+     */
+    public function startDemo(string $id): void
+    {
+        AuthMiddleware::requirePermission('users.edit');
+        $asJson = AjaxResponse::wanted();
+        $target = $this->demoTarget((int)$id, $asJson);
+        if (DemoAccount::isDemo($target)) {
+            AjaxResponse::abort($asJson, 'error', t('Ce compte est déjà un compte de démo.'), '/admin/users');
+        }
+        if (!DemoAccount::allowedForRole((string)($target['role'] ?? ''))) {
+            AjaxResponse::abort($asJson, 'error', t('Un administrateur ne peut pas être un compte de démo.'), '/admin/users', 403);
+        }
+        $why = null;
+        $credits = $this->checkedDemoCredits($_POST['demo_credits'] ?? DemoAccount::DEFAULT_CREDITS, $why);
+        if ($credits === null) {
+            AjaxResponse::abort($asJson, 'error', (string)$why, '/admin/users');
+        }
+        DemoAccount::start((int)$target['id'], $credits);
+        AjaxResponse::finish($asJson, 'success', t('« {nom} » est désormais un compte de démo : {n} crédits, sans renouvellement mensuel.', [
+            'nom' => (string)$target['name'],
+            'n'   => Format::credits($credits),
+        ]), '/admin/users');
+    }
+
+    /**
+     * Conversion d'un compte de démo en compte ordinaire, historique conservé :
+     * son quota mensuel (individuel, sinon des groupes) s'applique aussitôt.
+     */
+    public function convertDemo(string $id): void
+    {
+        AuthMiddleware::requirePermission('users.edit');
+        $asJson = AjaxResponse::wanted();
+        $target = $this->demoTarget((int)$id, $asJson);
+        if (!DemoAccount::isDemo($target)) {
+            AjaxResponse::abort($asJson, 'error', t('Ce compte n’est pas un compte de démo.'), '/admin/users');
+        }
+        DemoAccount::convert((int)$target['id']);
+        AjaxResponse::finish($asJson, 'success', t('« {nom} » est désormais un compte normal : son historique est conservé et son quota mensuel s’applique.', [
+            'nom' => (string)$target['name'],
+        ]), '/admin/users');
+    }
+
+    /** Compte visé par un geste de démo : existe, et l'acteur peut le gérer. */
+    private function demoTarget(int $userId, bool $asJson): array
+    {
+        $target = User::findById($userId);
+        if ($target === null) {
+            AjaxResponse::abort($asJson, 'error', t('Utilisateur introuvable.'), '/admin/users', 404);
+        }
+        if (!Role::canManageAccount(Session::currentUser(), $target)) {
+            AjaxResponse::abort($asJson, 'error', t('Ce compte a des droits plus larges que les vôtres : seul un administrateur peut le modifier.'), '/admin/users', 403);
+        }
+        return $target;
     }
 
     /**
@@ -313,6 +400,22 @@ class AdminController
             }
         }
 
+        $isDemo = DemoAccount::isDemo($target);
+        if ($isDemo && !DemoAccount::allowedForRole($role)) {
+            AjaxResponse::abort($asJson, 'error', t('Un compte de démo ne peut pas être administrateur : convertissez-le d’abord en compte normal.'), '/admin/users', 403);
+        }
+        // Enveloppe de démo : lue seulement si la section démo de la fiche est
+        // dans le POST (`demo_form`) — la case « ne plus signaler » absente vaut
+        // alors décochée, la convention maison.
+        $demoCredits = null;
+        if ($isDemo && !empty($_POST['demo_form'])) {
+            $why = null;
+            $demoCredits = $this->checkedDemoCredits($_POST['demo_credits'] ?? '', $why);
+            if ($demoCredits === null) {
+                AjaxResponse::abort($asJson, 'error', (string)$why, '/admin/users');
+            }
+        }
+
         $groupIds = $this->parseGroupIdsFromPost();
         if ($groupIds !== null) {
             $validGroupIds = UserGroup::validIds($groupIds);
@@ -327,6 +430,11 @@ class AdminController
             $groupIds = $validGroupIds;
         }
 
+        if ($demoCredits !== null) {
+            DemoAccount::setAlertMuted($userId, !empty($_POST['demo_alert_muted']));
+            // Après la case : une enveloppe qui change rallume l'alerte.
+            DemoAccount::setCredits($userId, $demoCredits);
+        }
         User::update($userId, [
             'role'        => $role,
             'is_active'   => $isActive,
@@ -347,12 +455,28 @@ class AdminController
         $role     = (string)($_POST['role'] ?? Role::USER);
         $active   = (int)($_POST['is_active'] ?? 1);
         $groupIds = $this->parseGroupIdsFromPost() ?? [];
+        $isDemo   = !empty($_POST['is_demo']);
 
         $why = null;
         if ($this->checkedRoleChange(Session::currentUser(), $role, $why) === null) {
             Session::flash('error', (string)$why);
             header('Location: /admin/users');
             exit;
+        }
+
+        $demoCredits = null;
+        if ($isDemo) {
+            if (!DemoAccount::allowedForRole($role)) {
+                Session::flash('error', t('Un administrateur ne peut pas être un compte de démo.'));
+                header('Location: /admin/users');
+                exit;
+            }
+            $demoCredits = $this->checkedDemoCredits($_POST['demo_credits'] ?? DemoAccount::DEFAULT_CREDITS, $why);
+            if ($demoCredits === null) {
+                Session::flash('error', (string)$why);
+                header('Location: /admin/users');
+                exit;
+            }
         }
 
         if (!$name || !$email || strlen($password) < 8) {
@@ -383,6 +507,15 @@ class AdminController
 
         $createdUser = User::createWithPassword($name, $email, $password, $role, $active);
         UserGroup::setGroupsForUser((int)$createdUser['id'], $groupIds);
+        if ($demoCredits !== null) {
+            DemoAccount::start((int)$createdUser['id'], $demoCredits);
+            Session::flash('success', t('Compte de démo « {nom} » créé : {n} crédits, sans renouvellement mensuel.', [
+                'nom' => $name,
+                'n'   => Format::credits($demoCredits),
+            ]));
+            header('Location: /admin/users');
+            exit;
+        }
         Session::flash('success', t('Utilisateur « {nom} » créé avec succès.', ['nom' => $name]));
         header('Location: /admin/users');
         exit;
@@ -432,13 +565,16 @@ class AdminController
             // aucun creator pour les gérer, seuls les admins y ont accès.
             'profiles'      => $names('SELECT name FROM profiles WHERE created_by = ? ORDER BY name LIMIT 6'),
             'profile_count' => $count('SELECT COUNT(*) FROM profiles WHERE created_by = ?'),
-            'kbs'           => $names('SELECT name FROM knowledge_bases WHERE created_by = ? ORDER BY name LIMIT 6'),
-            'kb_count'      => $count('SELECT COUNT(*) FROM knowledge_bases WHERE created_by = ?'),
+            // Hors bases « Uniquement pour moi » : elles partent avec le compte
+            // (deleteUser) et leur nom ne se montre à personne d'autre.
+            'kbs'           => $names('SELECT name FROM knowledge_bases WHERE created_by = ? AND is_private = 0 ORDER BY name LIMIT 6'),
+            'kb_count'      => $count('SELECT COUNT(*) FROM knowledge_bases WHERE created_by = ? AND is_private = 0'),
+            'private_kb_count' => $count('SELECT COUNT(*) FROM knowledge_bases WHERE created_by = ? AND is_private = 1'),
             // Casseront à la prochaine synchro : portées par SA connexion
             // personnelle (Google Drive ou OneDrive).
             'sync_owner_kbs' => $names(
                 'SELECT name FROM knowledge_bases
-                 WHERE sync_owner_user_id = ? AND sync_enabled = 1 ORDER BY name LIMIT 6'
+                 WHERE sync_owner_user_id = ? AND sync_enabled = 1 AND is_private = 0 ORDER BY name LIMIT 6'
             ),
             // Partages qu'il a accordés sur ses bases (tombent avec created_by).
             'kb_shares_given' => $count(
@@ -466,6 +602,9 @@ class AdminController
             header('Location: /admin/users');
             exit;
         }
+        // Ses bases « Uniquement pour moi » partent avec lui : sans créateur,
+        // plus personne ne pourrait les voir ni les effacer.
+        KnowledgeBase::deletePrivateOf((int)$id);
         User::delete((int)$id);
         Session::flash('success', t('Utilisateur supprimé.'));
         header('Location: /admin/users');
@@ -641,31 +780,15 @@ class AdminController
         // libellé doit rester lisible dans la liste.
         $llmLabels        = LLMFactory::available();
 
-        // Schéma affiché à droite au clic sur un assistant : le catalogue
-        // (libellés, icônes, modèles, bases, outils) et la configuration de
-        // chaque assistant, dessinés par diagram.js sans aller-retour. Les
-        // bases nommées sont celles que le gestionnaire voit ; une base liée
-        // hors de son périmètre reste comptée, sans son nom.
-        $diagram = null;
-        if ($profiles !== []) {
-            $specs = [];
-            foreach ($profiles as $p) {
-                $pid = (int)$p['id'];
-                $specs[$pid] = AssistantDiagram::spec(
-                    $p,
-                    $kbIdsByProfile[$pid] ?? [],
-                    $toolIdsByProfile[$pid] ?? [],
-                    $documentsByProfile[$pid] ?? []
-                );
-            }
-            $diagram = [
-                'catalog'    => AssistantDiagram::catalog(
-                    KnowledgeBase::forManager($currentUser),
-                    ChatTool::findByIds(array_merge([], ...array_values($toolIdsByProfile)))
-                ),
-                'assistants' => (object)$specs,
-            ];
-        }
+        // « Le décrire à MIA » : la conversation s'ouvre avec une demande
+        // déjà écrite, que MIA reconnaît (AssistantDraft) et prépare en carte.
+        $miaDraftText = t('Crée-moi un assistant qui') . ' ';
+        $miaLogo      = (string)Settings::get('logo_url', '/assets/img/logo.png');
+
+        // La bibliothèque d'avatars vit dans une fenêtre : ses gestes
+        // reviennent ici avec ?avatars=1, et la fenêtre se rouvre sur leur
+        // message.
+        $avatarsOpen = !empty($_GET['avatars']);
 
         $success          = Session::getFlash('success');
         $error            = Session::getFlash('error');
@@ -721,6 +844,94 @@ class AdminController
             exit;
         }
         $this->renderProfileForm($profile);
+    }
+
+    /**
+     * Page de CONSULTATION d'un assistant (/admin/profiles/{id}) : ce qu'il
+     * est et ce qu'il fait, sans rien risquer de changer — sa consigne, son
+     * modèle, ce qu'il connaît, ses outils, qui le voit, son usage des
+     * 30 derniers jours, et son schéma. « Modifier » ouvre sa fiche ;
+     * « Posez-lui une question » ouvre une conversation avec lui. Même
+     * périmètre que la fiche (Profile::manageableBy).
+     */
+    public function showProfile(string $id): void
+    {
+        AuthMiddleware::requirePermission('assistants.view');
+        $currentUser = Session::currentUser();
+        $pid         = (int)$id;
+        $profile     = Profile::manageableBy($pid, $currentUser) ? Profile::findById($pid) : null;
+        if ($profile === null) {
+            Session::flash('error', t('Assistant introuvable ou accès refusé.'));
+            header('Location: /admin/profiles');
+            exit;
+        }
+
+        $isAdminManager = Session::can('assistants.manage');
+        $actions = AssistantPages::actions($profile, [
+            'manage' => $isAdminManager,
+            'edit'   => Session::can('assistants.edit'),
+            'delete' => Session::can('assistants.delete'),
+        ], (int)$currentUser['id']);
+        $vis = AssistantPages::visibility($profile);
+
+        $ownerId   = (int)($profile['created_by'] ?? 0);
+        $owner     = $ownerId > 0 ? User::findById($ownerId) : null;
+        $ownerName = $owner !== null ? (string)($owner['name'] ?: $owner['email']) : '';
+        $isMine    = $ownerId > 0 && $ownerId === (int)$currentUser['id'];
+
+        // Modèle : celui qu'il impose, sinon celui de l'organisation (suivi).
+        $allLlms       = LLMFactory::available();
+        $appDefaultLlm = LLMFactory::appDefault($allLlms);
+        $llmSlug       = (string)($profile['default_llm'] ?? '');
+        $llmFollows    = $llmSlug === '';
+        $llmEffective  = $llmFollows ? (string)($appDefaultLlm ?? '') : $llmSlug;
+        $llmLabel      = $llmEffective !== '' ? ($allLlms[$llmEffective] ?? $llmEffective) : '';
+        $llmMissing    = !$llmFollows && !isset($allLlms[$llmSlug]);
+        $llmProvider   = $llmEffective !== '' ? strtolower(explode('::', $llmEffective, 2)[0]) : '';
+        $llmLogo       = LLMFactory::logos()[$llmProvider] ?? '';
+        $tempSupported = $llmEffective === '' || LLMFactory::supportsTemperature($llmEffective);
+
+        // Ce qu'il connaît : ses bases (celles du périmètre de la personne
+        // nommées, les autres comptées) et ses documents de référence.
+        $kbIds    = array_map('intval', KnowledgeBase::kbIdsForProfile($pid));
+        $myKbs    = [];
+        foreach (KnowledgeBase::forManager($currentUser) as $kb) {
+            $myKbs[(int)$kb['id']] = $kb;
+        }
+        $kbRows   = [];
+        $kbHidden = 0;
+        foreach ($kbIds as $kbId) {
+            $kb = $myKbs[$kbId] ?? null;
+            if ($kb === null || KnowledgeBase::hiddenFrom($kb, $currentUser)) {
+                $kbHidden++;
+                continue;
+            }
+            $kbRows[] = ['kb' => $kb, 'entry' => AssistantDiagram::kbEntry($kb)];
+        }
+        $docs = ProfileDocument::allForProfile($pid);
+
+        // Ce qu'il sait faire : ses outils (image, n8n, Gamma).
+        $tools = [];
+        foreach (ChatTool::idsForProfile($pid) as $toolId) {
+            $tool = ChatTool::findById((int)$toolId);
+            if ($tool !== null) {
+                $tools[] = $tool;
+            }
+        }
+
+        $groups    = $vis === AssistantPages::VIS_SHARED ? Profile::authorizedGroups($pid) : [];
+        $usage     = Profile::usageSummary($pid);
+        $attention = AdminAttention::itemsForViewer()['profile:' . $pid] ?? null;
+
+        // Le schéma, en lecture : la même forme que celle que compose la fiche.
+        $diagram = [
+            'catalog' => AssistantDiagram::catalog(array_values($myKbs), $tools),
+            'spec'    => AssistantDiagram::spec($profile, $kbIds, array_map('intval', ChatTool::idsForProfile($pid)), $docs),
+        ];
+
+        $success = Session::getFlash('success');
+        $error   = Session::getFlash('error');
+        require ROOT . '/templates/admin/profiles/show.php';
     }
 
     /**
@@ -1025,6 +1236,7 @@ class AdminController
         // d'organisation ensuite via /admin/profiles/{id}/toggle-personal.
         Profile::setTools($id, $this->sanitizeProfileToolIds($_POST['tool_ids'] ?? []));
         $this->applyProfileKbLinks($id, $_POST['kb_ids'] ?? []);
+        $this->applyProfileImageOptions($id);
 
         $docsResult = $this->storeMultipleProfileDocumentsFromRequest($id, 'documents');
         if ($draftCard !== null) {
@@ -1041,10 +1253,10 @@ class AdminController
             Session::flash('error', implode(' ', $docsResult['errors']));
         }
         Session::flash('success', $msg);
-        // La liste s'ouvre sur l'assistant créé et son schéma — sauf si un
-        // document a posé problème : le message, en tête, doit rester en vue.
+        // La page de l'assistant créé ; sa fiche, sur ses documents, si l'un
+        // d'eux a posé problème (le message en tête dit lequel).
         $problems = !empty($docsResult['errors']) || !empty($docsResult['warnings']);
-        header('Location: /admin/profiles' . ($problems ? '' : '#assistant-' . $id));
+        header('Location: /admin/profiles/' . $id . ($problems ? '/edit#connaissances' : ''));
         exit;
     }
 
@@ -1105,6 +1317,7 @@ class AdminController
         // organisation est pilotée par is_personal (cf. /toggle-personal).
         Profile::setTools((int)$id, $this->sanitizeProfileToolIds($_POST['tool_ids'] ?? []));
         $this->applyProfileKbLinks((int)$id, $_POST['kb_ids'] ?? []);
+        $this->applyProfileImageOptions((int)$id);
         // `avatar` : la fiche affiche l'aperçu depuis le fichier choisi, mais
         // un avatar tout juste téléversé porte un nom généré par le serveur —
         // le renvoyer permet à la fiche de cocher la bonne vignette sans
@@ -1132,6 +1345,32 @@ class AdminController
         // (image, n8n, Gamma) : cocher autre chose n'aurait aucun effet. Règle
         // partagée avec l'assistant préparé par MIA dans le chat.
         return AssistantDraft::sanitizeToolIds($raw);
+    }
+
+    /**
+     * Options des images de l'assistant (fond, format du fichier, orientation)
+     * — lues SEULEMENT si le bloc a été rendu (marqueur `image_options_form`) :
+     * sans outil image ouvert, la fiche ne l'affiche pas, et une case absente
+     * du POST effacerait sinon ce qui est enregistré. Filtrées par ce que les
+     * outils image liés acceptent : rien d'inutilisable n'est gardé.
+     */
+    private function applyProfileImageOptions(int $profileId): void
+    {
+        if (empty($_POST['image_options_form'])) {
+            return;
+        }
+        $caps = ['transparent' => false, 'transparent_preview' => false, 'output_formats' => [], 'formats' => []];
+        foreach (ChatTool::idsForProfile($profileId) as $toolId) {
+            $tool = ChatTool::findById((int)$toolId);
+            if ($tool === null || ($tool['type'] ?? '') !== 'image') {
+                continue;
+            }
+            $c = ImageOptions::capabilitiesOf($tool);
+            $caps['transparent']    = $caps['transparent'] || $c['transparent'];
+            $caps['output_formats'] = array_values(array_unique(array_merge($caps['output_formats'], $c['output_formats'])));
+            $caps['formats']        = array_values(array_unique(array_merge($caps['formats'], $c['formats'])));
+        }
+        Profile::setImageOptions($profileId, ImageOptions::fromPost($_POST, 'image_', $caps));
     }
 
     public function deleteProfile(string $id): void
@@ -1187,8 +1426,11 @@ class AdminController
                 'nom' => $name,
             ]));
         }
-        // Retour sur l'assistant basculé : sa ligne et son schéma.
-        header('Location: /admin/profiles#assistant-' . $profileId);
+        // Retour d'où vient le geste : la page de l'assistant, ou sa ligne de
+        // la liste, mise en évidence.
+        header('Location: ' . (($_POST['return'] ?? '') === 'page'
+            ? '/admin/profiles/' . $profileId
+            : '/admin/profiles#assistant-' . $profileId));
         exit;
     }
 
@@ -1203,7 +1445,7 @@ class AdminController
             }
         } catch (\Throwable $e) {
             Session::flash('error', $e->getMessage());
-            header('Location: /admin/profiles');
+            header('Location: /admin/profiles?avatars=1');
             exit;
         }
 
@@ -1212,7 +1454,7 @@ class AdminController
         AssistantAvatar::register($filename, $name, $userId);
 
         Session::flash('success', t('Avatar « {nom} » ajouté à la bibliothèque.', ['nom' => AssistantAvatar::nameFor($filename)]));
-        header('Location: /admin/profiles');
+        header('Location: /admin/profiles?avatars=1');
         exit;
     }
 
@@ -1224,22 +1466,22 @@ class AdminController
 
         if (!$avatar) {
             Session::flash('error', t('Avatar introuvable.'));
-            header('Location: /admin/profiles');
+            header('Location: /admin/profiles?avatars=1');
             exit;
         }
         if (!AssistantAvatar::manageableBy($avatar, Session::currentUser())) {
             Session::flash('error', t('Vous ne pouvez renommer que les avatars que vous avez ajoutés.'));
-            header('Location: /admin/profiles');
+            header('Location: /admin/profiles?avatars=1');
             exit;
         }
         if (!AssistantAvatar::rename($filename, (string)($_POST['name'] ?? ''))) {
             Session::flash('error', t('Le nom de l\'avatar ne peut pas être vide.'));
-            header('Location: /admin/profiles');
+            header('Location: /admin/profiles?avatars=1');
             exit;
         }
 
         Session::flash('success', t('Avatar renommé.'));
-        header('Location: /admin/profiles');
+        header('Location: /admin/profiles?avatars=1');
         exit;
     }
 
@@ -1251,17 +1493,17 @@ class AdminController
 
         if (!$avatar || !AssistantAvatar::fileExists($filename)) {
             Session::flash('error', t('Avatar introuvable ou déjà supprimé.'));
-            header('Location: /admin/profiles');
+            header('Location: /admin/profiles?avatars=1');
             exit;
         }
         if (AssistantAvatar::isDefault($filename)) {
             Session::flash('error', t('Cet avatar système ne peut pas être supprimé.'));
-            header('Location: /admin/profiles');
+            header('Location: /admin/profiles?avatars=1');
             exit;
         }
         if (!AssistantAvatar::manageableBy($avatar, Session::currentUser())) {
             Session::flash('error', t('Vous ne pouvez supprimer que les avatars que vous avez ajoutés.'));
-            header('Location: /admin/profiles');
+            header('Location: /admin/profiles?avatars=1');
             exit;
         }
 
@@ -1274,7 +1516,7 @@ class AdminController
 
         if (!AssistantAvatar::deleteFile($filename)) {
             Session::flash('error', t('Impossible de supprimer le fichier avatar sur le serveur.'));
-            header('Location: /admin/profiles');
+            header('Location: /admin/profiles?avatars=1');
             exit;
         }
         AssistantAvatar::deleteByFilename($filename);
@@ -1282,7 +1524,7 @@ class AdminController
         Session::flash('success', $affectedProfiles > 0
             ? I18n::plural($affectedProfiles, 'Avatar supprimé ({n} assistant mis à jour).', 'Avatar supprimé ({n} assistants mis à jour).')
             : t('Avatar supprimé.'));
-        header('Location: /admin/profiles');
+        header('Location: /admin/profiles?avatars=1');
         exit;
     }
 
@@ -1447,34 +1689,27 @@ class AdminController
         $canSeeVector   = Session::can('diagnostics.view');
         $canSeeBudget   = Session::can('costs.view');
 
-        // Toutes les bases (« Gérer ») ; sinon les siennes et celles qu'on lui partage.
+        // Toutes les bases (« Gérer ») ; sinon les siennes, celles qu'on lui
+        // partage et les bases publiques.
         $kbs = KnowledgeBase::forManager($currentUser);
 
-        $docsByKb             = [];
-        $linkedProfileIdsByKb = [];
-        $sharesByKb           = [];
-        $ownedByKb            = [];
-        $defaultOnByKb        = [];
-        $canFeedByKb          = [];
+        // Ce que la liste dit de chaque base : visibilité (et, pour une base
+        // commune qu'on possède, à combien de groupes ou personnes elle est
+        // partagée), état, noms des documents pour la recherche.
+        $grantsByKb = [];
+        $ownedByKb  = [];
         foreach ($kbs as $kb) {
-            $docsByKb[(int)$kb['id']]             = KnowledgeBaseDocument::allForKb((int)$kb['id']);
-            $linkedProfileIdsByKb[(int)$kb['id']] = KnowledgeBase::profileIdsFor((int)$kb['id']);
-            $sharesByKb[(int)$kb['id']]           = KnowledgeBase::sharesFor((int)$kb['id']);
-            $ownedByKb[(int)$kb['id']]            = KnowledgeBase::ownedBy((int)$kb['id'], $currentUser);
-            // « Cochée par défaut » et « peut nourrir » n'existent que pour une base en direct.
-            if (KnowledgeBase::isRemote($kb)) {
-                $defaultOnByKb[(int)$kb['id']] = KnowledgeBase::defaultOnFor((int)$kb['id']);
-                $canFeedByKb[(int)$kb['id']]   = KnowledgeBase::feedersFor((int)$kb['id']);
+            $kbId = (int)$kb['id'];
+            $ownedByKb[$kbId] = KnowledgeBase::ownedBy($kbId, $currentUser);
+            if ($ownedByKb[$kbId] && KnowledgeBase::visibility($kb) === KnowledgeBase::VIS_COMMON) {
+                $shares = KnowledgeBase::sharesFor($kbId);
+                $grantsByKb[$kbId] = count($shares['users']) + count($shares['groups']);
             }
         }
+        $docNamesByKb = KnowledgeBaseDocument::namesByKb(array_map(static fn(array $kb): int => (int)$kb['id'], $kbs));
+        $kbStatuses   = KbStatus::forBases($kbs);
 
-        // Noms et visages du schéma : assistants du périmètre, personnes et
-        // groupes à qui une base peut être partagée.
-        $manageableProfiles = Profile::forManager($currentUser);
-        $shareableUsers     = $this->shareableManagers((int)$currentUser['id']);
-        $shareableGroups    = UserGroup::all();
-
-        // Créer une base locale demande une clé d'embedding (sauf aux
+        // Créer une base de documents demande une clé d'embedding (sauf aux
         // administrateurs, qui peuvent toujours brancher un cerveau MyBrain).
         $embeddingProviders = EmbeddingService::availableProviders();
 
@@ -1490,51 +1725,145 @@ class AdminController
         ) !== [];
         $budgetResetLabel = CreditQuota::resetLabel(AiBudget::monthWindow(new DateTimeImmutable('now'))['resets_on']);
 
-        $syncOwnerNameByKb = $this->kbSyncOwnerNames($kbs);
-
-        // Quota de bases pour les créateurs (admins illimités).
-        $kbCount     = $isAdminManager ? 0 : KnowledgeBase::countByCreator((int)$currentUser['id']);
-        $kbMax       = KnowledgeBase::MAX_PER_CREATOR;
-        $kbRemaining = max(0, $kbMax - $kbCount);
-
-        // État de chaque base (synchronisation, indexation, échecs) : même
-        // calcul que le rafraîchissement en direct (knowledgeBasesStatus).
-        $kbStatuses = KbStatus::forBases($kbs);
-
-        // Schéma affiché à droite au clic sur une base : le catalogue et la
-        // configuration de chaque base, dessinés par diagram.js +
-        // kb-diagram.js sans aller-retour.
-        $diagram = null;
-        if ($kbs !== []) {
-            $specs = [];
-            foreach ($kbs as $kb) {
-                $kbId  = (int)$kb['id'];
-                $owned = (bool)($ownedByKb[$kbId] ?? false);
-                $specs[$kbId] = KbDiagram::spec(
-                    $kb,
-                    $docsByKb[$kbId] ?? [],
-                    $linkedProfileIdsByKb[$kbId] ?? [],
-                    KbDiagram::access(
-                        $kb,
-                        $owned,
-                        (int)($kb['created_by'] ?? 0) === (int)$currentUser['id'],
-                        $sharesByKb[$kbId] ?? null,
-                        $defaultOnByKb[$kbId] ?? null,
-                        $canFeedByKb[$kbId] ?? null
-                    ),
-                    $kbStatuses[$kbId] ?? null,
-                    $syncOwnerNameByKb[$kbId] ?? ''
-                );
-            }
-            $diagram = [
-                'catalog' => KbDiagram::catalog($manageableProfiles, $shareableUsers, $shareableGroups, KbSync::intervalMinutes(), $qdrantUp),
-                'bases'   => (object)$specs,
-            ];
-        }
+        // Quotas des créateurs (administrateurs illimités) : bases et tables à part.
+        $kbCount        = $isAdminManager ? 0 : KnowledgeBase::countByCreator((int)$currentUser['id']);
+        $kbMax          = KnowledgeBase::MAX_PER_CREATOR;
+        $kbRemaining    = max(0, $kbMax - $kbCount);
+        $tableCount     = $isAdminManager ? 0 : KbTableStore::countByCreator((int)$currentUser['id']);
+        $tableMax       = KbTableStore::MAX_PER_CREATOR;
+        $tableRemaining = max(0, $tableMax - $tableCount);
 
         $success = Session::getFlash('success');
         $error   = Session::getFlash('error');
         require ROOT . '/templates/admin/knowledge-bases.php';
+    }
+
+    /**
+     * Page de CONSULTATION d'une base ou d'une table (piste D) : ce qu'elle
+     * contient, d'où ça vient, qui s'en sert, qui la voit — et, tout en bas,
+     * son schéma. Ouverte à quiconque la VOIT (créateur, partage reçu, base
+     * publique, « Gérer ») ; « Modifier » mène à sa fiche pour qui la gère.
+     */
+    public function showKnowledgeBase(string $id): void
+    {
+        AuthMiddleware::requirePermission('knowledge_bases.view');
+        $currentUser = Session::currentUser();
+        $kbId        = (int)$id;
+        $kb          = $kbId > 0 && KnowledgeBase::visibleBy($kbId, $currentUser) ? $this->kbRowForManager($kbId) : null;
+        if ($kb === null) {
+            Session::flash('error', t('Base introuvable ou accès refusé.'));
+            header('Location: /admin/knowledge-bases');
+            exit;
+        }
+
+        $isLive    = KnowledgeBase::isRemote($kb);
+        $isTable   = KnowledgeBase::isTable($kb);
+        $isSystem  = (int)($kb['is_system'] ?? 0) === 1;
+        $isOwned   = KnowledgeBase::ownedBy($kbId, $currentUser);
+        $canManage = Session::can('knowledge_bases.edit') && KnowledgeBase::manageableBy($kbId, $currentUser);
+        $visibility = KnowledgeBase::visibility($kb);
+
+        $docs          = $isLive || $isTable ? [] : $this->kbDocsWithWork($kbId);
+        $linkedIds     = array_map('intval', KnowledgeBase::profileIdsFor($kbId));
+        $shares        = $isOwned ? KnowledgeBase::sharesFor($kbId) : ['users' => [], 'groups' => []];
+        $defaultOn     = $isLive && $isOwned ? KnowledgeBase::defaultOnFor($kbId) : ['users' => [], 'groups' => []];
+        $canFeed       = $isLive && $isOwned ? KnowledgeBase::feedersFor($kbId) : ['users' => [], 'groups' => []];
+        $syncOwnerName = $this->kbSyncOwnerNames([$kb])[$kbId] ?? '';
+        $kbStatus      = KbStatus::forBases([$kb])[$kbId];
+        $statusPanelHtml = $isTable ? '' : $this->renderKbStatus($kb, $kbStatus, 'panel', $canManage, $syncOwnerName);
+        $kbAdvice      = $isLive || $isTable || $isSystem ? [] : KbAdvice::forBase($kb, $docs);
+
+        // Assistants liés : ceux du périmètre sont nommés, les autres comptés.
+        $manageableProfiles = Profile::forManager($currentUser);
+        $linkedProfiles     = array_values(array_filter(
+            $manageableProfiles,
+            static fn(array $p): bool => in_array((int)$p['id'], $linkedIds, true)
+        ));
+        $hiddenProfiles = max(0, count($linkedIds) - count($linkedProfiles));
+
+        $shareableUsers  = $this->shareableManagers((int)$currentUser['id']);
+        $shareableGroups = UserGroup::all();
+
+        $tableRecord   = null;
+        $tableView     = null;
+        $tableHead     = null;
+        $tableUndo     = false;
+        $tableRestored = null;
+        if ($isTable) {
+            $tableStore  = new KbTableStore();
+            $tableRecord = $tableStore->find($kbId);
+            if ($tableRecord !== null) {
+                // Lecture seule ici : on corrige les lignes depuis la fiche.
+                $tableView = KbTableView::section($tableStore, $kb, $tableRecord, $_GET['q'] ?? '', (int)($_GET['page'] ?? 1), false);
+                // « Créée le … par … · Modifiée … par … » et, juste après un
+                // retour en arrière, la notification qui permet de l'annuler.
+                $entries   = $tableStore->history($kbId);
+                $creatorId = (int)($kb['created_by'] ?? 0);
+                $creator   = $creatorId > 0 ? (string)(User::findById($creatorId)['name'] ?? '') : '';
+                $tableHead = KbTableHistory::head($entries, (int)$currentUser['id'], strtotime((string)($kb['created_at'] ?? '')) ?: time(), $creator, time());
+                $tableUndo = $canManage && KbTableHistory::undoableFrom($entries, (int)$tableRecord['version'], (int)$currentUser['id']);
+                $tableRestored = Session::getFlash('kb_table_restored');
+            }
+        }
+
+        // Interroger dans le chat : seulement si la base s'y coche pour cette personne.
+        $chatUrl = '';
+        foreach (KnowledgeBase::selectableForUser($currentUser) as $sel) {
+            if ((int)$sel['id'] === $kbId && KnowledgeBase::unavailableReason($sel) === null) {
+                $chatUrl = '/?kb=' . $kbId;
+                break;
+            }
+        }
+
+        $qdrantUp = (new QdrantStore())->healthCheck();
+        $diagram  = [
+            'catalog' => KbDiagram::catalog($manageableProfiles, $shareableUsers, $shareableGroups, KbSync::intervalMinutes(), $qdrantUp),
+            'spec'    => KbDiagram::spec(
+                $kb,
+                $docs,
+                $linkedIds,
+                KbDiagram::access(
+                    $kb,
+                    $isOwned,
+                    (int)($kb['created_by'] ?? 0) === (int)$currentUser['id'],
+                    $shares,
+                    $defaultOn,
+                    $canFeed,
+                    KnowledgeBase::isPrivate($kb),
+                    $visibility === KnowledgeBase::VIS_PUBLIC
+                ),
+                $kbStatus,
+                $syncOwnerName,
+                $tableRecord
+            ),
+        ];
+
+        $success = Session::getFlash('success');
+        $error   = Session::getFlash('error');
+        require ROOT . '/templates/admin/knowledge-bases/show.php';
+    }
+
+    /**
+     * « Que sait-elle ? » — les extraits d'une base qui répondent le mieux à
+     * une question (KnowledgeBaseDocument::searchExtracts). Lecture seule,
+     * gratuite : aucun modèle n'est appelé, rien n'est compté.
+     */
+    public function searchKnowledgeBase(string $id): void
+    {
+        AuthMiddleware::requirePermission('knowledge_bases.view');
+        $kbId = (int)$id;
+        $kb   = KnowledgeBase::visibleBy($kbId, Session::currentUser()) ? KnowledgeBase::findById($kbId) : null;
+        session_write_close();
+        if ($kb === null || !KnowledgeBase::holdsDocuments($kb)) {
+            AjaxResponse::send(['ok' => false, 'error' => t('Base introuvable ou accès refusé.')], 403);
+            return;
+        }
+        $query = (string)($_GET['q'] ?? '');
+        AjaxResponse::send([
+            'ok'      => true,
+            'words'   => KnowledgeBaseDocument::searchWords($query),
+            'results' => KnowledgeBaseDocument::searchExtracts($kbId, $query),
+        ]);
     }
 
     /** Page « Nouvelle base de connaissances » (ex-modale de création). */
@@ -1542,6 +1871,47 @@ class AdminController
     {
         AuthMiddleware::requirePermission('knowledge_bases.create');
         $currentUser = Session::currentUser();
+        // « Nouvelle table » : une autre fiche de création (fichier ou colonnes
+        // saisies), son propre plafond, aucun modèle d'embedding à exiger.
+        if ((string)($_GET['genre'] ?? '') === 'table') {
+            if (!Session::can('knowledge_bases.manage')
+                && KbTableStore::countByCreator((int)$currentUser['id']) >= KbTableStore::MAX_PER_CREATOR) {
+                Session::flash('error', t('Limite atteinte : vous ne pouvez pas dépasser {n} tables. Supprimez-en une pour en créer une autre.', [
+                    'n' => KbTableStore::MAX_PER_CREATOR,
+                ]));
+                header('Location: /admin/knowledge-bases');
+                exit;
+            }
+            // Même vue que la fiche : qui la voit, assistants, et le schéma de
+            // la table à venir (KbDiagram), recomposé à chaque réglage.
+            $isCreator          = true;
+            $manageableProfiles = Profile::forManager($currentUser);
+            $shareableUsers     = $this->shareableManagers((int)$currentUser['id']);
+            $shareableGroups    = UserGroup::all();
+            $draftKb = [
+                'name'         => '',
+                'is_active'    => 1,
+                'backend'      => KnowledgeBase::BACKEND_TABLE,
+                'created_by'   => (int)$currentUser['id'],
+                'creator_name' => (string)($currentUser['name'] ?? ''),
+            ];
+            $diagram = [
+                'catalog' => KbDiagram::catalog($manageableProfiles, $shareableUsers, $shareableGroups, KbSync::intervalMinutes(), true),
+                'spec'    => KbDiagram::spec(
+                    $draftKb,
+                    [],
+                    [],
+                    KbDiagram::access($draftKb, true, true, null, null, null),
+                    null,
+                    '',
+                    ['rows' => 0, 'columns' => [], 'origin' => [], 'mia_write' => false]
+                ) + ['creating' => true],
+            ];
+            $success = Session::getFlash('success');
+            $error   = Session::getFlash('error');
+            require ROOT . '/templates/admin/knowledge-bases/table-new.php';
+            return;
+        }
         // Mêmes gardes que createKnowledgeBase : inutile de présenter une
         // fiche dont l'envoi serait refusé.
         if (!Session::can('knowledge_bases.manage')) {
@@ -1628,10 +1998,17 @@ class AdminController
         $kbCanDelete    = Session::can('knowledge_bases.delete');
         $kbId           = $isCreate ? 0 : (int)$kb['id'];
         $isLive         = !$isCreate && KnowledgeBase::isRemote($kb);
+        // Table permanente : la fiche garde ses questions 1 et 3, la 2 montre
+        // ses lignes (KbTableView) au lieu des sources et des documents.
+        $isTable        = !$isCreate && KnowledgeBase::isTable($kb);
         $isSystem       = !$isCreate && (int)($kb['is_system'] ?? 0) === 1;
         // Propriétaire (créateur ou administrateur) : partage et suppression.
         // Un partage en écriture donne le reste de la fiche, pas cela.
         $isOwned        = $isCreate || KnowledgeBase::ownedBy($kbId, $currentUser);
+        // « Uniquement pour moi » : seul le CRÉATEUR pose ou retire l'option
+        // (un administrateur ne la voit pas sur la base d'un autre).
+        $isCreator      = $isCreate || KnowledgeBase::createdBy($kb, $currentUser);
+        $isPrivate      = !$isCreate && KnowledgeBase::isPrivate($kb);
 
         // Assistants rattachables et cibles de partage : périmètre du gestionnaire.
         $manageableProfiles = Profile::forManager($currentUser);
@@ -1656,7 +2033,7 @@ class AdminController
         $oneDriveOwnerReady   = $oneDriveConfigured
             && UserOneDriveService::forUser((int)$currentUser['id']) !== null;
 
-        $docs          = $isCreate ? [] : KnowledgeBaseDocument::allForKb($kbId);
+        $docs          = $isCreate ? [] : $this->kbDocsWithWork($kbId);
         $linkedIds     = $isCreate ? [] : array_map('intval', KnowledgeBase::profileIdsFor($kbId));
         $shares        = !$isCreate && $isOwned ? KnowledgeBase::sharesFor($kbId) : ['users' => [], 'groups' => []];
         $defaultOn     = $isLive && $isOwned ? KnowledgeBase::defaultOnFor($kbId) : ['users' => [], 'groups' => []];
@@ -1670,23 +2047,61 @@ class AdminController
 
         // Section « Avancé » : volume des extraits (le détail se charge à
         // l'ouverture, par …/chunks).
-        $chunkTotals = !$isCreate && !$isLive ? KnowledgeBaseDocument::chunkTotals($kbId) : null;
+        $chunkTotals = !$isCreate && !$isLive && !$isTable ? KnowledgeBaseDocument::chunkTotals($kbId) : null;
+
+        $tableView     = null;
+        $tableMiaWrite = false;
+        if ($isTable) {
+            $tableStore = new KbTableStore();
+            $table      = $tableStore->find($kbId);
+            if ($table === null) {
+                // Base de nature « table » sans sa fiche de lignes (écriture
+                // interrompue) : on la recrée vide plutôt que de casser la page.
+                $table = $tableStore->create($kbId, WorkTableOps::columns([t('Colonne 1')]), [], ['kind' => KbTableImport::ORIGIN_MANUAL], (int)$currentUser['id']);
+            }
+            $tableView     = KbTableView::section($tableStore, $kb, $table, $_GET['q'] ?? '', (int)($_GET['page'] ?? 1), $kbCanEdit);
+            $tableMiaWrite = !empty($table['mia_write']);
+        }
 
         $docPayloads = array_map([$this, 'kbDocumentPayload'], $docs);
 
-        // Schéma de la base, à droite de la fiche : la page le recompose à
-        // chaque geste depuis ses champs ; ce que la fiche ne règle pas (état,
-        // extraits, utilisations, créateur) vient de la base enregistrée.
+        // Points à améliorer (scans sans texte, versions en double, tableurs…) :
+        // pastille de l'en-tête et section « Pour une base efficace ».
+        $kbAdvice = $isCreate ? [] : KbAdvice::forBase($kb, $docs);
+
+        // Vue d'ensemble, au bas de la fiche (création comme modification) :
+        // le schéma de la base (KbDiagram), que la page recompose à chaque
+        // réglage. En création, une base « à venir » : le modèle d'embedding
+        // proposé, vous comme propriétaire, aucun document.
+        $diagramKb = $isCreate ? [
+            'name'               => '',
+            'is_active'          => 1,
+            'backend'            => KnowledgeBase::BACKEND_LOCAL,
+            'embedding_provider' => (string)($embeddingDefault['provider'] ?? ''),
+            'embedding_model'    => (string)($embeddingDefault['model'] ?? ''),
+            'created_by'         => (int)$currentUser['id'],
+            'creator_name'       => (string)($currentUser['name'] ?? ''),
+        ] : $kb;
         $diagram = [
-            'catalog' => KbDiagram::catalog($manageableProfiles, $shareableUsers, $shareableGroups, $syncInterval, $qdrantUp),
-            'base'    => $isCreate ? null : KbDiagram::spec(
-                $kb,
+            'catalog' => KbDiagram::catalog($manageableProfiles, $shareableUsers, $shareableGroups, (int)$syncInterval, !empty($qdrantUp)),
+            'spec'    => KbDiagram::spec(
+                $diagramKb,
                 $docs,
                 $linkedIds,
-                KbDiagram::access($kb, $isOwned, (int)($kb['created_by'] ?? 0) === (int)$currentUser['id'], $shares, $defaultOn, $canFeed),
+                KbDiagram::access(
+                    $diagramKb,
+                    $isCreate || $isOwned,
+                    $isCreator,
+                    $shares,
+                    $defaultOn ?? null,
+                    $canFeed ?? null,
+                    $isPrivate,
+                    !$isCreate && KnowledgeBase::visibility($kb) === KnowledgeBase::VIS_PUBLIC
+                ),
                 $kbStatus,
-                $syncOwnerName
-            ),
+                $syncOwnerName,
+                $isTable ? ($table ?? null) : null
+            ) + ['creating' => $isCreate],
         ];
 
         $success = Session::getFlash('success');
@@ -1703,21 +2118,23 @@ class AdminController
     public function knowledgeBaseChunks(string $id): void
     {
         AuthMiddleware::requirePermission('knowledge_bases.view');
-        $kbId      = (int)$id;
-        $canManage = KnowledgeBase::manageableBy($kbId, Session::currentUser());
+        $kbId = (int)$id;
+        // Lire les extraits, c'est ce que fait déjà « Que sait-elle ? » : qui
+        // voit la base les voit (une base privée d'autrui reste fermée).
+        $canSee = KnowledgeBase::visibleBy($kbId, Session::currentUser());
         // Une lecture d'affichage ne retient jamais la session.
         session_write_close();
 
         header('Content-Type: application/json; charset=utf-8');
         header('Cache-Control: no-store');
-        $kb = $canManage ? KnowledgeBase::findById($kbId) : null;
+        $kb = $canSee ? KnowledgeBase::findById($kbId) : null;
         if ($kb === null) {
             http_response_code(403);
             echo json_encode(['ok' => false, 'error' => t('Base introuvable ou accès refusé.')], JSON_UNESCAPED_UNICODE);
             exit;
         }
-        if (KnowledgeBase::isRemote($kb)) {
-            echo json_encode(['ok' => false, 'error' => t(self::REMOTE_KB_NO_DOCUMENTS)], JSON_UNESCAPED_UNICODE);
+        if (!KnowledgeBase::holdsDocuments($kb)) {
+            echo json_encode(['ok' => false, 'error' => self::noDocumentsMessage($kb)], JSON_UNESCAPED_UNICODE);
             exit;
         }
 
@@ -1868,6 +2285,10 @@ class AdminController
             // Case décochée = clé absente = inactive. Le défaut valait 1 :
             // décocher « Active » dans la modale ne changeait rien.
             'is_active'          => (int)($_POST['is_active'] ?? 0),
+            // Qui la voit : privée, commune ou publique — c'est le créateur
+            // qui crée, il peut poser chacune.
+            'is_private'         => self::postedKbVisibility() === KnowledgeBase::VIS_PRIVATE,
+            'is_public'          => self::postedKbVisibility() === KnowledgeBase::VIS_PUBLIC,
             'created_by'         => (int)$currentUser['id'],
         ]);
 
@@ -1896,9 +2317,9 @@ class AdminController
             Session::flash('error', implode(' ', $docsResult['errors']));
         }
         Session::flash('success', $msg);
-        // La base nouvelle, dans la liste : son état (indexation, première
-        // synchronisation) et son schéma.
-        header('Location: /admin/knowledge-bases#base-' . $id);
+        // La base nouvelle, sur sa page de consultation : son état
+        // (indexation, première synchronisation) et son schéma.
+        header('Location: /admin/knowledge-bases/' . $id);
         exit;
     }
 
@@ -1931,6 +2352,10 @@ class AdminController
         ]);
         $this->applyKbProfileLinks($kbId, $_POST['profile_ids'] ?? []);
 
+        // Qui la voit (privée, commune, publique) : AVANT le partage — privée
+        // et publique retirent les partages, et setShares n'en écrit aucun.
+        $this->applyKbVisibilityFromPost($kbId);
+
         // Le partage ne suit que si l'appelant est propriétaire : un bénéficiaire
         // en écriture édite la base sans pouvoir toucher à sa liste de partage
         // (le formulaire ne la lui affiche pas, on ignore un POST forgé).
@@ -1943,8 +2368,15 @@ class AdminController
         // chaque frappe, une clé à moitié collée n'a rien à faire en base.
         // Elle passe par « Tester et enregistrer » (testMyBrainConnection).
         $kbRow = KnowledgeBase::findById($kbId);
-        if ($kbRow !== null && KnowledgeBase::isRemote($kbRow)) {
-            AjaxResponse::finish($asJson, 'success', t('Base de connaissances mise à jour.'), $back);
+        // Table permanente : « MIA peut y écrire » se règle ici, avec le reste
+        // de la fiche — lu seulement si elle portait le réglage (marqueur
+        // `table_form` : case absente = décochée ne doit pas l'éteindre quand
+        // il n'était pas affiché).
+        if ($kbRow !== null && KnowledgeBase::isTable($kbRow) && isset($_POST['table_form'])) {
+            (new KbTableStore())->setMiaWrite($kbId, !empty($_POST['mia_write']));
+        }
+        if ($kbRow !== null && !KnowledgeBase::holdsDocuments($kbRow)) {
+            AjaxResponse::finish($asJson, 'success', t(KnowledgeBase::isTable($kbRow) ? 'Table mise à jour.' : 'Base de connaissances mise à jour.'), $back);
         }
 
         // La configuration de synchronisation peut échouer alors que le reste
@@ -1984,15 +2416,7 @@ class AdminController
         // Une base en direct n'en a pas : sa connexion part avec la ligne
         // (knowledge_base_remotes, ON DELETE CASCADE) — la clé reste valide
         // côté MyBrain, c'est là-bas qu'on la supprime pour de bon.
-        $kbRow = KnowledgeBase::findById($kbId);
-        if ($kbRow !== null && !KnowledgeBase::isRemote($kbRow)) {
-            try {
-                (new QdrantStore())->dropCollection(KnowledgeBase::collectionName($kbId));
-            } catch (\Throwable $e) {
-                error_log('[KB] drop collection kb_' . $kbId . ' : ' . $e->getMessage());
-            }
-        }
-        KnowledgeBase::delete($kbId);
+        KnowledgeBase::destroy($kbId);
 
         Session::flash('success', t('Base de connaissances supprimée.'));
         header('Location: /admin/knowledge-bases');
@@ -2021,8 +2445,8 @@ class AdminController
             exit;
         }
         $back = '/admin/knowledge-bases/' . $kbId . '/edit#avance';
-        if (KnowledgeBase::isRemote($kb)) {
-            Session::flash('error', t(self::REMOTE_KB_NO_DOCUMENTS));
+        if (!KnowledgeBase::holdsDocuments($kb)) {
+            Session::flash('error', self::noDocumentsMessage($kb));
             header('Location: ' . $back);
             exit;
         }
@@ -2035,7 +2459,7 @@ class AdminController
         if ($raw !== '' && $raw !== $current) {
             $changed = EmbeddingService::resolveChoice($raw, EmbeddingService::availableProviders());
             if ($changed === null) {
-                Session::flash('error', t('Modèle d\'embedding indisponible : la base n\'a pas été réindexée. Choisissez un modèle dont le fournisseur a une clé API configurée (Modèles IA → Clés API).'));
+                Session::flash('error', t('Modèle d\'embedding indisponible : la base n\'a pas été réindexée. Choisissez un modèle dont le fournisseur a une clé API configurée (Modèles IA → Fournisseurs et modèles).'));
                 header('Location: ' . $back);
                 exit;
             }
@@ -2066,8 +2490,8 @@ class AdminController
         if ((int)($kb['is_system'] ?? 0) === 1) {
             $this->respondKbDocumentResult(['ok' => false, 'error' => t(self::SYSTEM_KB_MESSAGE)], $isAjax);
         }
-        if (KnowledgeBase::isRemote($kb)) {
-            $this->respondKbDocumentResult(['ok' => false, 'error' => t(self::REMOTE_KB_NO_DOCUMENTS)], $isAjax);
+        if (!KnowledgeBase::holdsDocuments($kb)) {
+            $this->respondKbDocumentResult(['ok' => false, 'error' => self::noDocumentsMessage($kb)], $isAjax);
         }
 
         if (empty($_FILES['document']) || !is_array($_FILES['document'])) {
@@ -2168,6 +2592,200 @@ class AdminController
         exit;
     }
 
+    // ---- Fiche d'un document : détail, nouvel essai, exclusion ----
+
+    /**
+     * Fiche d'un document (volet) : où il en est, ce qui ne va pas et
+     * pourquoi (KbDocIssue), ce qu'on peut faire, et ses extraits (chargés
+     * à part, …/chunks?doc=ID). TOUT RENDU par le serveur : le volet ne
+     * connaît aucun libellé. Lecture : qui voit la base ; gestes : qui la gère.
+     */
+    public function knowledgeBaseDocument(string $id, string $docId): void
+    {
+        AuthMiddleware::requirePermission('knowledge_bases.view');
+        $kbId  = (int)$id;
+        $user  = Session::currentUser();
+        $kb    = KnowledgeBase::visibleBy($kbId, $user) ? KnowledgeBase::findById($kbId) : null;
+        $manage = $kb !== null && Session::can('knowledge_bases.edit') && KnowledgeBase::manageableBy($kbId, $user);
+        session_write_close();
+        if ($kb === null || !KnowledgeBase::holdsDocuments($kb)) {
+            AjaxResponse::send(['ok' => false, 'error' => t('Base introuvable ou accès refusé.')], 403);
+            return;
+        }
+        $payload = $this->kbDocumentDetail($kb, (int)$docId, $manage);
+        if ($payload === null) {
+            AjaxResponse::send(['ok' => false, 'error' => t('Document introuvable.')], 404);
+            return;
+        }
+        AjaxResponse::send(['ok' => true] + $payload);
+    }
+
+    /** Nouvel essai : la phase utile seulement (KbDocIssue::of → retry). */
+    public function retryKnowledgeBaseDocument(string $id, string $docId): void
+    {
+        [$kb, $doc] = $this->kbDocumentForAction($id, $docId);
+        if (!empty($doc['excluded_at'])) {
+            $this->kbDocumentActionReply($kb, $doc, false, t('Ce document est exclu : rétablissez-le pour le traiter de nouveau.'), 409);
+        }
+        $issue = KbDocIssue::of($doc, KbDocIssue::context($kb, $doc));
+        if ($issue === null || $issue['retry'] === null) {
+            $why = $issue !== null ? $issue['todo'] : t('Il n\'y a rien à refaire pour ce document.');
+            $this->kbDocumentActionReply($kb, $doc, false, t('Un nouvel essai ne servirait à rien. {conseil}', ['conseil' => $why]), 422);
+        }
+        $this->launchKbDocumentRetry($kb, $doc, (string)$issue['retry']);
+        $this->kbDocumentActionReply($kb, $doc, true, $issue['retry'] === KbDocIssue::RETRY_SYNC
+            ? t('Le fichier sera retéléchargé par la synchronisation, puis relu.')
+            : t('Nouvel essai lancé.'));
+    }
+
+    /**
+     * Exclut un document : il ne compte plus parmi les problèmes, n'est plus
+     * cherché, et la synchronisation ne le reprend pas tant qu'il ne change
+     * pas à la source. Pour un document qui pose problème, ou repris d'un
+     * dossier synchronisé (qu'on ne peut pas supprimer d'ici).
+     */
+    public function excludeKnowledgeBaseDocument(string $id, string $docId): void
+    {
+        [$kb, $doc] = $this->kbDocumentForAction($id, $docId);
+        if (!empty($doc['excluded_at'])) {
+            $this->kbDocumentActionReply($kb, $doc, true, t('Ce document est déjà exclu.'));
+        }
+        $ctx   = KbDocIssue::context($kb, $doc);
+        $issue = KbDocIssue::of($doc, $ctx);
+        if ($issue === null && empty($ctx['synced'])) {
+            $this->kbDocumentActionReply($kb, $doc, false, t('Ce document ne pose pas de problème : pour le retirer, supprimez-le.'), 422);
+        }
+        try {
+            (new QdrantStore())->deletePointsByDocument(KnowledgeBase::collectionName((int)$kb['id']), (int)$doc['id']);
+        } catch (\Throwable $e) {
+            error_log('[KB] purge points doc ' . (int)$doc['id'] . ' (exclusion) : ' . $e->getMessage());
+        }
+        $user = Session::currentUser();
+        KnowledgeBaseDocument::exclude((int)$doc['id'], (int)($user['id'] ?? 0), $issue !== null ? (string)$issue['title'] : t('Écarté à la main'));
+        error_log('[KB] document ' . (int)$doc['id'] . ' exclu de la base ' . (int)$kb['id'] . ' par #' . (int)($user['id'] ?? 0));
+        $this->kbDocumentActionReply($kb, $doc, true, t('Document exclu : il n\'est plus cherché.'));
+    }
+
+    /** Rétablit un document exclu : il est relu (ou retéléchargé) depuis le début. */
+    public function restoreKnowledgeBaseDocument(string $id, string $docId): void
+    {
+        [$kb, $doc] = $this->kbDocumentForAction($id, $docId);
+        if (empty($doc['excluded_at'])) {
+            $this->kbDocumentActionReply($kb, $doc, true, t('Ce document n\'est pas exclu.'));
+        }
+        $ctx  = KbDocIssue::context($kb, $doc);
+        // Fichier disparu d'un dossier synchronisé : retéléchargé ; sinon tout
+        // est refait (ses extraits ont été retirés à l'exclusion).
+        $mode = (($ctx['file'] ?? null) === KbDocIssue::FILE_MISSING && !empty($ctx['synced']))
+            ? KbDocIssue::RETRY_SYNC
+            : KbDocIssue::RETRY_FULL;
+        $this->launchKbDocumentRetry($kb, $doc, $mode);
+        $this->kbDocumentActionReply($kb, $doc, true, t('Document rétabli : il va être relu.'));
+    }
+
+    /**
+     * Base et document visés par un geste, droits vérifiés — ou réponse
+     * d'erreur et sortie. Jamais pendant qu'un traitement tourne.
+     *
+     * @return array{0: array, 1: array}
+     */
+    private function kbDocumentForAction(string $id, string $docId): array
+    {
+        AuthMiddleware::requirePermission('knowledge_bases.edit');
+        $kbId = (int)$id;
+        $kb   = KnowledgeBase::manageableBy($kbId, Session::currentUser()) ? KnowledgeBase::findById($kbId) : null;
+        if ($kb === null) {
+            AjaxResponse::send(['ok' => false, 'error' => t('Base introuvable ou accès refusé.')], 403);
+            exit;
+        }
+        if ((int)($kb['is_system'] ?? 0) === 1) {
+            AjaxResponse::send(['ok' => false, 'error' => t(self::SYSTEM_KB_MESSAGE)], 403);
+            exit;
+        }
+        if (!KnowledgeBase::holdsDocuments($kb)) {
+            AjaxResponse::send(['ok' => false, 'error' => self::noDocumentsMessage($kb)], 422);
+            exit;
+        }
+        $doc = KnowledgeBaseDocument::findForKb($kbId, (int)$docId);
+        if ($doc === null) {
+            AjaxResponse::send(['ok' => false, 'error' => t('Document introuvable.')], 404);
+            exit;
+        }
+        $work = KnowledgeBaseDocument::activeWork($kbId, [(int)$doc['id']]);
+        if (!empty($work['base'])) {
+            $this->kbDocumentActionReply($kb, $doc, false, t('Une synchronisation ou une réindexation de la base est en cours : réessayez quand elle sera terminée.'), 409);
+        }
+        if (isset($work['docs'][(int)$doc['id']])) {
+            $this->kbDocumentActionReply($kb, $doc, false, t('Ce document est déjà en cours de traitement.'), 409);
+        }
+        $doc['stalled'] = KbDocIssue::isStalled($doc, $work) ? 1 : 0;
+        return [$kb, $doc];
+    }
+
+    /** Lance la phase à refaire (KbDocIssue::RETRY_*). */
+    private function launchKbDocumentRetry(array $kb, array $doc, string $mode): void
+    {
+        $docId = (int)$doc['id'];
+        KnowledgeBaseDocument::prepareRetry($docId, $mode);
+        error_log('[KB] nouvel essai (' . $mode . ') du document ' . $docId . ' de la base ' . (int)$kb['id']);
+        match ($mode) {
+            KbDocIssue::RETRY_VECTOR => JobQueue::enqueueMaintenance('kb_vectorize', $docId, 'Vectorisation document #' . $docId),
+            KbDocIssue::RETRY_SYNC   => JobQueue::enqueueMaintenance('kb_sync', (int)$kb['id'], 'Synchronisation base #' . (int)$kb['id']),
+            default                  => JobQueue::enqueueMaintenance('kb_document', $docId, 'Ingestion document #' . $docId),
+        };
+    }
+
+    /** Réponse d'un geste sur un document : son état relu, tout rendu. */
+    private function kbDocumentActionReply(array $kb, array $doc, bool $ok, string $message, int $status = 200): never
+    {
+        $payload = $this->kbDocumentDetail($kb, (int)$doc['id'], true) ?? [];
+        AjaxResponse::send(['ok' => $ok, ($ok ? 'message' : 'error') => $message] + $payload, $ok ? 200 : $status);
+        exit;
+    }
+
+    /**
+     * Détail d'un document, rendu : volet (`html`), ligne de la page de la
+     * base (`row_html`), et ce que le volet doit savoir (extraits, suivi).
+     * Null si le document n'est pas dans la base.
+     *
+     * @return array{html: string, row_html: string, document: array, chunk_count: int, busy: bool}|null
+     */
+    private function kbDocumentDetail(array $kb, int $docId, bool $canManage): ?array
+    {
+        $kbId = (int)$kb['id'];
+        $doc  = KnowledgeBaseDocument::findForKb($kbId, $docId);
+        if ($doc === null) {
+            return null;
+        }
+        $work  = KnowledgeBaseDocument::activeWork($kbId, [$docId]);
+        $doc['stalled'] = KbDocIssue::isStalled($doc, $work) ? 1 : 0;
+        $state = KbStatus::documentState($doc);
+        $ctx   = KbDocIssue::context($kb, $doc);
+        $issue = KbDocIssue::of($doc, $ctx);
+        $docSynced = !empty($ctx['synced']);
+        $docBusy   = in_array($state['key'], [KbStatus::DOC_PENDING, KbStatus::DOC_EXTRACTING, KbStatus::DOC_INDEXING], true);
+        $docCanDelete = $canManage && !$docSynced && (int)($kb['is_system'] ?? 0) !== 1;
+        $docKb = $kb;
+
+        ob_start();
+        require ROOT . '/templates/admin/knowledge-bases/partials/doc-detail.php';
+        $html = (string)ob_get_clean();
+
+        $row = ['doc' => $doc, 'state' => $state, 'check' => in_array($state['tone'], [KbStatus::TONE_WARN, KbStatus::TONE_ERROR], true)];
+        $rowExtra = false;
+        ob_start();
+        require ROOT . '/templates/admin/knowledge-bases/partials/show-doc-row.php';
+        $rowHtml = (string)ob_get_clean();
+
+        return [
+            'html'        => $html,
+            'row_html'    => $rowHtml,
+            'document'    => $this->kbDocumentPayload($doc),
+            'chunk_count' => (int)($doc['chunk_count'] ?? 0),
+            'busy'        => $docBusy,
+        ];
+    }
+
     // ---- Synchronisation d'un dossier distant (Drive / SharePoint) ----
 
     // ---- Base vectorielle (santé Qdrant) ----
@@ -2244,8 +2862,8 @@ class AdminController
             echo json_encode(['ok' => false, 'error' => t('Base introuvable ou accès refusé.')], JSON_UNESCAPED_UNICODE);
             exit;
         }
-        if (KnowledgeBase::isRemote($kb)) {
-            echo json_encode(['ok' => false, 'error' => t(self::REMOTE_KB_NO_DOCUMENTS)], JSON_UNESCAPED_UNICODE);
+        if (!KnowledgeBase::holdsDocuments($kb)) {
+            echo json_encode(['ok' => false, 'error' => self::noDocumentsMessage($kb)], JSON_UNESCAPED_UNICODE);
             exit;
         }
 
@@ -2293,17 +2911,24 @@ class AdminController
             'description' => trim((string)($_POST['description'] ?? '')) ?: null,
             'backend'     => KnowledgeBase::BACKEND_MYBRAIN,
             'is_active'   => (int)($_POST['is_active'] ?? 0),
+            'is_private'  => self::postedKbVisibility() === KnowledgeBase::VIS_PRIVATE,
+            'is_public'   => self::postedKbVisibility() === KnowledgeBase::VIS_PUBLIC,
             'created_by'  => (int)$currentUser['id'],
         ]);
         KnowledgeBaseRemote::save($id, (string)$url, $key, $check['whoami']);
         $this->applyKbProfileLinks($id, $_POST['profile_ids'] ?? []);
         $this->applyKbSharesFromPost($id);
 
-        Session::flash('success', t('Cerveau MyBrain branché : application « {application} », droits : {droits}. Choisissez les groupes qui y ont accès dans « Partage » : sans eux, seuls les administrateurs le voient.', [
-            'application' => $check['whoami']['application'],
-            'droits'      => implode(', ', $check['whoami']['droits']),
-        ]));
-        header('Location: /admin/knowledge-bases#base-' . $id);
+        Session::flash('success', self::postedKbVisibility() === KnowledgeBase::VIS_PRIVATE
+            ? t('Cerveau MyBrain branché : application « {application} », droits : {droits}. Il est réservé à vous seul (« Uniquement pour moi »).', [
+                'application' => $check['whoami']['application'],
+                'droits'      => implode(', ', $check['whoami']['droits']),
+            ])
+            : t('Cerveau MyBrain branché : application « {application} », droits : {droits}. Choisissez les groupes qui y ont accès dans « Partage » : sans eux, seuls les administrateurs le voient.', [
+                'application' => $check['whoami']['application'],
+                'droits'      => implode(', ', $check['whoami']['droits']),
+            ]));
+        header('Location: /admin/knowledge-bases/' . $id);
         exit;
     }
 
@@ -2607,7 +3232,8 @@ class AdminController
 
         // Verdict + panneau d'état TOUT RENDU (même partiel que la carte) :
         // la fiche remplace son bloc, sans connaître un seul libellé.
-        $st = KbStatus::forBases([$kb])[$kbId];
+        $st   = KbStatus::forBases([$kb])[$kbId];
+        $docs = $this->kbDocsWithWork($kbId);
 
         echo json_encode([
             'ok'           => true,
@@ -2622,10 +3248,35 @@ class AdminController
             'tone'         => $st['tone'],
             'title'        => $st['title'],
             'busy'         => $st['busy'],
+            'attention'    => KbStatus::attention($st),
             'panel_html'   => $this->renderKbStatus($kb, $st, 'panel', true, (string)($ownerName ?? '')),
-            'documents'    => array_map([$this, 'kbDocumentPayload'], KnowledgeBaseDocument::allForKb($kbId)),
+            'documents'    => array_map([$this, 'kbDocumentPayload'], $docs),
+            'advice'       => $this->kbAdvicePayload($kb, $docs),
+            // Page de la base : ses lignes de documents, toutes rendues.
+            'rows'         => !empty($_GET['rows']) ? $this->kbShowRows($docs) : null,
         ], JSON_UNESCAPED_UNICODE);
         exit;
+    }
+
+    /**
+     * Lignes de la liste des documents de la page d'une base, rendues
+     * (partials/show-doc-row.php), indexées par document.
+     *
+     * @param list<array> $docs
+     * @return array<int, string>
+     */
+    private function kbShowRows(array $docs): array
+    {
+        $out = [];
+        foreach ($docs as $doc) {
+            $state = KbStatus::documentState($doc);
+            $row   = ['doc' => $doc, 'state' => $state, 'check' => in_array($state['tone'], [KbStatus::TONE_WARN, KbStatus::TONE_ERROR], true)];
+            $rowExtra = false;
+            ob_start();
+            require ROOT . '/templates/admin/knowledge-bases/partials/show-doc-row.php';
+            $out[(int)$doc['id']] = (string)ob_get_clean();
+        }
+        return $out;
     }
 
     /**
@@ -2702,6 +3353,25 @@ class AdminController
     }
 
     /** Charge utile JSON d'un document de base (upload AJAX + polling sync). */
+    /**
+     * Points à améliorer d'une base, pour la fiche qui se rafraîchit seule :
+     * leur nombre, le libellé de la pastille et la liste TOUT RENDUE
+     * (templates/partials/kb-advice.php) — aucun libellé côté JavaScript.
+     *
+     * @return array{count: int, label: string, html: string}
+     */
+    private function kbAdvicePayload(array $kb, array $docs): array
+    {
+        $kbAdvice = KbAdvice::forBase($kb, $docs);
+        ob_start();
+        require ROOT . '/templates/partials/kb-advice.php';
+        return [
+            'count' => count($kbAdvice),
+            'label' => $kbAdvice === [] ? '' : I18n::plural(count($kbAdvice), '{n} point à améliorer', '{n} points à améliorer'),
+            'html'  => (string)ob_get_clean(),
+        ];
+    }
+
     private function kbDocumentPayload(array $doc): array
     {
         return [
@@ -2714,10 +3384,29 @@ class AdminController
             'vector_status'     => (string)($doc['vector_status'] ?? 'pending'),
             'chunk_count'       => (int)($doc['chunk_count'] ?? 0),
             'source'            => (string)($doc['source'] ?? 'upload'),
+            'excluded'          => !empty($doc['excluded_at']),
+            // Dernière indexation, en UTC ISO : l'écran l'écrit dans le fuseau du navigateur.
+            'indexed_at'        => !empty($doc['indexed_ts']) ? gmdate('Y-m-d\TH:i:s\Z', (int)$doc['indexed_ts']) : null,
             // Verdict calculé côté serveur (libellé, ton, motif) : la liste de
             // la fiche l'affiche tel quel, comme les cartes.
             'state'             => KbStatus::documentState($doc),
         ];
+    }
+
+    /**
+     * Documents d'une base, ceux dont le traitement s'est arrêté en route
+     * marqués `stalled` (KbDocIssue::markStalled) : sans cela, un document
+     * dont le processus est mort resterait « En attente » pour toujours.
+     *
+     * @return list<array>
+     */
+    private function kbDocsWithWork(int $kbId): array
+    {
+        $docs = KnowledgeBaseDocument::allForKb($kbId);
+        if ($docs === []) {
+            return [];
+        }
+        return KbDocIssue::markStalled($docs, KnowledgeBaseDocument::activeWork($kbId, array_column($docs, 'id')));
     }
 
     /**
@@ -2815,6 +3504,46 @@ class AdminController
         ]);
     }
 
+    /**
+     * Visibilité postée par la fiche d'une base ou d'une table : `visibility`
+     * (private | common | public). Une fiche d'avant ne portait que la case
+     * « Uniquement pour moi » (`is_private`) : elle vaut encore « Privée ».
+     * Null quand rien de lisible n'est posté.
+     */
+    public static function postedKbVisibility(): ?string
+    {
+        $posted = KnowledgeBase::normalizeVisibility($_POST['visibility'] ?? null);
+        if ($posted !== null) {
+            return $posted;
+        }
+        return !empty($_POST['is_private']) ? KnowledgeBase::VIS_PRIVATE : null;
+    }
+
+    /**
+     * Applique « Qui la voit » d'une base existante. Lu seulement si la fiche
+     * portait le choix (marqueur `visibility_form` — un envoi sans lui ne doit
+     * rien changer) et seulement du PROPRIÉTAIRE ; poser ou retirer « Privée »
+     * reste au CRÉATEUR (KnowledgeBase::setVisibility).
+     */
+    private function applyKbVisibilityFromPost(int $kbId): void
+    {
+        $user   = Session::currentUser();
+        $before = KnowledgeBase::findById($kbId);
+        $wanted = self::postedKbVisibility();
+        if (!isset($_POST['visibility_form']) || $before === null || $wanted === null
+            || !KnowledgeBase::ownedBy($kbId, $user)) {
+            return;
+        }
+        if ($wanted === KnowledgeBase::visibility($before)) {
+            return;
+        }
+        $removed = KnowledgeBase::setVisibility($kbId, $wanted, KnowledgeBase::createdBy($before, $user));
+        error_log('[KB] base #' . $kbId . ' visibilité ' . KnowledgeBase::visibility($before) . ' → '
+            . KnowledgeBase::visibility(KnowledgeBase::findById($kbId) ?? $before)
+            . ($removed > 0 ? ' (' . $removed . ' partage(s) retiré(s))' : '')
+            . ' par #' . (int)($user['id'] ?? 0));
+    }
+
     /** Les partages postés par la fiche d'une base (création et édition). */
     private function applyKbSharesFromPost(int $kbId): void
     {
@@ -2892,9 +3621,15 @@ class AdminController
 
         // Détection MIME robuste : les DOCX sont parfois vus comme application/zip
         $mime = FileExtractor::detectMime((string)$file['tmp_name'], $name);
+        // HEIC, AVIF, TIFF, BMP : convertis en JPEG avant tout (sur place).
+        [$mime, $name, $convertError] = ImageConvert::forUpload((string)$file['tmp_name'], $name, $mime);
+        if ($convertError !== null) {
+            return ['ok' => false, 'error' => $convertError];
+        }
+        $size = (int)(@filesize((string)$file['tmp_name']) ?: $size);
         $ext  = self::PROFILE_DOC_ALLOWED_MIMES[$mime] ?? null;
         if ($ext === null) {
-            return ['ok' => false, 'error' => t('Format non supporté pour « {nom} ». Formats acceptés : PDF, DOCX, XLSX, TXT, MD, images.', ['nom' => $name])];
+            return ['ok' => false, 'error' => FileExtractor::unsupportedMessage($name, $mime)];
         }
 
         // Quota des uploads MANUELS uniquement : les documents synchronisés
@@ -3037,6 +3772,10 @@ class AdminController
         ScheduledTask::SETTING_AUTO,
         Workflow::SETTING_ENABLED,
         Workflow::SETTING_AUTO,
+        MailPush::SETTING_ENABLED,
+        UserMemory::SETTING_ENABLED,
+        MemoryQuestions::SETTING_ENABLED,
+        MemoryLearner::SETTING_ENABLED,
     ];
 
     public function saveBuiltinTools(): void
@@ -3054,6 +3793,102 @@ class AdminController
             $enabled = !empty($_POST[$key]);
             Settings::set($key, $enabled ? '1' : '0');
             $state[$key] = $enabled ? 1 : 0;
+        }
+        // Moteur de la dictée : Voxtral n'est retenu qu'après un essai RÉEL de
+        // la clé Mistral (une seconde de silence transcrite) — une clé
+        // renseignée ne dit pas qu'elle marche. Refus = rien n'est changé, la
+        // cause présentée (crédit épuisé, clé refusée…) part à l'écran.
+        if (array_key_exists(Dictation::SETTING_ENGINE, $_POST)) {
+            $engine = (string)$_POST[Dictation::SETTING_ENGINE];
+            $refusal = null;
+            if (!in_array($engine, Dictation::ENGINES, true)) {
+                $refusal = t('Valeur refusée.');
+            } elseif ($engine === Dictation::ENGINE_MISTRAL) {
+                $mistralKey = (string)(ApiKey::getDecrypted('mistral') ?? '');
+                if ($mistralKey === '') {
+                    $refusal = t('Renseignez d\'abord la clé API Mistral dans Modèles IA → Fournisseurs et modèles.');
+                } elseif (($cause = Dictation::checkMistral($mistralKey)) !== null) {
+                    $refusal = t('Voxtral n\'a pas répondu à l\'essai : {cause}', [
+                        'cause' => trim($cause['title'] . ' — ' . $cause['message'], ' —'),
+                    ]);
+                }
+            } elseif (empty(ApiKey::getDecrypted('openai'))) {
+                $refusal = t('Renseignez d\'abord la clé API OpenAI dans Modèles IA → Fournisseurs et modèles.');
+            }
+            if ($refusal !== null) {
+                if ($this->wantsJsonResponse()) {
+                    header('Content-Type: application/json; charset=utf-8');
+                    http_response_code(422);
+                    echo json_encode(['ok' => false, 'error' => $refusal], JSON_UNESCAPED_UNICODE);
+                    exit;
+                }
+                Session::flash('error', $refusal);
+                header('Location: /admin/tools');
+                exit;
+            }
+            Settings::set(Dictation::SETTING_ENGINE, $engine);
+            $state[Dictation::SETTING_ENGINE] = $engine;
+            $state['message'] = $engine === Dictation::ENGINE_MISTRAL
+                ? t('Clé Mistral vérifiée : la dictée passe par Voxtral.')
+                : t('La dictée passe par OpenAI.');
+        }
+        // Voix de lecture de la conversation vocale : retenue seulement après
+        // un essai RÉEL (un mot lu, non compté) — la clé du fournisseur doit
+        // marcher, et l'API Realtime d'OpenAI n'est pas ouverte à tous les
+        // comptes. La voix d'origine (gpt-4o-mini-tts) reste choisissable tant
+        // qu'OpenAI la sert, plus après son arrêt.
+        if (array_key_exists(SpeechSynthesizer::SETTING_ENGINE, $_POST)) {
+            $engine   = (string)$_POST[SpeechSynthesizer::SETTING_ENGINE];
+            $refusal  = null;
+            $provider = SpeechSynthesizer::providerOf($engine);
+            $key      = (string)(ApiKey::getDecrypted($provider) ?? '');
+            if (!isset(SpeechSynthesizer::ENGINES[$engine])) {
+                $refusal = t('Valeur refusée.');
+            } elseif (SpeechSynthesizer::retirement($engine)['retired'] ?? false) {
+                $refusal = t('Cette voix n\'est plus servie par son fournisseur : choisissez-en une autre.');
+            } elseif ($key === '') {
+                $refusal = $provider === 'mistral'
+                    ? t('Renseignez d\'abord la clé API Mistral dans Modèles IA → Fournisseurs et modèles.')
+                    : t('Renseignez d\'abord la clé API OpenAI dans Modèles IA → Fournisseurs et modèles.');
+            } elseif ($engine !== SpeechSynthesizer::ENGINE_LEGACY
+                && ($cause = SpeechSynthesizer::check($engine, $key, I18n::locale())) !== null) {
+                $refusal = t('La voix n\'a pas répondu à l\'essai : {cause}', [
+                    'cause' => trim($cause['title'] . ' — ' . $cause['message'], ' —'),
+                ]);
+            }
+            if ($refusal !== null) {
+                if ($this->wantsJsonResponse()) {
+                    header('Content-Type: application/json; charset=utf-8');
+                    http_response_code(422);
+                    echo json_encode(['ok' => false, 'error' => $refusal], JSON_UNESCAPED_UNICODE);
+                    exit;
+                }
+                Session::flash('error', $refusal);
+                header('Location: /admin/tools');
+                exit;
+            }
+            Settings::set(SpeechSynthesizer::SETTING_ENGINE, $engine);
+            $state[SpeechSynthesizer::SETTING_ENGINE] = $engine;
+            $state['message'] = t('Voix essayée : la conversation vocale lit ses réponses avec {voix}.', [
+                'voix' => SpeechSynthesizer::engineLabel($engine),
+            ]);
+        }
+        // Modèle de l'apprentissage de la mémoire : '' (modèle par défaut) ou un
+        // modèle proposé — jamais Perplexity, qui cherche sur Internet à chaque
+        // appel. Un modèle permis ensuite par les groupes de chacun seulement.
+        if (array_key_exists(MemoryLearner::SETTING_LLM, $_POST)) {
+            $choice = trim((string)$_POST[MemoryLearner::SETTING_LLM]);
+            if ($choice !== '' && (!array_key_exists($choice, LLMFactory::available()) || LLMFactory::provider($choice) === 'perplexity')) {
+                if ($this->wantsJsonResponse()) {
+                    header('Content-Type: application/json; charset=utf-8');
+                    http_response_code(422);
+                    echo json_encode(['ok' => false, 'error' => t('Valeur refusée.')], JSON_UNESCAPED_UNICODE);
+                    exit;
+                }
+            } else {
+                Settings::set(MemoryLearner::SETTING_LLM, $choice);
+                $state[MemoryLearner::SETTING_LLM] = $choice;
+            }
         }
         // Plafond des boucles de workflow : une valeur de la liste, sinon rien.
         if (array_key_exists(Workflow::SETTING_LOOP_MAX, $_POST)) {
@@ -3077,6 +3912,53 @@ class AdminController
         }
         Session::flash('success', t('Outils intégrés mis à jour.'));
         header('Location: /admin/tools');
+        exit;
+    }
+
+    /**
+     * Notifications instantanées des emails, côté Gmail : le topic Pub/Sub et
+     * l'adresse que son abonnement push appelle. Enregistrement MANUEL (un nom
+     * de topic à moitié saisi ferait échouer chaque boîte suivie) ; « Tester »
+     * essaie le topic sur la boîte Gmail de l'administrateur, s'il l'a reliée.
+     */
+    public function saveMailPush(): void
+    {
+        AuthMiddleware::requirePermission('tools.edit');
+        $action = (string)($_POST['mail_push_action'] ?? 'save');
+        if ($action === 'renew') {
+            MailPush::gmailToken(true);
+            Session::flash('success', t('Nouvelle adresse créée : reportez-la dans l’abonnement push de Google Cloud.'));
+            header('Location: /admin/tools#mail-push');
+            exit;
+        }
+        $topic = trim((string)($_POST['gmail_push_topic'] ?? ''));
+        if ($topic !== '' && !MailPush::validTopic($topic)) {
+            Session::flash('error', t('Nom de topic attendu : projects/<projet>/topics/<topic>.'));
+            header('Location: /admin/tools#mail-push');
+            exit;
+        }
+        Settings::set(MailPush::SETTING_GMAIL_TOPIC, $topic);
+        if ($topic !== '') {
+            MailPush::gmailToken();
+        }
+        if ($action === 'test' && $topic !== '') {
+            $user = Session::currentUser();
+            $svc = $user ? MailPush::service('gmail', (int)$user['id']) : null;
+            if ($svc === null) {
+                Session::flash('error', t('Topic enregistré. Pour l’essayer, reliez votre propre Gmail dans Réglages → Comptes connectés.'));
+            } else {
+                try {
+                    $svc->startPushWatch($topic);
+                    Session::flash('success', t('Topic enregistré et accepté par Google : votre boîte Gmail prévient désormais MIA.'));
+                    MailPush::syncSoon((int)$user['id']);
+                } catch (\RuntimeException $e) {
+                    Session::flash('error', $e->getMessage());
+                }
+            }
+        } else {
+            Session::flash('success', $topic !== '' ? t('Topic Pub/Sub enregistré.') : t('Notifications Gmail retirées : les boîtes Gmail sont vérifiées chaque minute.'));
+        }
+        header('Location: /admin/tools#mail-push');
         exit;
     }
 
@@ -3801,26 +4683,14 @@ class AdminController
         ];
     }
 
-    /** Modèles IA — Clés API (fournisseurs cloud + endpoint local). */
-    public function llmsKeys(): void
-    {
-        AuthMiddleware::requirePermission('llms.view');
-        $keys          = ApiKey::all();
-        $catalog       = LLMFactory::models();
-        $logos         = LLMFactory::logos();
-        $providerNames = $this->llmProviderNames();
-        $success       = Session::getFlash('success');
-        require ROOT . '/templates/admin/llms/keys.php';
-    }
-
     /**
-     * Modèles IA — Modèles : comportement par défaut (LLM par défaut, secours)
-     * en tête, puis le catalogue (catalogue → instances). Le vocabulaire de
-     * l'entreprise vit sur Organisation → Entreprise.
-     * L'ancienne page « Comportement par défaut » y est fusionnée : le défaut se
-     * choisit parmi les modèles activés, juste en dessous.
+     * Modèles IA — Fournisseurs et modèles : UNE page pour tout régler (qui
+     * répond par défaut, une carte par fournisseur, le panneau du fournisseur
+     * choisi avec sa clé et ses modèles). Elle remplace les pages « Clés API »
+     * et « Modèles » (leurs adresses y redirigent). `?fournisseur=` ouvre le
+     * panneau d'un fournisseur — c'est là que reviennent les gestes de la page.
      */
-    public function llmsModels(): void
+    public function llms(): void
     {
         AuthMiddleware::requirePermission('llms.view');
         $keys          = ApiKey::all();
@@ -3829,16 +4699,56 @@ class AdminController
         $logos         = LLMFactory::logos();
         $providerNames = $this->llmProviderNames();
         $llms          = LLMFactory::available();
-        // Sélecteur ET badge « Défaut » : le défaut EFFECTIF (celui que MIA
+        // Sélecteur ET badge « Par défaut » : le défaut EFFECTIF (celui que MIA
         // utilise), pas le réglage brut, qui peut désigner un modèle retiré.
         // Quand le réglage enregistré ne désigne aucun modèle disponible
         // (instance neuve : « openai »), la carte le dit et propose de confirmer.
         $defaultLlm       = LLMFactory::appDefault($llms) ?? '';
         $defaultLlmStored = trim((string) Settings::get('default_llm', ''));
         $fallbackLlm      = trim((string) Settings::get('default_llm_fallback', ''));
-        $success          = Session::getFlash('success');
-        $error            = Session::getFlash('error');
-        require ROOT . '/templates/admin/llms/models.php';
+        $incidents        = ProviderIncident::active();
+        $selected         = self::llmPanelProvider($_GET['fournisseur'] ?? null, $catalog);
+        // Coût d'une réponse, modèle par modèle, pour les fournisseurs reliés
+        // seulement (CreditEstimate : deux requêtes groupées, mémorisées).
+        $costs = [];
+        try {
+            $relies = array_flip(array_column($keys, 'provider'));
+            foreach ($catalog as $provider => $models) {
+                if (!isset($relies[$provider])) {
+                    continue;
+                }
+                foreach (array_keys($models) as $modelId) {
+                    $estimate = CreditEstimate::chatReply($provider . '::' . $modelId);
+                    if ($estimate !== null) {
+                        $costs[$provider . '::' . $modelId] = (int)$estimate['credits'];
+                    }
+                }
+            }
+        } catch (\Throwable $e) {
+            error_log('[Estimation] coûts de la page Fournisseurs et modèles impossibles : ' . $e->getMessage());
+        }
+        $success = Session::getFlash('success');
+        $error   = Session::getFlash('error');
+        require ROOT . '/templates/admin/llms/index.php';
+    }
+
+    /**
+     * Fournisseur dont le panneau s'ouvre : celui demandé s'il existe (catalogue
+     * ou « local »), sinon '' (aucun panneau ouvert). Pure.
+     *
+     * @param array<string, mixed> $catalog
+     */
+    public static function llmPanelProvider(mixed $asked, array $catalog): string
+    {
+        $asked = is_string($asked) ? trim($asked) : '';
+        return ($asked === 'local' || ($asked !== '' && isset($catalog[$asked]))) ? $asked : '';
+    }
+
+    /** Adresse de retour vers le panneau d'un fournisseur (après un geste). */
+    private static function llmPanelUrl(string $provider): string
+    {
+        $provider = self::llmPanelProvider($provider, LLMFactory::models());
+        return $provider === '' ? '/admin/llms' : '/admin/llms?fournisseur=' . rawurlencode($provider) . '#modeles';
     }
 
     /** Modèles IA — Tests de bon fonctionnement. */
@@ -3882,7 +4792,7 @@ class AdminController
             AjaxResponse::wanted(),
             'success',
             t('Comportement par défaut enregistré.'),
-            '/admin/llms/models#defaut'
+            '/admin/llms#defaut'
         );
     }
 
@@ -3905,7 +4815,7 @@ class AdminController
             ]) . ($arret['replacement_label'] !== ''
                 ? ' ' . t('Remplaçant désigné : {modele}.', ['modele' => $arret['replacement_label']])
                 : ''));
-            header('Location: /admin/llms/models');
+            header('Location: ' . self::llmPanelUrl((string)$provider));
             exit;
         }
 
@@ -3919,20 +4829,21 @@ class AdminController
             ]);
             // Premier modèle activé d'une instance neuve : le réglage semé
             // (« openai ») ne désigne plus rien — il est remplacé par le
-            // défaut effectif, visible et modifiable dans Modèles IA → Modèles (carte « Comportement par défaut »).
+            // défaut effectif, visible et modifiable dans Modèles IA → Fournisseurs et modèles (carte « Comportement par défaut »).
             $nouveauDefaut = LLMFactory::repairStoredDefault();
             Session::flash('success', t('Instance LLM ajoutée.')
                 . ($nouveauDefaut !== null
                     ? ' ' . t('Modèle par défaut : {modele}.', ['modele' => LLMFactory::available()[$nouveauDefaut] ?? $nouveauDefaut])
                     : ''));
         }
-        header('Location: /admin/llms/models');
+        header('Location: ' . self::llmPanelUrl((string)$provider));
         exit;
     }
 
     public function deleteLlmModel(string $id): void
     {
         AuthMiddleware::requirePermission('llms.delete');
+        $instance = LlmModel::find((int)$id);
         LlmModel::delete((int)$id);
         // Le modèle retiré était peut-être le défaut : un réglage qui ne
         // désigne plus rien laisserait le groupe « ★ Par défaut » sans modèle.
@@ -3941,7 +4852,7 @@ class AdminController
             . ($nouveauDefaut !== null
                 ? ' ' . t('Nouveau modèle par défaut : {modele}.', ['modele' => LLMFactory::available()[$nouveauDefaut] ?? $nouveauDefaut])
                 : ''));
-        header('Location: /admin/llms/models');
+        header('Location: ' . self::llmPanelUrl((string)($instance['provider'] ?? '')));
         exit;
     }
 
@@ -4000,8 +4911,11 @@ class AdminController
         // « crédit épuisé » / « clé refusée » s'éteint. S'il est toujours
         // vrai, la prochaine demande refusée le reposera.
         ProviderIncident::resolve($provider);
+        // Nouvelle clé, ou nouveau modèle de référence : les dates d'arrêt sont
+        // relevées chez l'éditeur au prochain entretien, sans attendre un jour.
+        LlmShutdownWatch::soon($provider);
 
-        AjaxResponse::finish($asJson, 'success', t('Configuration enregistrée.'), '/admin/llms');
+        AjaxResponse::finish($asJson, 'success', t('Configuration enregistrée.'), self::llmPanelUrl($provider));
     }
 
     public function deleteApiKey(string $id): void
@@ -4075,7 +4989,8 @@ class AdminController
      * un nom de modèle inexistant.
      */
     /**
-     * Taille, qualité et format d'un outil image, retenus du POST — un champ
+     * Taille, qualité, rapport, fond, format du fichier et orientation d'un
+     * outil image, retenus du POST — un champ
      * hors des valeurs déclarées pour CE modèle est IGNORÉ, jamais enregistré.
      *
      * Ce filtre est nécessaire : mesuré contre l'API le 2026-09-16,
@@ -4107,6 +5022,15 @@ class AdminController
         $retenir('config_size', 'size', ToolCatalog::modelOptions('image', $provider, $model, 'sizes'), true);
         $retenir('config_quality', 'quality', ToolCatalog::modelOptions('image', $provider, $model, 'qualities'));
         $retenir('config_aspect_ratio', 'aspect_ratio', ToolCatalog::options('image', $provider, 'aspect_ratios'));
+
+        // Fond transparent, format du fichier, orientation : ce que le modèle
+        // accepte seulement (ImageOptions, catalogue). Rien de réglé = rien
+        // d'écrit, le modèle décide comme avant.
+        foreach (ImageOptions::fromPost($post, 'config_', ImageOptions::capabilities($provider, $model)) as $clef => $valeur) {
+            if ($valeur !== '') {
+                $config[$clef] = $valeur;
+            }
+        }
 
         return $config;
     }
@@ -4949,7 +5873,7 @@ class AdminController
         $byProfile       = UsageLog::byProfile($from, $to, $userId);
         $byTool          = UsageLog::byTool($from, $to, $userId);
         $byModel         = UsageLog::byModel($from, $to, $userId);
-        $byKnowledgeBase = UsageLog::byKnowledgeBase($from, $to, $userId);
+        $byKnowledgeBase = UsageLog::byKnowledgeBase($from, $to, $userId, Session::currentUser());
         $detailByUser    = UsageLog::detailByUser($from, $to, $userId);
 
         // Vue d'ensemble : fonctionnalités, adoption, qualité — sans montant en euros.
@@ -5331,12 +6255,22 @@ class AdminController
         // Tarif public qu'applique la facturation aux lignes sans prix : l'écran
         // calcule avec lui (sinon « 0 € → 1 crédit » pour un modèle facturé au
         // tarif public à chaque message). Lecture seule, jamais enregistré.
+        // Un outil dont le coût n'est pas un prix unitaire (au jeton, porté
+        // par son modèle de langage, facturé hors de MIA) le dit sous sa
+        // ligne au lieu de « non tarifé » (`basis`).
+        $toolsById = [];
+        foreach ($tools as $tool) {
+            $toolsById[(int)($tool['id'] ?? 0)] = $tool;
+        }
         $catalogCosts = [];
         foreach ($config['services'] as $service) {
             $key = trim((string)($service['catalog_key'] ?? ''));
             $cost = $key !== '' ? CreditService::catalogUnitCost($key) : null;
             if ($cost !== null) {
                 $catalogCosts[$key] = $cost;
+            } elseif (preg_match('/^tool:(\d+)$/', $key, $m) === 1
+                && ($basis = self::toolCostBasis($toolsById[(int)$m[1]] ?? null)) !== null) {
+                $catalogCosts[$key] = ['eur' => null, 'unit' => '', 'basis' => $basis];
             }
         }
 
@@ -6386,7 +7320,7 @@ class AdminController
         if (isset($_POST[CompanyProfile::SETTING_LEGAL])) {
             Settings::set(CompanyProfile::SETTING_LEGAL, CompanyProfile::sanitizeLegal((string)$_POST[CompanyProfile::SETTING_LEGAL]));
         }
-        // Vocabulaire de l'entreprise : venu de Modèles IA → Modèles (même clé).
+        // Vocabulaire de l'entreprise : venu de Modèles IA → Fournisseurs et modèles (même clé).
         if (isset($_POST[CompanyVocabulary::SETTING])) {
             Settings::set(CompanyVocabulary::SETTING, CompanyVocabulary::sanitize((string)$_POST[CompanyVocabulary::SETTING]));
         }
@@ -6648,51 +7582,193 @@ class AdminController
         return round($number, 6);
     }
 
+    /** Services par appel de recherche en ligne : un lot court se lit vite et tient dans la sortie. */
+    private const PRICE_BATCH_SIZE = 6;
+
+    /** Appels de recherche en ligne menés en même temps. */
+    private const PRICE_PARALLEL = 4;
+
+    /** Transport de substitution des tests : fn(url, payload, bearer) → [statut, corps, erreur réseau]. */
+    private static ?\Closure $pricingTransport = null;
+
+    /** Tests seulement : remplace l'appel HTTP de la recherche de prix (null = réseau). */
+    public static function overridePricingTransport(?callable $transport): void
+    {
+        self::$pricingTransport = $transport === null ? null : \Closure::fromCallable($transport);
+    }
+
     /**
-     * Orchestre la récupération des prix : tarifs curés du catalogue d'abord
-     * (déterministe, source unique de vérité — garantit les prix exacts des
-     * modèles trop récents pour le lookup web, ex. GPT-5.6 / Opus 4.8), puis
-     * délègue le reste au lookup LLM + recherche web.
+     * Orchestre la récupération des prix, du plus sûr au plus lent :
+     *   1. tarifs curés des catalogues (déterministes, aucun appel réseau —
+     *      la plupart des services) ;
+     *   2. services sans prix à chercher, ÉCARTÉS : modèle local gratuit,
+     *      outil facturé ailleurs (page web, carte, présentation : jetons de
+     *      son modèle ; Gamma ; n8n), modèle arrêté — avant, ils partaient
+     *      tous dans la recherche en ligne, qui durait d'autant et pouvait
+     *      inventer un prix ;
+     *   3. le reste en ligne, par lots menés en parallèle.
+     * Une recherche en ligne en échec n'emporte plus les prix du catalogue :
+     * ils sont enregistrés, et la panne est dite (`warning`). Un arrêt demandé,
+     * lui, annule tout.
      */
     private function fetchLatestUsdPricingFromInternet(array $services, ?callable $keepAlive = null): array
     {
-        // 1) Prix curés depuis config/llm_catalog.php (aucun appel réseau).
-        $curated    = [];
-        $curatedIds = [];
+        $curated   = [];
+        $skipped   = [];
+        $remaining = [];
         foreach ($services as $svc) {
+            $id = trim((string)($svc['id'] ?? ''));
+            if ($id === '') {
+                continue;
+            }
             $hit = $this->resolveCuratedUsdPrice($svc);
             if ($hit !== null) {
                 $curated[] = $hit;
-                $curatedIds[(string)($svc['id'] ?? '')] = true;
+                continue;
+            }
+            $reason = self::priceRefreshSkipReason($svc, $this->priceRefreshTool($svc));
+            if ($reason !== null) {
+                $skipped[] = ['id' => $id, 'reason' => $reason];
+                continue;
+            }
+            $remaining[] = $svc;
+        }
+
+        $result = [
+            'engine'     => 'catalogue',
+            'updated'    => $curated,
+            'not_found'  => [],
+            'skipped'    => $skipped,
+            'checked_at' => gmdate('c'),
+        ];
+        if ($remaining === []) {
+            return $result;
+        }
+
+        // La sonde reste « non » une fois l'arrêt demandé : aucun lot suivant
+        // ne part, et la panne qui en résulte se lit comme une annulation.
+        $cancelled = false;
+        $probe = $keepAlive === null ? null : static function () use ($keepAlive, &$cancelled): bool {
+            if ($cancelled) {
+                return false;
+            }
+            if ($keepAlive() === false) {
+                $cancelled = true;
+            }
+            return !$cancelled;
+        };
+
+        try {
+            $llm = $this->fetchUsdPricingViaLlm($remaining, $probe);
+        } catch (\Throwable $e) {
+            if ($cancelled || $curated === []) {
+                throw $e;
+            }
+            error_log('[Tarifs] Recherche en ligne en échec, prix du catalogue enregistrés : ' . $e->getMessage());
+            foreach ($remaining as $svc) {
+                $result['not_found'][] = ['id' => (string)$svc['id'], 'reason' => t('Recherche en ligne impossible.')];
+            }
+            $result['warning'] = t('Prix du catalogue enregistrés ; la recherche en ligne a échoué : {erreur}', ['erreur' => $e->getMessage()]);
+            return $result;
+        }
+
+        $engine = (string)($llm['engine'] ?? 'web');
+        $result['engine']     = $curated !== [] ? 'catalogue + ' . $engine : $engine;
+        $result['updated']    = array_merge($curated, (array)($llm['updated'] ?? []));
+        $result['not_found']  = (array)($llm['not_found'] ?? []);
+        $result['checked_at'] = (string)($llm['checked_at'] ?? gmdate('c'));
+        if (!empty($llm['warning'])) {
+            $result['warning'] = (string)$llm['warning'];
+        }
+        return $result;
+    }
+
+    /** Outil d'une ligne `tool:{id}`, ou null (autre ligne, outil disparu). */
+    private function priceRefreshTool(array $service): ?array
+    {
+        if (preg_match('/^tool:(\d+)$/', trim((string)($service['catalog_key'] ?? '')), $m) !== 1) {
+            return null;
+        }
+        try {
+            return ChatTool::findById((int)$m[1]);
+        } catch (\Throwable) {
+            return null;
+        }
+    }
+
+    /**
+     * Ce qui se paie quand l'outil sert, quand ce n'est PAS un prix unitaire
+     * (pure). Null : l'outil a un prix unitaire (image, seconde de vidéo).
+     * Partagé par la recherche des prix (rien à chercher en ligne) et
+     * l'écran Tarifs & crédits (dit sous la ligne, au lieu de « non tarifé »).
+     */
+    public static function toolCostBasis(?array $tool): ?string
+    {
+        if ($tool === null) {
+            return null;
+        }
+        $type = strtolower(trim((string)($tool['type'] ?? '')));
+        if (in_array($type, ['image', 'video'], true)) {
+            $pricing = CreditService::catalogToolPricing($type, (string)($tool['model'] ?? ''));
+            return is_array($pricing['tokens_usd_per_1m'] ?? null)
+                ? t('Tarif public au jeton : chaque image selon sa taille et sa qualité.')
+                : null;
+        }
+        return match ($type) {
+            'html', 'html_illustrated', 'map', 'presentation' => t('Compté aux jetons de son modèle de langage, comme une réponse.'),
+            'gamma' => t('Crédits facturés par Gamma, hors de MIA.'),
+            'n8n'   => t('Aucun coût IA du côté de MIA.'),
+            default => t('Aucun coût propre à cet outil.'),
+        };
+    }
+
+    /**
+     * Raison de NE PAS chercher le prix d'un service en ligne (pure), ou null.
+     * Appelée après les tarifs du catalogue : un modèle d'image tarifé au
+     * jeton y est déjà traité.
+     */
+    public static function priceRefreshSkipReason(array $service, ?array $tool): ?string
+    {
+        $key = trim((string)($service['catalog_key'] ?? ''));
+        if (preg_match('/^llm:([a-z0-9_.-]+)::/i', $key, $m) === 1
+            && in_array(strtolower($m[1]), CreditService::FREE_PROVIDERS, true)) {
+            return t('Modèle local : gratuit, rien à tarifer.');
+        }
+        if (preg_match('/^tool:\d+$/', $key) !== 1) {
+            return null;
+        }
+        if ($tool === null) {
+            return t('Outil introuvable : rien à tarifer.');
+        }
+        $type = strtolower(trim((string)($tool['type'] ?? '')));
+        if (in_array($type, ['image', 'video'], true)
+            && ToolCatalog::isRetired($type, (string)($tool['provider'] ?? ''), (string)($tool['model'] ?? ''))) {
+            return t('Modèle arrêté par son fournisseur : plus aucune génération à tarifer.');
+        }
+        return self::toolCostBasis($tool);
+    }
+
+    /**
+     * Lots de la recherche en ligne (pure) : services regroupés par
+     * fournisseur — une même page de tarifs sert tout le lot —, puis coupés à
+     * `PRICE_BATCH_SIZE`. Un lot court se lit vite et ne tronque pas la sortie.
+     *
+     * @return list<list<array<string, mixed>>>
+     */
+    public static function priceLookupBatches(array $services, int $size = self::PRICE_BATCH_SIZE): array
+    {
+        $groups = [];
+        foreach ($services as $service) {
+            $provider = strtolower(trim((string)($service['provider'] ?? '')));
+            $groups[$provider !== '' ? $provider : '?'][] = $service;
+        }
+        $batches = [];
+        foreach ($groups as $rows) {
+            foreach (array_chunk($rows, max(1, $size)) as $chunk) {
+                $batches[] = $chunk;
             }
         }
-
-        // 2) Services restants → lookup LLM (clé requise seulement s'il en reste).
-        $remaining = array_values(array_filter(
-            $services,
-            static fn($s) => !isset($curatedIds[(string)($s['id'] ?? '')])
-        ));
-
-        if (empty($remaining)) {
-            return [
-                'engine'     => 'catalogue',
-                'updated'    => $curated,
-                'not_found'  => [],
-                'checked_at' => gmdate('c'),
-            ];
-        }
-
-        $llm    = $this->fetchUsdPricingViaLlm($remaining, $keepAlive);
-        $engine = $curated !== []
-            ? 'catalogue + ' . (string)($llm['engine'] ?? 'web')
-            : (string)($llm['engine'] ?? 'web');
-
-        return [
-            'engine'     => $engine,
-            'updated'    => array_merge($curated, (array)($llm['updated'] ?? [])),
-            'not_found'  => (array)($llm['not_found'] ?? []),
-            'checked_at' => (string)($llm['checked_at'] ?? gmdate('c')),
-        ];
+        return $batches;
     }
 
     /**
@@ -6787,7 +7863,7 @@ class AdminController
      * Tarif curé d'un service hors LLM de chat, d'après sa `catalog_key` :
      *   - `embedding:{provider}::{model}` → `pricing_usd_per_1m` du catalogue d'embeddings ;
      *   - `websearch:{provider}`          → `web_search_pricing_usd_per_1k` / 1000 ;
-     *   - `transcribe:openai::{model}`    → `transcription_pricing_usd_per_minute`.
+     *   - `transcribe:{provider}::{model}` → `transcription_pricing_usd_per_minute`.
      * Null si la clé n'est pas de ces formes ou si le catalogue ne tarife pas.
      *
      * @return array{real_cost_usd:float, source_url:string, source_note:string}|null
@@ -6813,20 +7889,27 @@ class AdminController
                 ? ['real_cost_usd' => (float)$usdPer1k / 1000, 'source_url' => '', 'source_note' => t('Tarif catalogue : {prix} $ les 1 000 recherches.', ['prix' => (float)$usdPer1k])]
                 : null;
         }
-        if (str_starts_with($key, 'transcribe:openai::')) {
-            $model = substr($key, strlen('transcribe:openai::'));
-            $table = LlmCatalog::provider('openai')['transcription_pricing_usd_per_minute'] ?? [];
+        if (preg_match('/^transcribe:([a-z0-9_.-]+)::(.+)$/i', $key, $tm) === 1) {
+            $model = $tm[2];
+            $table = LlmCatalog::provider(strtolower($tm[1]))['transcription_pricing_usd_per_minute'] ?? [];
             $usd   = $table[$model] ?? ($table['default'] ?? null);
             return is_numeric($usd)
                 ? ['real_cost_usd' => (float)$usd, 'source_url' => '', 'source_note' => t('Tarif catalogue dictée (USD / minute).')]
                 : null;
         }
-        if (str_starts_with($key, 'speech:openai::')) {
-            $model = substr($key, strlen('speech:openai::'));
-            $table = LlmCatalog::provider('openai')['speech_pricing_usd_per_minute'] ?? [];
+        if (preg_match('/^speech:([a-z0-9_.-]+)::(.+)$/i', $key, $sm) === 1) {
+            $model   = $sm[2];
+            $catalog = LlmCatalog::provider(strtolower($sm[1]));
+            $table   = $catalog['speech_pricing_usd_per_minute'] ?? [];
+            $usd     = $table[$model] ?? ($table['default'] ?? null);
+            if (is_numeric($usd)) {
+                return ['real_cost_usd' => (float)$usd, 'source_url' => '', 'source_note' => t('Tarif catalogue lecture à voix haute (USD / minute d\'audio produit).')];
+            }
+            // Voxtral : facturé au texte lu (USD par million de caractères).
+            $table = $catalog['speech_pricing_usd_per_1m_chars'] ?? [];
             $usd   = $table[$model] ?? ($table['default'] ?? null);
             return is_numeric($usd)
-                ? ['real_cost_usd' => (float)$usd, 'source_url' => '', 'source_note' => t('Tarif catalogue lecture à voix haute (USD / minute d\'audio produit).')]
+                ? ['real_cost_usd' => (float)$usd, 'source_url' => '', 'source_note' => t('Tarif catalogue lecture à voix haute (USD / million de caractères lus).')]
                 : null;
         }
         // Ligne d'un outil image ou vidéo : tarif public du modèle au
@@ -6843,6 +7926,14 @@ class AdminController
             }
             $source = (string)($pricing['source_url'] ?? '');
             $note   = trim((string)($pricing['note'] ?? ''));
+            // Tarifé au jeton : aucun prix unitaire ne le résume, et un prix
+            // posé sur la ligne PRIMERAIT sur le calcul image par image
+            // (CreditService::computeToolCredits) — c'est ce qu'écrivait la
+            // recherche en ligne. Remis à zéro, la ligne suit le tarif public.
+            if (is_array($pricing['tokens_usd_per_1m'] ?? null)) {
+                return ['real_cost_usd' => 0.0, 'source_url' => $source,
+                        'source_note' => trim(self::toolCostBasis($tool) . ' ' . $note)];
+            }
             if (is_numeric($pricing['per_image_usd'] ?? null)) {
                 return ['real_cost_usd' => (float)$pricing['per_image_usd'], 'source_url' => $source,
                         'source_note' => t('Tarif catalogue outils (USD / image).') . ' ' . $note];
@@ -6891,7 +7982,7 @@ class AdminController
     /** @var array{user_id:?int} contexte d'imputation de la recherche de prix en cours */
     private array $priceRefreshBillingCtx = ['user_id' => null];
 
-    private function fetchUsdPricingViaLlm(array $services, ?callable $keepAlive = null): array
+    protected function fetchUsdPricingViaLlm(array $services, ?callable $keepAlive = null): array
     {
         $openaiKey = ApiKey::getDecrypted('openai');
         if ($openaiKey) {
@@ -6908,12 +7999,104 @@ class AdminController
         );
     }
 
+    /**
+     * Essais successifs d'une recherche de prix OpenAI (pure), du plus rapide
+     * au plus sûr : le modèle de recherche des prix du catalogue, puis celui
+     * de la clé (le compte n'a peut-être pas accès au premier), puis le modèle
+     * de recherche web du fournisseur. Un modèle qui raisonne est d'abord
+     * essayé à effort FAIBLE — lire une page de tarifs n'en demande pas plus,
+     * et c'est ce qui faisait durer la recherche des minutes — puis sans le
+     * réglage, s'il le refuse. Un modèle connu qui ne cherche pas lui-même sur
+     * le web (il refuserait l'outil) et un modèle arrêté sont écartés.
+     *
+     * @return list<array{model:string, reasoning:bool}>
+     */
+    public static function priceLookupVariants(?string $keyModel): array
+    {
+        $models = [];
+        $candidates = [
+            LlmCatalog::provider('openai')['price_lookup_model'] ?? null,
+            $keyModel,
+            LlmCatalog::fallbackSearchModel('openai'),
+        ];
+        foreach ($candidates as $candidate) {
+            $model = trim((string)$candidate);
+            if ($model === '' || in_array($model, $models, true) || LlmCatalog::isRetired('openai', $model)) {
+                continue;
+            }
+            $info = LlmCatalog::model('openai', $model);
+            if (is_array($info) && empty($info['web_native'])) {
+                continue;
+            }
+            $models[] = $model;
+        }
+
+        $variants = [];
+        foreach ($models as $model) {
+            if (in_array('raisonnement', (array)(LlmCatalog::model('openai', $model)['tags'] ?? []), true)) {
+                $variants[] = ['model' => $model, 'reasoning' => true];
+            }
+            $variants[] = ['model' => $model, 'reasoning' => false];
+        }
+        return $variants;
+    }
+
+    /**
+     * Un refus qui se corrige par l'essai suivant (pure) : `reasoning` (le
+     * modèle refuse l'effort de raisonnement), `model` (modèle inconnu du
+     * compte, ou qui refuse la recherche web) ; null sinon — l'erreur est
+     * alors celle du lot.
+     */
+    public static function pricingRetryKind(int $status, string $body): ?string
+    {
+        if ($status < 400 || $status >= 500 || $status === 401 || $status === 429) {
+            return null;
+        }
+        $detail = LlmAdapterHelpers::errorDetail(json_decode($body, true), $body, $status);
+        if (stripos($detail, 'reasoning') !== false) {
+            return 'reasoning';
+        }
+        if (stripos($detail, 'web_search') !== false
+            || LlmErrorPresenter::classify($status, $detail) === 'model') {
+            return 'model';
+        }
+        return null;
+    }
+
+    /** Essai suivant d'un lot refusé (pure), ou null s'il n'y en a plus. */
+    public static function nextPricingVariant(array $variants, int $current, string $kind): ?int
+    {
+        $model = (string)($variants[$current]['model'] ?? '');
+        for ($i = $current + 1, $n = count($variants); $i < $n; $i++) {
+            if ($kind !== 'model' || (string)$variants[$i]['model'] !== $model) {
+                return $i;
+            }
+        }
+        return null;
+    }
+
     private function fetchUsdPricingWithOpenAI(array $services, string $key, ?callable $keepAlive = null): array
     {
-        // Sans modèle enregistré avec la clé : GPT-6 Luna, le moins cher
-        // d'OpenAI avec la recherche web, remplaçant désigné de gpt-4.1-mini
-        // (utilisé ici jusqu'à son arrêt annoncé du 14/01/2027).
-        $model = ApiKey::getModel('openai') ?: 'gpt-6-luna';
+        $url      = LlmCatalog::endpoint('openai', 'responses') ?? 'https://api.openai.com/v1/responses';
+        $variants = self::priceLookupVariants(ApiKey::getModel('openai'));
+
+        return $this->runPricingBatches(
+            'OpenAI',
+            $services,
+            $variants,
+            fn(array $batch, array $variant): array => [
+                'url'     => $url,
+                'bearer'  => $key,
+                'payload' => $this->openAiPricingPayload($batch, $variant),
+            ],
+            fn(int $status, string $body, array $batch, array $variant): array
+                => $this->readOpenAiPricingResponse($status, $body, $batch, (string)$variant['model']),
+            $keepAlive
+        );
+    }
+
+    private function openAiPricingPayload(array $services, array $variant): string
+    {
         $servicesJson = json_encode($services, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
         if (!is_string($servicesJson)) {
             throw new \RuntimeException(t('Impossible de sérialiser la liste des services.'));
@@ -6950,24 +8133,21 @@ Services:
 $servicesJson
 PROMPT;
 
-        $payload = json_encode([
-            'model'             => $model,
+        $payload = [
+            'model'             => (string)$variant['model'],
             'input'             => $prompt,
             'tools'             => [['type' => 'web_search']],
             'max_output_tokens' => 16000,
-        ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-
-        [$status, $body, $netError] = $this->postJsonPricingRequest(
-            'https://api.openai.com/v1/responses',
-            $payload,
-            $key,
-            $keepAlive
-        );
-
-        if ($netError !== null) {
-            throw new \RuntimeException(t('Appel OpenAI impossible ({erreur}).', ['erreur' => $netError]));
+        ];
+        if (!empty($variant['reasoning'])) {
+            $payload['reasoning'] = ['effort' => 'low'];
         }
 
+        return (string)json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    }
+
+    private function readOpenAiPricingResponse(int $status, string $body, array $services, string $model): array
+    {
         $json = json_decode($body, true);
         if (!is_array($json)) {
             $snippet = $this->snippetForError($body);
@@ -6987,22 +8167,16 @@ PROMPT;
             throw new \RuntimeException(t('OpenAI a refusé la requête (HTTP {statut}) : {message}', ['statut' => $status, 'message' => (string)$message]));
         }
 
-        // Consommation de la recherche (tokens + appels `web_search_call`),
+        // Consommation de la recherche (tokens + recherches facturées),
         // journalisée avant toute interprétation : une sortie inexploitable
         // a quand même été payée.
         $usage = is_array($json['usage'] ?? null) ? $json['usage'] : [];
-        $webSearches = 0;
-        foreach ((array)($json['output'] ?? []) as $item) {
-            if (is_array($item) && ($item['type'] ?? '') === 'web_search_call') {
-                $webSearches++;
-            }
-        }
         UsageMeter::llm('openai::' . $model, [
             'input'            => (int)($usage['input_tokens'] ?? 0),
             'output'           => (int)($usage['output_tokens'] ?? 0),
             'input_cached'     => (int)($usage['input_tokens_details']['cached_tokens'] ?? 0),
             'output_reasoning' => (int)($usage['output_tokens_details']['reasoning_tokens'] ?? 0),
-            'web_searches'     => $webSearches,
+            'web_searches'     => OpenAIAdapter::countWebSearchCalls($json),
         ], UsageSource::PRICE_REFRESH, $this->priceRefreshBillingCtx);
 
         $text = trim($this->extractOpenAIResponsesText($json));
@@ -7030,6 +8204,25 @@ PROMPT;
 
     private function fetchUsdPricingWithPerplexity(array $services, string $key, ?callable $keepAlive = null): array
     {
+        $url = LlmCatalog::endpoint('perplexity', 'chat_completions') ?? 'https://api.perplexity.ai/chat/completions';
+
+        return $this->runPricingBatches(
+            'Perplexity',
+            $services,
+            [['model' => 'sonar-pro', 'reasoning' => false]],
+            fn(array $batch, array $variant): array => [
+                'url'     => $url,
+                'bearer'  => $key,
+                'payload' => $this->perplexityPricingPayload($batch),
+            ],
+            fn(int $status, string $body, array $batch, array $variant): array
+                => $this->readPerplexityPricingResponse($status, $body, $batch),
+            $keepAlive
+        );
+    }
+
+    private function perplexityPricingPayload(array $services): string
+    {
         $servicesJson = json_encode($services, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
         if (!is_string($servicesJson)) {
             throw new \RuntimeException(t('Impossible de sérialiser la liste des services.'));
@@ -7055,7 +8248,7 @@ Services:
 $servicesJson
 PROMPT;
 
-        $payload = json_encode([
+        return (string)json_encode([
             'model'       => 'sonar-pro',
             'temperature' => 0.0,
             'messages'    => [
@@ -7063,18 +8256,10 @@ PROMPT;
                 ['role' => 'user', 'content' => $prompt],
             ],
         ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    }
 
-        [$status, $body, $netError] = $this->postJsonPricingRequest(
-            'https://api.perplexity.ai/chat/completions',
-            $payload,
-            $key,
-            $keepAlive
-        );
-
-        if ($netError !== null) {
-            throw new \RuntimeException(t('Appel Perplexity impossible ({erreur}).', ['erreur' => $netError]));
-        }
-
+    private function readPerplexityPricingResponse(int $status, string $body, array $services): array
+    {
         $json = json_decode($body, true);
         if (!is_array($json)) {
             $snippet = $this->snippetForError($body);
@@ -7112,6 +8297,191 @@ PROMPT;
     }
 
     /**
+     * Mène la recherche en ligne par lots EN PARALLÈLE (`priceLookupBatches`) :
+     * la durée est celle du lot le plus long, plus la somme de tous — c'est ce
+     * qui rendait la mise à jour si lente, un seul appel cherchant tous les
+     * services l'un après l'autre. Un lot refusé pour une raison que l'essai
+     * suivant corrige (`pricingRetryKind`) repart avec lui ; un lot en échec
+     * n'emporte pas les autres : ses services sont dits « sans prix » et la
+     * panne passe dans `warning`. Tous en échec : l'erreur du premier.
+     *
+     * @param list<array{model:string, reasoning:bool}> $variants essais successifs
+     * @param callable(array, array): array{url:string, bearer:string, payload:string} $build
+     * @param callable(int, string, array, array): array $read résultat d'un lot (lève sur erreur)
+     */
+    private function runPricingBatches(
+        string $label,
+        array $services,
+        array $variants,
+        callable $build,
+        callable $read,
+        ?callable $keepAlive
+    ): array {
+        if ($variants === []) {
+            throw new \RuntimeException(t('Aucun modèle {service} ne sait chercher les prix sur Internet.', ['service' => $label]));
+        }
+
+        $batches = self::priceLookupBatches($services);
+        $variant = array_fill(0, count($batches), 0);
+        $results = [];
+        $errors  = [];
+        $todo    = array_keys($batches);
+
+        while ($todo !== []) {
+            $requests = [];
+            foreach ($todo as $i) {
+                $requests[$i] = $build($batches[$i], $variants[$variant[$i]]);
+            }
+            $responses = $this->postJsonPricingRequests($requests, $keepAlive);
+            if ($keepAlive !== null && $keepAlive() === false) {
+                throw new \RuntimeException(t('Recherche interrompue.'));
+            }
+
+            $retry = [];
+            foreach ($todo as $i) {
+                [$status, $body, $netError] = $responses[$i] ?? [0, '', t('requête HTTP échouée')];
+                if ($netError !== null) {
+                    $errors[$i] = t('Appel {service} impossible ({erreur}).', ['service' => $label, 'erreur' => $netError]);
+                    continue;
+                }
+                $kind = self::pricingRetryKind((int)$status, (string)$body);
+                $next = $kind !== null ? self::nextPricingVariant($variants, $variant[$i], $kind) : null;
+                if ($next !== null) {
+                    $variant[$i] = $next;
+                    $retry[] = $i;
+                    continue;
+                }
+                try {
+                    $results[$i] = $read((int)$status, (string)$body, $batches[$i], $variants[$variant[$i]]);
+                } catch (\RuntimeException $e) {
+                    $errors[$i] = $e->getMessage();
+                }
+            }
+            $todo = $retry;
+        }
+
+        if ($results === []) {
+            throw new \RuntimeException((string)reset($errors));
+        }
+
+        $merged = ['engine' => '', 'updated' => [], 'not_found' => [], 'checked_at' => gmdate('c')];
+        $engines = [];
+        foreach ($results as $result) {
+            $engines[] = (string)($result['engine'] ?? '');
+            $merged['updated']   = array_merge($merged['updated'], (array)($result['updated'] ?? []));
+            $merged['not_found'] = array_merge($merged['not_found'], (array)($result['not_found'] ?? []));
+        }
+        $merged['engine'] = implode(', ', array_values(array_unique(array_filter($engines))));
+
+        if ($errors !== []) {
+            foreach (array_keys($errors) as $i) {
+                foreach ($batches[$i] as $service) {
+                    $merged['not_found'][] = ['id' => (string)($service['id'] ?? ''), 'reason' => t('Recherche en ligne impossible.')];
+                }
+            }
+            $merged['warning'] = t('Recherche en ligne incomplète : {erreur}', ['erreur' => (string)reset($errors)]);
+            error_log('[Tarifs] ' . count($errors) . ' lot(s) sur ' . count($batches) . ' en échec : ' . implode(' | ', $errors));
+        }
+
+        return $merged;
+    }
+
+    /**
+     * Plusieurs requêtes de recherche de prix à la fois (`curl_multi`, au plus
+     * `PRICE_PARALLEL` en vol). La sonde bat le cœur du job à chaque tour de
+     * boucle et, si elle répond non, coupe tout : rien ne part plus, la
+     * recherche s'arrête. Sans `curl_multi` (ou avec le transport des tests),
+     * une requête après l'autre.
+     *
+     * @param array<int, array{url:string, bearer:string, payload:string}> $requests
+     * @return array<int, array{0:int, 1:string, 2:?string}>
+     */
+    private function postJsonPricingRequests(array $requests, ?callable $keepAlive = null): array
+    {
+        if (count($requests) <= 1 || self::$pricingTransport !== null || !function_exists('curl_multi_init')) {
+            $out = [];
+            foreach ($requests as $k => $r) {
+                $out[$k] = $this->postJsonPricingRequest($r['url'], $r['payload'], $r['bearer'], $keepAlive);
+            }
+            return $out;
+        }
+
+        $multi   = curl_multi_init();
+        $pending = $requests;
+        $active  = [];
+        $out     = [];
+        try {
+            while ($pending !== [] || $active !== []) {
+                while ($pending !== [] && count($active) < self::PRICE_PARALLEL) {
+                    $k = array_key_first($pending);
+                    $r = $pending[$k];
+                    unset($pending[$k]);
+                    $ch = curl_init($r['url']);
+                    curl_setopt_array($ch, $this->pricingCurlOptions($r['payload'], $r['bearer']));
+                    curl_multi_add_handle($multi, $ch);
+                    $active[spl_object_id($ch)] = [$k, $ch];
+                }
+
+                do {
+                    $state = curl_multi_exec($multi, $running);
+                } while ($state === CURLM_CALL_MULTI_PERFORM);
+
+                while (($info = curl_multi_info_read($multi)) !== false) {
+                    $id = spl_object_id($info['handle']);
+                    if (!isset($active[$id])) {
+                        continue;
+                    }
+                    [$k, $ch] = $active[$id];
+                    unset($active[$id]);
+                    $body   = curl_multi_getcontent($ch);
+                    $status = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+                    $out[$k] = $info['result'] === CURLE_OK && is_string($body)
+                        ? [$status, $body, null]
+                        : [0, '', curl_strerror((int)$info['result']) ?: t('erreur cURL')];
+                    curl_multi_remove_handle($multi, $ch);
+                }
+
+                if ($keepAlive !== null && $keepAlive() === false) {
+                    throw new \RuntimeException(t('Recherche interrompue.'));
+                }
+                if ($active !== [] && curl_multi_select($multi, 1.0) === -1) {
+                    usleep(50000);
+                }
+            }
+        } finally {
+            foreach ($active as [, $ch]) {
+                curl_multi_remove_handle($multi, $ch);
+            }
+            curl_multi_close($multi);
+        }
+
+        // Dans l'ordre des requêtes, pas dans celui des réponses.
+        $ordered = [];
+        foreach (array_keys($requests) as $k) {
+            $ordered[$k] = $out[$k] ?? [0, '', t('requête HTTP échouée')];
+        }
+        return $ordered;
+    }
+
+    /** Options cURL d'une requête de recherche de prix (une seule et en parallèle). */
+    private function pricingCurlOptions(string $payload, string $bearer): array
+    {
+        return [
+            CURLOPT_POST           => true,
+            CURLOPT_POSTFIELDS     => $payload,
+            CURLOPT_HTTPHEADER     => [
+                'Content-Type: application/json',
+                'Accept: application/json',
+                'Authorization: Bearer ' . $bearer,
+            ],
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_TIMEOUT        => 180,
+            CURLOPT_CONNECTTIMEOUT => 15,
+            CURLOPT_FAILONERROR    => false,
+        ];
+    }
+
+    /**
      * POST JSON helper pour les appels de pricing. Préfère cURL si dispo
      * (meilleurs codes/erreurs, timeout fiable) ; fallback file_get_contents.
      * Renvoie [statusHttp, body, netError|null].
@@ -7124,24 +8494,19 @@ PROMPT;
         string $bearer,
         ?callable $keepAlive = null
     ): array {
+        if (self::$pricingTransport !== null) {
+            if ($keepAlive !== null && $keepAlive() === false) {
+                return [0, '', t('Recherche interrompue.')];
+            }
+            return (self::$pricingTransport)($url, $payload, $bearer);
+        }
+
         $timeoutSec = 180;
 
         if (function_exists('curl_init')) {
             $ch = curl_init($url);
             if ($ch !== false) {
-                curl_setopt_array($ch, [
-                    CURLOPT_POST           => true,
-                    CURLOPT_POSTFIELDS     => $payload,
-                    CURLOPT_HTTPHEADER     => [
-                        'Content-Type: application/json',
-                        'Accept: application/json',
-                        'Authorization: Bearer ' . $bearer,
-                    ],
-                    CURLOPT_RETURNTRANSFER => true,
-                    CURLOPT_TIMEOUT        => $timeoutSec,
-                    CURLOPT_CONNECTTIMEOUT => 15,
-                    CURLOPT_FAILONERROR    => false,
-                ]);
+                curl_setopt_array($ch, $this->pricingCurlOptions($payload, $bearer));
                 // Le transfert peut durer plus longtemps que le délai au-delà
                 // duquel un job sans battement est considéré mort : la sonde
                 // bat le cœur pendant l'attente, et interrompt le transfert si
@@ -7608,6 +8973,7 @@ PROMPT;
             'image_generated',
             'video_second',
             'audio_minute',
+            CreditService::UNIT_1M_CHARACTERS,
             'api_call',
             'request',
             'minute',
@@ -8029,20 +9395,59 @@ PROMPT;
                     'internal_comment' => t('Minute d\'audio transcrite (durée rapportée par le navigateur en fin de dictée).'),
                 ];
             }
-            // Lecture à voix haute (conversation vocale) : un service pour le
-            // modèle de synthèse, à la minute d'audio produit (mesurée côté
-            // serveur sur l'audio reçu d'OpenAI).
+            // Lecture à voix haute (conversation vocale) : un service par voix
+            // OpenAI (Realtime, et l'ancienne tant qu'OpenAI la sert), à la
+            // minute d'audio produit, mesurée côté serveur sur l'audio reçu.
+            foreach ([SpeechSynthesizer::ENGINE_OPENAI, SpeechSynthesizer::ENGINE_LEGACY] as $engine) {
+                if ((SpeechSynthesizer::retirement($engine)['retired'] ?? false)) {
+                    continue;
+                }
+                $modelName = (string)SpeechSynthesizer::ENGINES[$engine]['model'];
+                $rows[] = [
+                    'id' => 'svc-speech-' . $this->slugify($modelName),
+                    'name' => t('Lecture à voix haute {modele}', ['modele' => $modelName]),
+                    'provider' => 'Openai',
+                    'type' => 'audio',
+                    'unit' => 'audio_minute',
+                    'real_cost_eur' => 0.0,
+                    'multiplier' => 1.0,
+                    'active' => true,
+                    'catalog_key' => 'speech:openai::' . $modelName,
+                    'internal_comment' => t('Minute d\'audio produite par la synthèse vocale (conversation vocale), mesurée sur l\'audio reçu.'),
+                ];
+            }
+        }
+
+        // Dictée vocale avec Voxtral (Mistral) : un service par modèle, à la
+        // minute d'audio que Mistral a mesurée (`usage.prompt_audio_seconds`).
+        if (isset($providersWithKey['mistral'])) {
+            foreach (Dictation::MISTRAL_MODELS as $modelName) {
+                $rows[] = [
+                    'id' => 'svc-transcribe-' . $this->slugify('mistral-' . $modelName),
+                    'name' => t('Dictée {modele}', ['modele' => $modelName]),
+                    'provider' => 'Mistral',
+                    'type' => 'audio',
+                    'unit' => 'audio_minute',
+                    'real_cost_eur' => 0.0,
+                    'multiplier' => 1.0,
+                    'active' => true,
+                    'catalog_key' => 'transcribe:mistral::' . $modelName,
+                    'internal_comment' => t('Minute d\'audio transcrite par Voxtral (durée mesurée par Mistral).'),
+                ];
+            }
+            // Lecture à voix haute avec Voxtral TTS : Mistral facture le
+            // texte lu, au million de caractères.
             $rows[] = [
-                'id' => 'svc-speech-' . $this->slugify(SpeechSynthesizer::MODEL),
-                'name' => t('Lecture à voix haute {modele}', ['modele' => SpeechSynthesizer::MODEL]),
-                'provider' => 'Openai',
+                'id' => 'svc-speech-' . $this->slugify('mistral-' . SpeechSynthesizer::MISTRAL_MODEL),
+                'name' => t('Lecture à voix haute {modele}', ['modele' => SpeechSynthesizer::MISTRAL_MODEL]),
+                'provider' => 'Mistral',
                 'type' => 'audio',
-                'unit' => 'audio_minute',
+                'unit' => CreditService::UNIT_1M_CHARACTERS,
                 'real_cost_eur' => 0.0,
                 'multiplier' => 1.0,
                 'active' => true,
-                'catalog_key' => 'speech:openai::' . SpeechSynthesizer::MODEL,
-                'internal_comment' => t('Minute d\'audio produite par la synthèse vocale (conversation vocale), mesurée sur l\'audio reçu.'),
+                'catalog_key' => 'speech:mistral::' . SpeechSynthesizer::MISTRAL_MODEL,
+                'internal_comment' => t('Million de caractères lus par Voxtral TTS (conversation vocale).'),
             ];
         }
 
@@ -8185,9 +9590,15 @@ PROMPT;
 
         // Détection MIME robuste : les DOCX sont parfois vus comme application/zip
         $mime = FileExtractor::detectMime((string)$file['tmp_name'], $name);
+        // HEIC, AVIF, TIFF, BMP : convertis en JPEG avant tout (sur place).
+        [$mime, $name, $convertError] = ImageConvert::forUpload((string)$file['tmp_name'], $name, $mime);
+        if ($convertError !== null) {
+            return ['ok' => false, 'error' => $convertError];
+        }
+        $size = (int)(@filesize((string)$file['tmp_name']) ?: $size);
         $ext  = self::PROFILE_DOC_ALLOWED_MIMES[$mime] ?? null;
         if ($ext === null) {
-            return ['ok' => false, 'error' => t('Format non supporté pour « {nom} ». Formats acceptés : PDF, DOCX, XLSX, TXT, MD, images.', ['nom' => $name])];
+            return ['ok' => false, 'error' => FileExtractor::unsupportedMessage($name, $mime)];
         }
 
         $existing = ProfileDocument::allForProfile($profileId);

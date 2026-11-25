@@ -50,7 +50,7 @@ final class AdminAttentionTest extends TestCase
     {
         $s = self::parId(AdminAttention::llmSignals(['gemini'], [], [], '', '', null));
         $this->assertArrayHasKey('llm_fournisseur_sans_modele', $s);
-        $this->assertSame('llms-models', $s['llm_fournisseur_sans_modele']['entry']);
+        $this->assertSame('llms-keys', $s['llm_fournisseur_sans_modele']['entry']);
         $this->assertSame(AdminAttention::WARN, $s['llm_fournisseur_sans_modele']['level']);
         $this->assertStringContainsString('Gemini', $s['llm_fournisseur_sans_modele']['text']);
 
@@ -230,7 +230,7 @@ final class AdminAttentionTest extends TestCase
     private static function outil(int $id, string $nom, array $champs = []): array
     {
         return $champs + [
-            'id' => $id, 'name' => $nom, 'type' => 'image', 'provider' => 'openai', 'model' => 'gpt-image-2',
+            'id' => $id, 'name' => $nom, 'type' => 'image', 'provider' => 'openai', 'model' => 'gpt-image-2.6-flare',
             'config_json' => '{}', 'api_key_enc' => null, 'is_active' => 1, 'last_test_ok' => null,
         ];
     }
@@ -273,6 +273,17 @@ final class AdminAttentionTest extends TestCase
         $s = self::parId(AdminAttention::toolSignals([], [], [], true, false, false));
         $this->assertStringContainsString('La dictée vocale est activée', $s['voix_sans_openai']['text']);
         $this->assertStringContainsString('désactivez-la', $s['voix_sans_openai']['text']);
+
+        // Voxtral en vigueur : la dictée marche, le bouton de conversation se montre
+        // et ne peut pas démarrer — ce n'est plus invisible, c'est une alerte.
+        $s = self::parId(AdminAttention::toolSignals([], [], [], false, true, false, true));
+        $this->assertSame('alert', $s['voix_sans_openai']['level']);
+        $this->assertStringContainsString('Voxtral', $s['voix_sans_openai']['text']);
+        $this->assertStringContainsString('pastille rouge', $s['voix_sans_openai']['text']);
+
+        $s = self::parId(AdminAttention::toolSignals([], [], [], false, true, false));
+        $this->assertSame('warn', $s['voix_sans_openai']['level'], 'Sans IA vocale, le bouton reste absent');
+        $this->assertStringNotContainsString('Voxtral', $s['voix_sans_openai']['text']);
 
         $this->assertSame([], AdminAttention::toolSignals([], [], [], true, true, true), 'Avec une clé OpenAI, rien à dire');
         $this->assertSame([], AdminAttention::toolSignals([], [], [], false, false, false), 'Désactivées : rien à dire');
@@ -398,23 +409,22 @@ final class AdminAttentionTest extends TestCase
     public function testLaBulleDUneEntreeDitToutEtCelleDuGroupeResume(): void
     {
         $signals = [
-            ['id' => 'a', 'entry' => 'llms-models', 'level' => AdminAttention::WARN, 'short' => 'court A', 'text' => 'Texte A.', 'dedicated' => false],
-            ['id' => 'b', 'entry' => 'llms-models', 'level' => AdminAttention::ALERT, 'short' => 'court B', 'text' => 'Texte B.', 'dedicated' => false],
+            ['id' => 'a', 'entry' => 'llms-keys', 'level' => AdminAttention::WARN, 'short' => 'court A', 'text' => 'Texte A.', 'dedicated' => false],
+            ['id' => 'b', 'entry' => 'llms-keys', 'level' => AdminAttention::ALERT, 'short' => 'court B', 'text' => 'Texte B.', 'dedicated' => false],
             ['id' => 'c', 'entry' => 'llms-keys', 'level' => AdminAttention::ALERT, 'short' => 'aucune clé API', 'text' => AdminAttention::TEXTE_AUCUNE_CLE, 'dedicated' => true],
             ['id' => 'd', 'entry' => 'profiles', 'level' => AdminAttention::WARN, 'short' => 'court D', 'text' => 'Texte D.', 'dedicated' => false],
         ];
 
-        $entree = AdminAttention::forEntry($signals, 'llms-models');
+        // Le constat dédié (c) a sa propre pastille : la mécanique commune le laisse.
+        $entree = AdminAttention::forEntry($signals, 'llms-keys');
         $this->assertSame(AdminAttention::ALERT, $entree['level'], 'Le pire niveau l\'emporte');
         $this->assertSame("• Texte A.\n• Texte B.", $entree['text']);
         $this->assertSame(['level' => AdminAttention::WARN, 'text' => 'Texte D.'], AdminAttention::forEntry($signals, 'profiles'));
         $this->assertNull(AdminAttention::forEntry($signals, 'tools'));
-        // Le constat dédié a sa propre pastille : la mécanique commune le laisse.
-        $this->assertNull(AdminAttention::forEntry($signals, 'llms-keys'));
 
         $groupe = AdminAttention::forGroup($signals, 'models');
         $this->assertSame(AdminAttention::ALERT, $groupe['level']);
-        $this->assertSame("À régler dans ce menu :\n• Modèles : court A\n• Modèles : court B", $groupe['text']);
+        $this->assertSame("À régler dans ce menu :\n• Fournisseurs et modèles : court A\n• Fournisseurs et modèles : court B", $groupe['text']);
         $this->assertNull(AdminAttention::forGroup($signals, 'capabilities'));
         // Assistants et bases : pages de l'espace de travail, sans groupe du menu.
         foreach (AdminAttention::GROUPS as $entrees) {
@@ -441,10 +451,7 @@ final class AdminAttentionTest extends TestCase
             }
             $this->assertSame($href, AdminAccess::PAGE_HREFS[$entry], "Adresse du constat ≠ adresse du menu : $entry");
             $this->assertSame($libelle, AdminMenu::pageLabel($entry), "Libellé du constat ≠ libellé du menu : $entry");
-            // « Clés API » ne porte que le constat dédié (pastille pulsante).
-            if ($entry !== 'llms-keys') {
-                $this->assertStringContainsString("AdminAttention::forEntry(\$navAttention, '$entry')", $nav, "Entrée non câblée : $entry");
-            }
+            $this->assertStringContainsString("AdminAttention::forEntry(\$navAttention, '$entry')", $nav, "Entrée non câblée : $entry");
         }
         foreach (array_keys(AdminAttention::GROUPS) as $groupe) {
             $this->assertArrayHasKey($groupe, AdminMenu::ENTRIES, "Groupe sans rubrique : $groupe");
@@ -481,7 +488,7 @@ final class AdminAttentionTest extends TestCase
         $this->assertStringNotContainsString("' title=\"' . htmlspecialchars(\$budgetNavTitle)", $nav);
     }
 
-    public function testLaBulleEstFixeAuDessusDeLaPastilleEtTexteAuDoigt(): void
+    public function testLaBulleEstFixeAuDessusDeLaPastilleEtJamaisEnTexte(): void
     {
         $js = self::lire('public/assets/js/nav-signals.js');
         $this->assertStringContainsString("getAttribute('aria-describedby')", $js);
@@ -494,7 +501,10 @@ final class AdminAttentionTest extends TestCase
         foreach (['.nav-signal-dot.is-alert', '.nav-hint-bubble {', '.nav-hint-bubble[hidden] { display: none !important; }', '.admin-burger .nav-signal-dot'] as $regle) {
             $this->assertStringContainsString($regle, $css);
         }
-        $this->assertMatchesRegularExpression('/@media \(hover: none\) \{\s*\.nav-signal-hint \{\s*display: block;/', $css, 'Au doigt, le texte s\'affiche sous l\'entrée');
+        // Demande d'Axel (2026-11-14) : le texte d'une pastille ne s'affiche
+        // JAMAIS en permanence, même au doigt — il vient en info-bulle.
+        $this->assertStringContainsString('.nav-signal-hint { display: none; }', $css);
+        $this->assertDoesNotMatchRegularExpression('/\.nav-signal-hint \{\s*display: block;/', $css, 'Le texte d\'une pastille ne s\'affiche plus sous l\'entrée');
         $pos = strpos($css, '.nav-hint-bubble {');
         $this->assertStringContainsString('position: fixed;', substr($css, (int)$pos, 200));
     }

@@ -365,6 +365,7 @@ class KbSync
         }
         $mime = (string)($file['mime'] ?? '');
         return isset(KnowledgeBaseDocument::ALLOWED_MIMES[$mime])
+            && !in_array($mime, KnowledgeBaseDocument::SYNC_EXCLUDED_MIMES, true)
             && (int)($file['size'] ?? 0) > 0
             && (int)$file['size'] <= KnowledgeBaseDocument::MAX_SYNC_FILE_SIZE;
     }
@@ -818,12 +819,14 @@ class KbSync
                 continue;
             }
             $mime = (string)$f['mime'];
-            if (!isset(KnowledgeBaseDocument::ALLOWED_MIMES[$mime]) || (int)$f['size'] <= 0) {
+            $excluded = in_array($mime, KnowledgeBaseDocument::SYNC_EXCLUDED_MIMES, true);
+            if (!isset(KnowledgeBaseDocument::ALLOWED_MIMES[$mime]) || $excluded || (int)$f['size'] <= 0) {
                 $report['ignored_unsupported']++;
                 self::noteIssue(
                     $report,
                     (string)$f['name'],
-                    isset(KnowledgeBaseDocument::ALLOWED_MIMES[$mime]) ? 'fichier vide' : 'format non pris en charge'
+                    $excluded ? 'archive non synchronisée'
+                        : (isset(KnowledgeBaseDocument::ALLOWED_MIMES[$mime]) ? 'fichier vide' : 'format non pris en charge')
                 );
                 continue;
             }

@@ -30,13 +30,18 @@ $noteDeSection = static function (string $section) use ($success, $error, $saved
 };
 ?>
 <div class="admin-content">
-    <h1><?= te('Authentification') ?></h1>
-    <p class="sso-lead">
+    <?php require ROOT . '/templates/partials/admin-topbar.php'; ?>
+    <header class="page-head">
+    <div class="page-head-text">
+        <h1><?= te('Authentification') ?></h1>
+        <p class="sso-lead page-head-sub">
         <?= teb('Les moyens de se connecter à {app} : {b}Google{/b}, {b}Microsoft{/b} et la connexion par {b}e-mail et mot de passe{/b}.', ['app' => Settings::get('app_name', 'MIA')]) ?>
         <?= strtr(te("Chacun s'active indépendamment ; la page de connexion n'affiche que ceux qui sont activés {i}et{/i} renseignés."), ['{i}' => '<em>', '{/i}' => '</em>']) ?>
         <?= strtr(te('Les identifiants Google servent aussi aux {lien} (Drive, Gmail, Agenda).'), ['{lien}' => '<a href="/admin/connectors">' . te('connecteurs personnels') . '</a>']) ?>
         <?= teb("{b}Chaque section s'enregistre avec son propre bouton{/b} — rien ne part avant le clic.") ?>
     </p>
+    </div>
+    </header>
 
     <?php if (!$sectionsConnues): ?>
         <?php if ($success): ?>
@@ -74,6 +79,7 @@ $noteDeSection = static function (string $section) use ($success, $error, $saved
                     <path fill="#34A853" d="M24 48c6.5 0 11.9-2.1 15.9-5.8l-7.5-5.8c-2.2 1.5-5 2.4-8.4 2.4-6.2 0-11.5-4.2-13.4-9.8l-8.1 6.6C6.6 42.4 14.6 48 24 48z"/>
                 </svg>
                 Google
+                <?= AdminAttention::itemDot('sso:google') ?>
             </h3>
             <label class="ios-switch" style="flex-shrink:0" title="<?= te('Proposer « Continuer avec Google » sur la page de connexion') ?>">
                 <input type="checkbox" name="google_enabled" value="1" <?= $googleEnabled ? 'checked' : '' ?>>
@@ -136,6 +142,7 @@ $noteDeSection = static function (string $section) use ($success, $error, $saved
                     <path fill="#00A4EF" d="M1 12h10v10H1z"/><path fill="#FFB900" d="M12 12h10v10H12z"/>
                 </svg>
                 Microsoft
+                <?= AdminAttention::itemDot('sso:microsoft') ?>
             </h3>
             <label class="ios-switch" style="flex-shrink:0" title="<?= te('Proposer « Continuer avec Microsoft » sur la page de connexion') ?>">
                 <input type="checkbox" name="microsoft_enabled" value="1" <?= $microsoftEnabled ? 'checked' : '' ?>>

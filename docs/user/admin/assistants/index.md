@@ -20,17 +20,17 @@ juriste aux RH, le support informatique à tout le monde —, il devient l'outil
 
 **Trois natures, une seule porte de sortie.** Tout assistant, même créé par un administrateur,
 naît **personnel** : seul son créateur le voit. Il devient **partagé** quand un administrateur
-active **Partage organisation** ; il n'est alors visible que dans les **groupes** où il est
+choisit **Partager à l'organisation** dans le menu **⋯** de sa ligne ; il n'est alors visible que dans les **groupes** où il est
 autorisé. L'assistant **global** — visible de tous sans groupe — est réservé à **MIA : mode
 d'emploi**, livré avec l'application.
 
 ```mermaid
 flowchart TB
   accTitle: La vie d'un assistant, de personnel à distribué
-  accDescr: Tout assistant naît personnel, visible de son seul créateur. L'interrupteur Partage organisation le rend partagé, visible des administrateurs. Le cocher dans un groupe le rend visible des membres de ce groupe. Désactiver le partage le rend personnel à nouveau et efface ses autorisations de groupe.
-  P["Personnel<br>visible de son seul créateur"] -- "« Partage organisation »" --> S["Partagé<br>visible des administrateurs"]
+  accDescr: Tout assistant naît personnel, visible de son seul créateur. Partager à l'organisation le rend partagé, visible des administrateurs. Le cocher dans un groupe le rend visible des membres de ce groupe. Rendre personnel le ramène à son créateur et efface ses autorisations de groupe.
+  P["Personnel<br>visible de son seul créateur"] -- "« Partager à l'organisation »" --> S["Partagé<br>visible des administrateurs"]
   S -- "coché dans un groupe" --> G["Visible des membres<br>de ce groupe"]
-  S -. "partage désactivé :<br>autorisations effacées" .-> P
+  S -. "« Rendre personnel » :<br>autorisations effacées" .-> P
 ```
 
 **Qui voit quoi dans le chat.** Un utilisateur voit l'union de :
@@ -56,10 +56,10 @@ modifier ceux qu'on a créés — même une fois partagés. Un créateur ne part
 
 | Réglage | Où | Effet | Page |
 |---|---|---|---|
-| **Partage organisation** | Liste des assistants, sur la ligne | Rend l'assistant distribuable | [Distribuer les assistants](distribuer-les-assistants.md) |
+| **Partager à l'organisation** | Page Assistants, menu **⋯** de la ligne | Rend l'assistant distribuable | [Distribuer les assistants](distribuer-les-assistants.md) |
 | **Droits d'accès → Assistants** | Personnes → Groupes, carte du groupe | Autorise l'assistant pour les membres du groupe | [Distribuer les assistants](distribuer-les-assistants.md) |
 | **Actif / Inactif** | Fiche de l'assistant | Le montre ou le cache à tous | [Gérer les assistants](gerer-les-assistants.md) |
-| Bibliothèque d'avatars | Liste des assistants, en haut | Les images proposées aux créateurs | [Gérer les assistants](gerer-les-assistants.md) |
+| Bibliothèque d'avatars | Page Assistants, lien en bas | Les images proposées aux créateurs | [Gérer les assistants](gerer-les-assistants.md) |
 | Rôle **Créateur** | Personnes → Comptes | Qui peut créer des assistants | [Gérer les utilisateurs](../utilisateurs/gerer-les-utilisateurs.md) |
 
 Pour créer un assistant, un administrateur suit la même fiche qu'un créateur, sans limite de

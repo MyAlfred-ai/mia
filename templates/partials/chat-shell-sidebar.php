@@ -8,8 +8,9 @@
    RÉPLIQUE de templates/chat/index.php (en-tête, bloc de départ, historique) :
    à garder synchronisée. Différences assumées, faute de chat.js sur ces pages :
    « Nouvelle conversation » est un lien vers `/`, une conversation est un
-   simple lien (ni menu « … », ni repli du volet) ; groupes de l'historique et
-   recherche viennent de chat-shell.js.
+   simple lien (ni menu « … », ni repli du volet) ; sections repliables et
+   groupes de l'historique viennent de sidebar-sections.js (partagé avec le
+   chat), la recherche de la palette (command-palette.php).
 
    Variables : $appTagline, $page (posées par admin-nav.php). */
 $shellUser          = Session::currentUser();
@@ -30,6 +31,7 @@ $sbNavActive        = NavShell::SHORTCUT_OF[$page] ?? '';
         <span class="logo-text"><?= htmlspecialchars(Settings::get('app_name', 'MIA')) ?></span>
         <span class="logo-tagline" title="<?= htmlspecialchars($appTagline) ?>"><?= htmlspecialchars($appTagline) ?></span>
     </div>
+    <?php require ROOT . '/templates/partials/sidebar-fold-all.php'; ?>
 </div>
 
 <div class="sidebar-start">
@@ -53,19 +55,24 @@ $sbNavActive        = NavShell::SHORTCUT_OF[$page] ?? '';
         <?php
             $isPinned    = (int)($conv['is_pinned'] ?? 0) === 1;
             $isScheduled = !empty($conv['scheduled_task_id']);
+            $isWorkflow  = !$isScheduled && !empty($conv['workflow_run_id']);
             $isUnread    = !empty($conv['unread_at']);
         ?>
         <a href="/chat/<?= (int)$conv['id'] ?>"
-           class="conv-item<?= $isPinned ? ' is-pinned' : '' ?><?= $isScheduled ? ' is-scheduled' : '' ?><?= $isUnread ? ' is-unread' : '' ?>"
+           class="conv-item<?= $isPinned ? ' is-pinned' : '' ?><?= $isScheduled ? ' is-scheduled' : '' ?><?= $isWorkflow ? ' is-workflow' : '' ?><?= $isUnread ? ' is-unread' : '' ?>"
            data-id="<?= (int)$conv['id'] ?>"
            data-pinned="<?= $isPinned ? '1' : '0' ?>"
            data-ts="<?= (int)strtotime((string)($conv['updated_at'] ?? 'now')) ?>"
            <?php if (!empty($conv['profile_color'])): ?>style="--conv-color:<?= htmlspecialchars($conv['profile_color']) ?>"<?php endif; ?>>
-            <?php if (!empty($conv['profile_color'])): ?>
-                <span class="conv-color-bar"></span>
-            <?php endif; ?>
+            <?php /* UN marqueur par ligne (même règle que chat/index.php). */ ?>
             <?php if ($isScheduled): ?>
                 <span class="conv-scheduled-icon" role="img" aria-label="<?= te('Tâche programmée') ?>"><?= ScheduledTask::icon(13) ?></span>
+            <?php elseif ($isWorkflow): ?>
+                <span class="conv-workflow-icon" role="img" aria-label="<?= te('Workflow') ?>"><?= Workflow::icon(13) ?></span>
+            <?php elseif (!empty($conv['profile_color'])): ?>
+                <span class="conv-color-bar"></span>
+            <?php else: ?>
+                <span class="conv-plain-dot" aria-hidden="true"></span>
             <?php endif; ?>
             <span class="conv-title"><?= htmlspecialchars(Conversation::displayTitle($conv['title'] ?? null)) ?></span>
             <?php if ($isUnread): ?><span class="conv-unread-dot" title="<?= te('Nouveau résultat') ?>" aria-label="<?= te('Nouveau résultat') ?>"></span><?php endif; ?>
@@ -75,9 +82,11 @@ $sbNavActive        = NavShell::SHORTCUT_OF[$page] ?? '';
         <p class="conv-empty"><?= te('Aucune conversation') ?></p>
     <?php endif; ?>
 </nav>
+<?php /* Sections repliables et rangement de l'historique (source unique,
+         partagée avec la page de discussion) : SANS defer, juste après la liste. */ ?>
+<?php $sbSectionsJsVersion = @filemtime(ROOT . '/public/assets/js/sidebar-sections.js') ?: time(); ?>
+<script src="/assets/js/sidebar-sections.js?v=<?= (int)$sbSectionsJsVersion ?>"></script>
 
 <div class="sidebar-footer">
     <?php require ROOT . '/templates/partials/user-account-trigger.php'; ?>
 </div>
-<?php $chatShellJsVersion = @filemtime(ROOT . '/public/assets/js/chat-shell.js') ?: time(); ?>
-<script defer src="/assets/js/chat-shell.js?v=<?= (int)$chatShellJsVersion ?>"></script>

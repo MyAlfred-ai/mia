@@ -22,12 +22,14 @@ final class AnthropicOutputCapTest extends TestCase
     /**
      * Plafonds de l'API Messages (synchrone), page « Output limits » de la
      * documentation Anthropic (build-with-claude/thinking), relue le
-     * 2026-09-30. Un modèle ajouté au catalogue doit y figurer : c'est ce qui
+     * 2026-09-30 puis le 2026-11-10 (Fable 5.2, Haiku 5.5). Un modèle ajouté au catalogue doit y figurer : c'est ce qui
      * oblige à vérifier son plafond avant de le proposer.
      */
     private const PLAFONDS_API = [
+        'claude-fable-5-2'          => 128000,
         'claude-opus-5-5'           => 128000,
         'claude-sonnet-5-5'         => 128000,
+        'claude-haiku-5-5'          => 128000,
         'claude-fable-5-1'          => 128000,
         'claude-fable-5'            => 128000,
         'claude-opus-5'             => 128000,

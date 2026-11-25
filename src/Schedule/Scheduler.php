@@ -599,6 +599,11 @@ final class Scheduler
      */
     public static function autoExecutable(string $action, array $args, array $taskToolIds): bool
     {
+        // Une table permanente est une connaissance PARTAGÉE : elle n'est
+        // jamais réécrite sans qu'une personne ait vu le changement.
+        if ($action === WorkTableTools::PERM_WRITE) {
+            return false;
+        }
         if (!isset(ScheduledTask::ACTING_TOOL_ACTIONS[$action])) {
             return true;
         }

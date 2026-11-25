@@ -28,9 +28,8 @@ class UserSettingsController
         Session::remove('settings_success');
         Session::remove('settings_error');
 
-        // « MIA pour vous » ne se règle plus ici : la carte vit sur /settings/ai,
-        // sous « Votre contexte », et Mon profil y renvoie (une seule liste, une
-        // seule porte).
+        // La mémoire ne se règle pas ici : elle a sa page, Réglages → Mémoire
+        // (MemoryController), et Mon profil y renvoie (une seule porte).
         require ROOT . '/templates/settings/profile.php';
     }
 
@@ -44,6 +43,21 @@ class UserSettingsController
         $rows = Message::creationsForUser((int)$user['id']);
 
         $creations = $this->buildCreationItems($rows);
+
+        // Versions soignées (présentations et classeurs réalisés par un modèle,
+        // présentations Gamma) : une requête à part, puis un seul fil, du plus
+        // récent au plus ancien.
+        try {
+            $polished = $this->buildPolishedItems(Message::polishedForUser((int)$user['id']), (int)$user['id']);
+        } catch (Throwable $e) {
+            error_log('[Créations] Versions soignées non lues : ' . $e->getMessage());
+            $polished = [];
+        }
+        if ($polished !== []) {
+            $creations = array_merge($creations, $polished);
+            usort($creations, static fn(array $a, array $b): int
+                => [$b['created_at'], $b['message_id']] <=> [$a['created_at'], $a['message_id']]);
+        }
 
         // Compteur par type pour le filtre (seuls les types présents sont proposés).
         $typeCounts = [];
@@ -75,6 +89,7 @@ class UserSettingsController
                 'conversation_id' => (int)$row['conversation_id'],
                 'conv_title'      => $convTitle !== '' ? $convTitle : 'Conversation',
                 'date'            => Format::dateFr((string)($row['created_at'] ?? '')),
+                'created_at'      => (string)($row['created_at'] ?? ''),
                 // Le partage porte sur le MESSAGE : mêmes routes que le chat,
                 // donc mêmes conditions — ShareController::create refuse un
                 // message dont creationType() est null (422).
@@ -177,6 +192,81 @@ class UserSettingsController
         }
 
         return Message::withoutRepeatedImages($items);
+    }
+
+    /**
+     * Lignes de Message::polishedForUser → cartes « Version soignée ».
+     *
+     * Fichier réalisé par un modèle : une carte tant que le fichier existe
+     * (NativeDeckStore::find — même contrôle que le téléchargement : compte,
+     * conversation, durée de conservation) ; échu, il n'a plus rien à offrir.
+     * Présentation Gamma : une carte qui ouvre gamma.app, avec l'export (PDF
+     * ou PowerPoint) tant que son lien vit (environ une semaine).
+     */
+    private function buildPolishedItems(array $rows, int $userId): array
+    {
+        $items = [];
+        foreach ($rows as $row) {
+            $convId    = (int)$row['conversation_id'];
+            $content   = (string)($row['content'] ?? '');
+            $convTitle = trim((string)($row['conversation_title'] ?? ''));
+            $model     = trim((string)($row['run_model'] ?? ''));
+            $created   = (string)($row['created_at'] ?? '');
+            $base      = [
+                'type'            => 'polished_file',
+                'message_id'      => (int)$row['id'],
+                'conversation_id' => $convId,
+                'conv_title'      => $convTitle !== '' ? $convTitle : 'Conversation',
+                'date'            => Format::dateFr($created),
+                'created_at'      => $created,
+                'shareable'       => false,
+                'share_token'     => '',
+            ];
+
+            foreach (Message::nativeFileLinks($content, $convId) as $link) {
+                $file = NativeDeckStore::find($link['token'], $userId, $convId);
+                if ($file === null) {
+                    continue;
+                }
+                $format = FileFormats::get(FileFormats::extensionOf($file['name']));
+                $title  = (string)pathinfo($file['name'], PATHINFO_FILENAME);
+                $items[] = $base + [
+                    'title'        => $title !== '' ? $title : $file['name'],
+                    'format'       => $format['ext'],
+                    'format_label' => $format['short'],
+                    'tone'         => $format['tone'],
+                    'by'           => $model !== '' ? t('Par {model}', ['model' => $model]) : '',
+                    'keep'         => I18n::plural((int)$file['days_left'], 'Disponible encore {n} jour', 'Disponible encore {n} jours'),
+                    'url'          => $link['url'],
+                    'download'     => 'direct',
+                    'file_name'    => $file['name'],
+                ];
+            }
+
+            $gamma = Message::gammaResult($content);
+            if ($gamma !== null) {
+                $exportAlive = $gamma['export'] !== ''
+                    && strtotime($created) !== false
+                    && time() - (int)strtotime($created) < 7 * 86400;
+                $items[] = $base + [
+                    'title'        => $gamma['title'],
+                    'format'       => 'gamma',
+                    'format_label' => 'Gamma',
+                    'tone'         => $gamma['export_ext'] === 'pdf' ? 'pdf' : 'slides',
+                    'by'           => t('Par {model}', ['model' => 'Gamma']),
+                    'keep'         => '',
+                    'open_url'     => $gamma['url'],
+                    'url'          => $exportAlive ? $gamma['export'] : '',
+                    'download'     => $exportAlive ? 'external' : '',
+                    'download_label' => $exportAlive && $gamma['export_ext'] !== ''
+                        ? t('Télécharger le {format}', ['format' => strtoupper($gamma['export_ext'])])
+                        : '',
+                    'file_name'    => '',
+                ];
+            }
+        }
+
+        return $items;
     }
 
     /**
@@ -328,8 +418,8 @@ class UserSettingsController
         // Libellés et aides TRADUITS (l'accesseur passe par t()) : le gabarit
         // n'affiche jamais le fragment de prompt d'un style.
         $styles   = UserPreferences::styles();
-        $maxLen   = UserPreferences::MAX_CONTEXT_LEN;
-        $memories = UserMemory::allForUser((int)$user['id']);
+        // « Votre contexte » et les souvenirs ont quitté cette page pour
+        // Réglages → Mémoire ; une carte y renvoie.
         // Carte « Voix » : rendue seulement si la conversation vocale est
         // proposée — un réglage de lecture à voix haute n'a rien à régler
         // quand personne ne peut l'entendre. Mêmes deux conditions que le
@@ -342,6 +432,12 @@ class UserSettingsController
         $voiceLengths = VoicePreferences::lengths();
         $voiceRate    = VoicePreferences::rateOf($user);
         $voiceLength  = VoicePreferences::lengthOf($user);
+        // Modèle par défaut (LlmPreference) : les modèles proposés au compte,
+        // l'état (choix, défaut de l'organisation, choix plus proposé) et les
+        // logos des fournisseurs pour la ligne « s'ouvrent avec ».
+        $llmChoices    = LlmPreference::choicesFor($user);
+        $llmPreference = LlmPreference::state($user, $llmChoices);
+        $llmLogos      = LLMFactory::logos();
         $success = Session::get('settings_success');
         $error   = Session::get('settings_error');
         Session::remove('settings_success');
@@ -360,22 +456,15 @@ class UserSettingsController
         $user   = Session::currentUser();
         $id     = (int)$user['id'];
 
-        $style = trim((string)($_POST['ai_style'] ?? ''));
-        if (!UserPreferences::isValidStyle($style)) {
-            $this->respondSettings($asJson, false, 'Style de réponse invalide.', '/settings/ai');
+        // Le style SEUL : « Votre contexte » se règle désormais dans Mémoire,
+        // et l'écrire ici (champ absent = vide) l'effacerait à chaque
+        // enregistrement de cette page.
+        $style = array_key_exists('ai_style', $_POST) ? trim((string)$_POST['ai_style']) : null;
+        if ($style !== null && !UserPreferences::isValidStyle($style)) {
+            $this->respondSettings($asJson, false, t('Style de réponse invalide.'), '/settings/ai');
         }
 
-        $context = UserPreferences::sanitizeContext((string)($_POST['ai_user_context'] ?? ''));
-        if (mb_strlen($context) > UserPreferences::MAX_CONTEXT_LEN) {
-            $this->respondSettings(
-                $asJson,
-                false,
-                'Le contexte ne peut pas dépasser ' . UserPreferences::MAX_CONTEXT_LEN . ' caractères.',
-                '/settings/ai'
-            );
-        }
-
-        UserPreferences::save($id, $style, $context);
+        UserPreferences::save($id, $style, null);
 
         // Réglages de voix : écrits SEULEMENT s'ils sont dans le POST. La
         // carte n'est rendue que si la conversation vocale est proposée ;
@@ -386,9 +475,57 @@ class UserSettingsController
         $length = array_key_exists('voice_length', $_POST) ? VoicePreferences::sanitizeLength($_POST['voice_length']) : null;
         VoicePreferences::save($id, $rate, $length);
 
+        // Modèle par défaut : même règle (écrit seulement s'il est posté — la
+        // liste n'existe pas avec un seul modèle proposé). Le choix déjà
+        // enregistré, renvoyé tel quel, est accepté même s'il n'est plus
+        // proposé : changer de style ne doit ni échouer ni l'effacer.
+        if (array_key_exists('preferred_llm', $_POST)) {
+            $llm = LlmPreference::normalize($_POST['preferred_llm'], LlmPreference::choicesFor($user), LlmPreference::of($user));
+            if ($llm === null) {
+                $this->respondSettings($asJson, false, t('Ce modèle n\'est pas proposé à votre compte.'), '/settings/ai#modele');
+            }
+            LlmPreference::save($id, $llm);
+        }
+
         AuthMiddleware::refreshUser();
 
-        $this->respondSettings($asJson, true, 'Préférences IA enregistrées.', '/settings/ai');
+        $this->respondSettings($asJson, true, t('Préférences IA enregistrées.'), '/settings/ai');
+    }
+
+    /**
+     * POST /settings/llm-default — l'étoile du sélecteur de modèle du chat.
+     *
+     * `llm` = un modèle proposé au compte (il ouvrira ses nouvelles
+     * conversations sans assistant), ou '' pour revenir à celui de
+     * l'organisation. Rend l'état recalculé : le script repeint les étoiles
+     * depuis lui, jamais depuis ce qu'il croyait avoir envoyé.
+     */
+    public function updatePreferredLlm(): void
+    {
+        AuthMiddleware::requireAuth();
+        AuthMiddleware::refreshUser();
+        $user      = Session::currentUser();
+        $available = LlmPreference::choicesFor($user);
+
+        $llm = LlmPreference::normalize($_POST['llm'] ?? null, $available);
+        if ($llm === null) {
+            if (AjaxResponse::wanted()) {
+                AjaxResponse::fail(t('Ce modèle n\'est pas proposé à votre compte.'), 422);
+            }
+            $this->respondSettings(false, false, t('Ce modèle n\'est pas proposé à votre compte.'), '/settings/ai#modele');
+        }
+
+        LlmPreference::save((int)$user['id'], $llm);
+        AuthMiddleware::refreshUser();
+        $state = LlmPreference::state(Session::currentUser(), $available);
+
+        if (!AjaxResponse::wanted()) {
+            $this->respondSettings(false, true, t('Modèle par défaut enregistré.'), '/settings/ai#modele');
+        }
+        AjaxResponse::ok([
+            'state' => LlmPreference::clientConfig($state),
+            'label' => LlmPreference::label($state['effective'], $available),
+        ]);
     }
 
     // ---- Affichage de la page Affichage (thème, taille, contraste, touche d'envoi) ----
@@ -494,6 +631,22 @@ class UserSettingsController
     }
 
     /**
+     * POST /settings/sidebar — sections repliées du volet, envoyées par
+     * sidebar-sections.js à chaque geste (champ `state`, JSON). L'état entier
+     * remplace le précédent : seuls les choix de la personne sont gardés
+     * (SidebarPreferences::normalize), une section jamais touchée suit le
+     * défaut. La session est rafraîchie : la page suivante lit l'état neuf.
+     */
+    public function updateSidebar(): void
+    {
+        AuthMiddleware::requireAuth();
+        $user  = Session::currentUser();
+        $state = SidebarPreferences::save((int)$user['id'], (string)($_POST['state'] ?? ''));
+        AuthMiddleware::refreshUser();
+        AjaxResponse::ok(['state' => SidebarPreferences::forJson($state)]);
+    }
+
+    /**
      * POST /settings/lang — bascule FR/EN du menu de compte.
      *
      * PAS de requireAuth, volontairement : la même route sert la PAGE DE
@@ -528,72 +681,11 @@ class UserSettingsController
         AjaxResponse::ok(['lang' => $lang]);
     }
 
-    // -----------------------------------------------------------------------
-    // Mémoire long terme « MIA pour vous » (AJAX JSON)
-    //
-    // Carte AJAX autonome (partial memory-card.php, inclus par /settings/ai
-    // sous « Votre contexte ») : ses champs ne sont rattachés à aucun
-    // formulaire, un formulaire imbriqué serait invalide en HTML.
-    // -----------------------------------------------------------------------
+    /** Onglet « Historique » de la page Usage & crédits (`?vue=historique`). */
+    public const USAGE_HISTORY_VIEW = 'historique';
 
-    public function addMemory(): void
-    {
-        AuthMiddleware::requireAuth();
-        $userId = (int)Session::currentUser()['id'];
-
-        $result = UserMemory::add($userId, (string)($_POST['content'] ?? ''), UserMemory::SOURCE_MANUAL);
-        $this->respondMemory($userId, $result['status'], match ($result['status']) {
-            'ok'        => null,
-            'empty'     => 'Le souvenir ne peut pas être vide.',
-            'duplicate' => 'Ce souvenir est déjà enregistré.',
-            'full'      => 'Mémoire pleine (' . UserMemory::MAX_ENTRIES . ' souvenirs). Supprimez-en un avant d\'en ajouter.',
-            default     => 'Enregistrement impossible.',
-        });
-    }
-
-    public function updateMemory(string $id): void
-    {
-        AuthMiddleware::requireAuth();
-        $userId = (int)Session::currentUser()['id'];
-
-        $result = UserMemory::update($userId, (int)$id, (string)($_POST['content'] ?? ''));
-        $this->respondMemory($userId, $result['status'], match ($result['status']) {
-            'ok'        => null,
-            'empty'     => 'Le souvenir ne peut pas être vide.',
-            'duplicate' => 'Ce souvenir fait doublon avec un autre.',
-            'not_found' => 'Souvenir introuvable.',
-            default     => 'Modification impossible.',
-        });
-    }
-
-    public function deleteMemory(string $id): void
-    {
-        AuthMiddleware::requireAuth();
-        $userId = (int)Session::currentUser()['id'];
-
-        $ok = UserMemory::delete($userId, (int)$id);
-        $this->respondMemory($userId, $ok ? 'ok' : 'not_found', $ok ? null : 'Souvenir introuvable.');
-    }
-
-    /**
-     * Réponse JSON commune : statut + liste à jour, pour que le front re-rende
-     * la carte depuis la source de vérité plutôt que d'imaginer l'état final.
-     */
-    private function respondMemory(int $userId, string $status, ?string $error): void
-    {
-        header('Content-Type: application/json; charset=utf-8');
-        header('Cache-Control: no-store');
-        if ($status !== 'ok') {
-            http_response_code($status === 'not_found' ? 404 : 422);
-        }
-        echo json_encode([
-            'ok'       => $status === 'ok',
-            'error'    => $error,
-            'memories' => UserMemory::allForUser($userId),
-            'max'      => UserMemory::MAX_ENTRIES,
-        ], JSON_UNESCAPED_UNICODE);
-        exit;
-    }
+    /** Période par défaut de l'historique : douze mois, pour voir venir. */
+    private const USAGE_HISTORY_DEFAULT_PERIOD = 'last_12_months';
 
     // ---- Page Usage ----
     public function usage(): void
@@ -603,6 +695,14 @@ class UserSettingsController
 
         $user   = Session::currentUser();
         $userId = (int)$user['id'];
+
+        // Onglet « Historique » : toutes les opérations, sur la période et
+        // les filtres de son choix — lues dans le grand livre (UsageHistory).
+        if (($_GET['vue'] ?? '') === self::USAGE_HISTORY_VIEW) {
+            $this->usageHistory($user);
+            return;
+        }
+        $usageView = 'month';
 
         $monthStart = date('Y-m-01');
         $monthEnd   = date('Y-m-t');
@@ -631,19 +731,9 @@ class UserSettingsController
         // conseils — formes pures (PersonalUsage), aucun euro.
         $now       = new DateTimeImmutable('now');
         $forecast  = PersonalUsage::forecast($quota !== null ? (int)$quota : null, (int)$breakdown['quota_credits'], $now);
-        $modelLabel = static function (string $provider, string $model): string {
-            $m = $model !== '' ? LlmCatalog::model($provider, $model) : null;
-            if ($m !== null && !empty($m['label'])) {
-                return (string)$m['label'];
-            }
-            // Hors catalogue LLM : dire à quoi le modèle a servi plutôt que son identifiant.
-            return match (true) {
-                str_contains($model, 'whisper') || str_contains($model, 'transcribe') => t('Dictée vocale'),
-                str_contains($model, 'tts') || str_contains($model, 'speech')          => t('Lecture à voix haute'),
-                str_contains($model, 'embed')                                           => t('Recherche dans les bases'),
-                default => $model !== '' ? $model : ucfirst($provider),
-            };
-        };
+        // Nom lisible d'un modèle (hors catalogue : ce à quoi il a servi) — le
+        // même que dans l'historique.
+        $modelLabel = static fn(string $provider, string $model): string => UsageHistory::modelLabel($provider, $model);
         // Anneaux et top 10 sur la MÊME base que le solde : ce qui entame le quota.
         // La maintenance hors quota (vectorisation des bases) reste dans la note du solde.
         $split   = UsageLog::quotaCreditsSplit($monthStart, $monthEnd, $userId);
@@ -654,6 +744,16 @@ class UserSettingsController
         ], PersonalUsage::quotaCategories($byCategory)), t('Autres'));
         $profileItems = [];
         foreach ($split['profiles'] as $i => $p) {
+            if (!empty($p['office'])) {
+                // Claude dans Office : sans assistant, mais à part — sinon il
+                // grossirait « Sans assistant » sans qu'on sache pourquoi.
+                $profileItems[] = [
+                    'label' => t('Claude dans Office'),
+                    'value' => $p['credits'],
+                    'color' => UsageSource::categoryColor(UsageSource::CAT_OFFICE),
+                ];
+                continue;
+            }
             $profileItems[] = [
                 'label' => $p['profile_id'] === null ? t('Sans assistant') : ($p['name'] ?? t('Assistant supprimé')),
                 'value' => $p['credits'],
@@ -677,6 +777,101 @@ class UserSettingsController
         $unitCosts  = PersonalUsage::unitCosts($byCategory, $byTool);
         $tips       = PersonalUsage::tips($byCategory, UsageLog::responsesByModel($monthStart, $monthEnd, $userId), $modelLabel);
 
+        // Workflows : ce que leurs exécutions ont débité ce mois-ci, sur la
+        // même base que le solde (crédits qui entament le quota). Leurs étapes
+        // sont déjà comptées dans les anneaux, surtout « Conversations ».
+        $workflowRows    = UsageLog::workflowCredits($monthStart, $monthEnd, $userId, true);
+        $workflowCredits = array_sum(array_column($workflowRows, 'credits'));
+        $workflowLinks   = Workflow::allows($user, 'view');
+
+        require ROOT . '/templates/settings/usage.php';
+    }
+
+    /**
+     * Onglet « Historique » de Usage & crédits : la période (sélecteur
+     * partagé avec les écrans Coûts), les filtres (origine, type, modèle,
+     * assistant, recherche), les chiffres et l'histogramme, puis le journal
+     * des opérations, page par page. Toujours la seule personne connectée.
+     *
+     * `?fragment=period` (sélecteur de période) et `?fragment=history`
+     * (filtres) : la seule région #puHistory, remplacée sans recharger.
+     * `?fragment=rows&apres=N` : la page suivante du journal (« Afficher
+     * plus »). `?export=csv` : les lignes filtrées, en CSV.
+     */
+    private function usageHistory(array $user): void
+    {
+        $userId  = (int)$user['id'];
+        $now     = new DateTimeImmutable('now');
+        $period  = UsagePeriod::resolve($_GET, self::USAGE_HISTORY_DEFAULT_PERIOD, $now);
+        $first   = UsageHistory::firstDay($userId);
+        $range   = UsagePeriod::bounded($period, $first, $now);
+        $filters = UsageHistory::filters($_GET);
+        // Modèles de la période : la recherche les trouve aussi par leur nom lisible.
+        $models  = $filters['q'] !== '' ? UsageHistory::modelKeys($userId, $range['from'], $range['to']) : [];
+        $fragment = (string)($_GET['fragment'] ?? '');
+
+        if (($_GET['export'] ?? '') === 'csv') {
+            $lines = (static function () use ($userId, $range, $filters, $models): Generator {
+                foreach (UsageHistory::exportLines($userId, $range['from'], $range['to'], $filters, $models) as $line) {
+                    yield UsageHistory::exportRow($line);
+                }
+            })();
+            CsvExport::stream('mia-usage-' . $range['from'] . '-' . $range['to'] . '.csv', UsageHistory::exportHeader(), $lines);
+        }
+
+        $offset = max(0, (int)($_GET['apres'] ?? 0));
+        $series = UsageHistory::series($userId, $range['from'], $range['to'], $filters, $models);
+        $page   = UsageHistory::page($userId, $range['from'], $range['to'], $filters, $offset, UsageHistory::PAGE, $models);
+        $rowCtx = ['workflow_links' => Workflow::allows($user, 'view')];
+        $rows   = array_map(static fn(array $g): array => UsageHistory::row($g, $rowCtx), $page['rows']);
+
+        $hx = [
+            'period'  => $period,
+            'range'   => $range,
+            'filters' => $filters,
+            'base'    => ['vue' => self::USAGE_HISTORY_VIEW] + UsagePeriod::query($period),
+            'days'    => UsageHistory::days($rows, $series, $now),
+            'offset'  => $offset,
+            'more'    => $page['more'],
+            'next'    => $offset + UsageHistory::PAGE,
+            'today'   => $now->format('Y-m-d'),
+        ];
+        if ($fragment === 'rows') {
+            header('Content-Type: text/html; charset=utf-8');
+            header('Cache-Control: no-store');
+            require ROOT . '/templates/settings/usage-history-rows.php';
+            return;
+        }
+
+        // Comparaison avec la période d'avant (mêmes filtres) — seulement si
+        // l'historique la couvre en entier : une période où la personne
+        // n'utilisait pas encore MIA ferait annoncer « +1 000 % ».
+        $previous = UsagePeriod::previous($period, $range['from'], $range['to']);
+        if ($previous !== null && ($first === null || $first > $previous['from'])) {
+            $previous = null;
+        }
+        $before   = $previous !== null
+            ? UsageHistory::totals($userId, $previous['from'], $previous['to'], $filters, $models)
+            : null;
+        $hx += [
+            'compare' => $previous,
+            'summary' => UsageHistory::summary(
+                UsageHistory::totals($userId, $range['from'], $range['to'], $filters, $models),
+                $before,
+                UsagePeriod::days($range['from'], $range['to'])
+            ),
+            'bars'    => UsageHistory::bars($range, $series, $now),
+            'facets'  => UsageHistory::facets(UsageHistory::dimensions($userId, $range['from'], $range['to'], $filters['q'], $models), $filters),
+            'first'   => $first,
+        ];
+        if ($fragment === 'period' || $fragment === 'history') {
+            header('Content-Type: text/html; charset=utf-8');
+            header('Cache-Control: no-store');
+            require ROOT . '/templates/settings/usage-history.php';
+            return;
+        }
+
+        $usageView = 'history';
         require ROOT . '/templates/settings/usage.php';
     }
 
@@ -872,12 +1067,16 @@ class UserSettingsController
         $slackFeatureEnabled = $connectorsAllowed && ConnectorRegistry::isEnabled(ConnectorRegistry::SLACK);
         $slackVisible        = $visible(ConnectorRegistry::SLACK);
         $slackToken = UserDriveToken::forUser((int)$user['id'], UserDriveToken::PROVIDER_SLACK);
-        $slackCanRead = $slackCanSearch = $slackCanPost = false;
+        $slackCanRead = $slackCanSearch = $slackCanPost = $slackCanDirect = $slackCanFiles = false;
         if ($slackToken !== null) {
             $scope = (string)($slackToken['scope'] ?? '');
             $slackCanSearch = UserSlackService::scopeGranted($scope, UserSlackService::SCOPE_SEARCH);
             $slackCanRead   = UserSlackService::anyScopeGranted($scope, UserSlackService::SCOPES_HISTORY);
             $slackCanPost   = UserSlackService::scopeGranted($scope, UserSlackService::SCOPE_WRITE);
+            // Arrivées avec la brique Slack des workflows : une connexion
+            // plus ancienne ne les a pas, la carte invite à la reconnecter.
+            $slackCanDirect = $slackCanPost && UserSlackService::scopeGranted($scope, UserSlackService::SCOPE_DIRECT);
+            $slackCanFiles  = $slackCanPost && UserSlackService::scopeGranted($scope, UserSlackService::SCOPE_FILES);
             unset($slackToken['refresh_token'], $slackToken['access_token']);
         }
 
@@ -898,9 +1097,18 @@ class UserSettingsController
         $oneDriveManager = ConnectorRegistry::oneDriveUsefulFor((string)($user['role'] ?? ''));
         $oneDriveVisible = ($oneDriveFeatureEnabled && $oneDriveManager) || $oneDriveToken !== null;
 
+        // Claude dans Office : carte seulement si l'organisation l'a activé et
+        // que le rôle l'ouvre. Un jeton généré SANS script passe par la session
+        // le temps d'un affichage (jamais dans l'adresse).
+        $officeCard = OfficeAddinController::cardFor($user);
+        $officeNewToken = Session::get('office_addin_new_token');
+        Session::remove('office_addin_new_token');
+        $officeNewToken = is_string($officeNewToken) && $officeCard !== null ? $officeNewToken : null;
+
         // Aucune carte à montrer : le dire, plutôt que laisser une page nue.
         $anyConnectionVisible = $driveVisible || $gmailVisible || $calendarVisible
-            || $tasksVisible || $outlookVisible || $msCalendarVisible || $msTodoVisible || $teamsVisible || $slackVisible || $oneDriveVisible;
+            || $tasksVisible || $outlookVisible || $msCalendarVisible || $msTodoVisible || $teamsVisible || $slackVisible || $oneDriveVisible
+            || $officeCard !== null;
 
         require ROOT . '/templates/settings/connections.php';
     }

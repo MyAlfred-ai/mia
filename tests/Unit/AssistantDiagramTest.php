@@ -562,7 +562,9 @@ final class AssistantDiagramTest extends TestCase
 
     public function testLesPagesChargentLeMoteurPuisLeModeleAvantLeurScript(): void
     {
-        foreach ([self::LIST => 'window.ASSISTANT_DIAGRAMS', self::FORM => 'window.ASSISTANT_FORM_DIAGRAM'] as $gabarit => $global) {
+        // La liste (piste C) n'a plus de schéma : il vit dans la fiche.
+        $this->assertStringNotContainsString('diagram.js', self::src(self::LIST));
+        foreach ([self::FORM => 'window.ASSISTANT_FORM_DIAGRAM'] as $gabarit => $global) {
             $html = self::src($gabarit);
             $moteur = strpos($html, '<script src="/assets/js/diagram.js');
             $modele = strpos($html, '<script src="/assets/js/assistant-diagram.js');
@@ -576,14 +578,13 @@ final class AssistantDiagramTest extends TestCase
             $this->assertDoesNotMatchRegularExpression('#<script src="/assets/js/(diagram|assistant-diagram)\.js[^"]*" defer#', $html);
             $this->assertStringContainsString($global . ' = <?= json_encode($diagram, ', $html);
             $this->assertStringContainsString('JSON_HEX_TAG', $html, 'Les icônes voyagent dans un <script> : < et > échappés.');
-            foreach (['id="pfDiagramPanel"', 'id="pfDiagram"', 'id="pfDiagramTitle"', 'class="admin-content pf-content"'] as $marque) {
+            foreach (['id="pfDiagramPanel"', 'id="pfDiagram"', 'class="admin-content pf-content kbx-page"', 'class="kbx kbx-fiche is-asst"', 'id="ensemble"'] as $marque) {
                 $this->assertStringContainsString($marque, $html, "$gabarit : $marque absent.");
             }
         }
-        $this->assertStringContainsString('Configuration de l\'assistant', self::src(self::LIST));
-        // Texte traduit (te()) depuis le passage FR/EN de la fiche.
-        $this->assertStringContainsString("te('Aperçu de l\\'assistant')", self::src(self::FORM));
-        $this->assertStringContainsString('class="sched-diagram-hint"', self::src(self::FORM), 'Le panneau dit qu’un élément se clique.');
+        // Le schéma ferme la fiche, dans sa section « Vue d'ensemble » (te(), FR/EN).
+        $this->assertStringContainsString("te('Vue d\\'ensemble')", self::src(self::FORM));
+        $this->assertStringContainsString('sched-diagram-hint', self::src(self::FORM), 'La section dit qu’un élément se clique.');
     }
 
     public function testLesReglagesVisesExistentDansLaFiche(): void
@@ -605,7 +606,7 @@ final class AssistantDiagramTest extends TestCase
         $this->assertStringContainsString('target.focus({ preventScroll: true });', $tpl);
         $this->assertStringContainsString("{ animate: first, jump: jumpTitles }", $tpl);
         // Les intitulés viennent des titres des sections.
-        foreach (['mpSectionIdentity', 'mpSectionBehavior', 'mpSectionKnowledge'] as $section) {
+        foreach (['mpSectionIdentity', 'mpSectionPrompt', 'mpSectionModel', 'mpSectionTools', 'mpSectionKnowledge'] as $section) {
             $this->assertStringContainsString("sectionTitle('$section')", $tpl);
             $this->assertStringContainsString('id="' . $section . '"', $tpl);
         }
@@ -628,43 +629,37 @@ final class AssistantDiagramTest extends TestCase
         $this->assertStringContainsString("\$llmTempSupport[''] = ", $tpl);
     }
 
-    public function testLaListeGardeSesCommandesEtSonRepli(): void
-    {
-        $tpl = self::src(self::LIST);
-        $this->assertStringContainsString('<a class="al-name-link" href="<?= htmlspecialchars($editUrl) ?>">', $tpl, 'Sans JavaScript, le nom mène à la fiche.');
-        $this->assertStringContainsString('id="assistant-<?= $pid ?>"', $tpl);
-        $this->assertStringContainsString("e.target.closest('button, a, form, label, input, select, textarea')", $tpl);
-        $this->assertStringContainsString('if (!listDiagram) {', $tpl, 'Sans le module, la ligne ouvre la fiche comme avant.');
-        $this->assertStringContainsString('listDiagram?.refresh();', $tpl);
-        $this->assertSame(2, substr_count($tpl, 'listDiagram?.refresh();'), 'Après un filtre ET après un tri.');
-        $this->assertStringContainsString("/^#assistant-(\\d+)$/", $tpl);
-    }
-
     public function testLeControleurFournitCatalogueEtConfigurations(): void
     {
         $c = self::src('src/Controllers/AdminController.php');
-        $this->assertSame(2, substr_count($c, 'AssistantDiagram::catalog('), 'Liste ET fiche.');
-        $this->assertStringContainsString('AssistantDiagram::spec(', $c);
-        $this->assertStringContainsString("array_map([AssistantDiagram::class, 'docEntry'], ProfileDocument::allForProfile(\$pid))", $c, 'Un document a la même forme dans la liste et dans la fiche.');
+        // La fiche et la page de l'assistant ; la liste n'a plus de schéma.
+        $this->assertSame(2, substr_count($c, 'AssistantDiagram::catalog('));
+        $this->assertStringNotContainsString('diagram', self::src(self::LIST));
+        $this->assertStringContainsString("array_map([AssistantDiagram::class, 'docEntry'], ProfileDocument::allForProfile(\$pid))", $c, 'Un document a la même forme dans la fiche et dans le schéma.');
         $this->assertStringContainsString("'fixed_kb_ids' =>", $c);
-        // La liste s'ouvre sur l'assistant créé — sauf souci de documents — et sur l'assistant basculé.
-        $this->assertStringContainsString("header('Location: /admin/profiles' . (\$problems ? '' : '#assistant-' . \$id));", $c);
-        $this->assertStringContainsString("header('Location: /admin/profiles#assistant-' . \$profileId);", $c);
-        $this->assertStringContainsString("'/admin/profiles#assistant-' . (int)\$profile['id']", self::src(self::FORM), 'Le retour à la liste rouvre l’assistant.');
+        // Créé, l'assistant s'ouvre sur sa page — sur la section Connaissances de sa fiche
+        // si un document a posé problème ; basculé, on revient d'où l'on vient.
+        $this->assertStringContainsString("header('Location: /admin/profiles/' . \$id . (\$problems ? '/edit#connaissances' : ''));", $c);
+        $this->assertStringContainsString("(\$_POST['return'] ?? '') === 'page'", $c);
+        $this->assertStringContainsString("? '/admin/profiles/' . \$profileId", $c);
+        $this->assertStringContainsString(": '/admin/profiles#assistant-' . \$profileId));", $c);
+        $this->assertStringContainsString("\$backUrl    = \$isCreate ? '/admin/profiles' : '/admin/profiles/' . (int)\$profile['id'];", self::src(self::FORM), 'La fiche revient à la page de l’assistant.');
 
         foreach (['config/classes.php', 'tests/bootstrap.php'] as $liste) {
             $this->assertStringContainsString('/src/Assistants/AssistantDiagram.php', self::src($liste), "$liste ne charge pas AssistantDiagram.");
         }
     }
 
-    public function testLeSeuilCoteACoteEstLeMemePourLeStyleEtLeScript(): void
+    public function testLeSchemaDeLaFicheResteEnVue(): void
     {
         $css = self::src(self::CSS);
-        $this->assertStringContainsString("window.matchMedia('(min-width: 1200px)')", self::src(self::LIST));
-        $this->assertMatchesRegularExpression('/@media \(min-width: 1200px\) \{\s*\.pf-split\.is-open \{/', $css);
-        $this->assertMatchesRegularExpression('/@media \(min-width: 1200px\) \{.*?\.admin-content\.pf-content \{ overflow: visible; \}/s', $css, 'Sans cela, le sticky ne bouge jamais (overflow de .admin-content).');
-        $this->assertMatchesRegularExpression('/\.pf-split > \.sched-diagram-panel,\s*\.pf-form-layout > \.sched-diagram-panel \{\s*position: sticky;/', $css);
-        $this->assertMatchesRegularExpression('/@media \(max-width: 1199px\) \{\s*\.pf-split \.sched-diagram-close \{ display: inline-grid; \}/', $css);
+        // La fiche suit la grammaire des bases : barre du haut collante (overflow de
+        // .admin-content levé au-delà de 1200 px), schéma tout en bas, dans sa section.
+        $this->assertStringContainsString('.admin-content.kbx-page { overflow: visible; }', self::src('public/assets/css/kb-pages.css'));
+        $this->assertStringNotContainsString('.pf-form-layout', $css, 'L’ancien schéma collant à droite n’existe plus.');
+        $form = self::src(self::FORM);
+        $this->assertLessThan(strpos($form, 'id="pfDiagramPanel"'), strpos($form, 'id="mpSectionKnowledge"'), 'Le schéma vient après la dernière section.');
+        $this->assertStringNotContainsString('.pf-split', $css, 'La liste côte à côte n’existe plus.');
         // Le schéma sans déclencheur, la teinte des documents, la pastille à initiale.
         $this->assertMatchesRegularExpression('/\.sd-canvas\.no-trigger \{\s*grid-template-areas:\s*"llm\s+assistant"\s*"sources sources";/', $css);
         $this->assertMatchesRegularExpression('/\.sd-docs\s+\{[^}]*--sd-hue/', $css);

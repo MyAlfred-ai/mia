@@ -13,6 +13,7 @@ $ovIcon = static fn(string $paths): string =>
     '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' . $paths . '</svg>';
 $featureIcons = [
     'chat'         => '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
+    'office'       => '<rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="9" x2="9" y2="21"/>',
     'assistants'   => '<rect x="3" y="11" width="18" height="10" rx="2"/><circle cx="12" cy="5" r="2"/><path d="M12 7v4"/><line x1="8" y1="16" x2="8" y2="16"/><line x1="16" y1="16" x2="16" y2="16"/>',
     'web'          => '<circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>',
     'kb'           => '<path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/>',
@@ -26,6 +27,7 @@ $featureIcons = [
     'memory'       => '<path d="M12 2a7 7 0 0 0-7 7c0 3 2 5 3 6v3h8v-3c1-1 3-3 3-6a7 7 0 0 0-7-7z"/><line x1="9" y1="22" x2="15" y2="22"/>',
     'automation'   => '<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>',
     'scheduled'    => '<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>',
+    'workflows'    => Workflow::ICON_PATHS,
 ];
 $trendLabel = static function (int|string|null $t): array {
     if ($t === null) { return ['—', 'is-none']; }
@@ -61,6 +63,20 @@ $modelColors = ['#6366f1', '#10a37f', '#f59e0b', '#0ea5e9', '#ec4899', '#8b5cf6'
                         </a>
                     <?php endforeach; ?>
                 </div>
+                <?php // Une case trop petite pour porter son libellé est nommée dessous : sinon une
+                      // consommation réelle mais faible (Claude dans Office, la voix…) ne se lit qu'au survol.
+                $ovTiny = array_values(array_filter($ov['treemap'], static fn(array $t): bool => !empty($t['tiny']))); ?>
+                <?php if ($ovTiny !== []): ?>
+                    <p class="usage-tiny-legend">
+                        <span class="usage-tiny-legend-title"><?= te('Plus petites parts :') ?></span>
+                        <?php foreach ($ovTiny as $tile):
+                            // Une part sous 0,05 % s'arrondit à 0 : elle n'est pas nulle pour autant.
+                            $tinyPart = t('{n} %', ['n' => (float)$tile['share'] > 0 ? $nfTrim((float)$tile['share'], 1) : '<' . $nfTrim(0.1, 1)]); ?>
+                            <a href="#categories" style="--tile:<?= htmlspecialchars($tile['color']) ?>"
+                               title="<?= te('{libelle} : {n} crédits, {part}', ['libelle' => $tile['label'], 'n' => $credits((float)$tile['value']), 'part' => $tinyPart]) ?>"><i class="usage-dot"></i><?= htmlspecialchars($tile['label']) ?> <b><?= htmlspecialchars($tinyPart) ?></b></a>
+                        <?php endforeach; ?>
+                    </p>
+                <?php endif; ?>
                 <?php // Téléphone : la carte proportionnelle n'a pas la place de ses libellés, même lecture en liste. ?>
                 <ul class="usage-split-list">
                     <?php foreach ($ov['treemap'] as $tile): ?>
@@ -115,7 +131,7 @@ $modelColors = ['#6366f1', '#10a37f', '#f59e0b', '#0ea5e9', '#ec4899', '#8b5cf6'
                 <?php endif; ?>
                 <details class="usage-ov-howto">
                     <summary><?= te('Comment ces chiffres sont comptés') ?></summary>
-                    <p><?= te("Un usage est une opération IA (réponse, recherche, image…), une action menée pendant une réponse (consultation d'une base, lecture d'un email, création d'un brouillon…) ou une exécution de tâche programmée. Une personne compte une fois par fonctionnalité. Les connecteurs se lisent dans les actions des réponses ; les bases, dans leurs consultations.") ?></p>
+                    <p><?= te("Un usage est une opération IA (réponse, recherche, image…), une action menée pendant une réponse (consultation d'une base, lecture d'un email, création d'un brouillon…) ou une exécution de tâche programmée ou de workflow. Une personne compte une fois par fonctionnalité. Les connecteurs se lisent dans les actions des réponses ; les bases, dans leurs consultations.") ?></p>
                 </details>
             <?php endif; ?>
         </section>
@@ -141,7 +157,7 @@ $modelColors = ['#6366f1', '#10a37f', '#f59e0b', '#0ea5e9', '#ec4899', '#8b5cf6'
                         <?php if ($models['other'] !== null): ?><span class="is-other" style="flex-grow:<?= max(0.1, (float)$models['other']['share']) ?>"></span><?php endif; ?>
                     </div>
                     <div class="table-wrap">
-                        <table class="usage-ov-table">
+                        <table class="usage-ov-table table-stack">
                             <thead><tr><th><?= te('Modèle') ?></th><th><?= te('Part') ?></th><th title="<?= te('Temps de réponse médian') ?>"><?= te('Médiane') ?></th><th title="<?= te('9 réponses sur 10 arrivent en moins de…') ?>"><?= te('9 sur 10') ?></th><th title="<?= te('Réponses régénérées') ?>"><?= te('Relancées') ?></th></tr></thead>
                             <tbody>
                             <?php foreach ($models['rows'] as $i => $m): ?>
@@ -175,7 +191,7 @@ $modelColors = ['#6366f1', '#10a37f', '#f59e0b', '#0ea5e9', '#ec4899', '#8b5cf6'
                     <p class="usage-ov-empty"><?= te('Aucune conversation sur la période.') ?></p>
                 <?php else: ?>
                     <div class="table-wrap">
-                        <table class="usage-ov-table">
+                        <table class="usage-ov-table table-stack">
                             <thead><tr><th><?= te('Assistant') ?></th><th><?= te('Conversations') ?></th><th><?= te('Personnes') ?></th><th><?= te('Relancées') ?></th></tr></thead>
                             <tbody>
                             <?php foreach ($ov['assistants'] as $a): ?>
@@ -232,6 +248,42 @@ $modelColors = ['#6366f1', '#10a37f', '#f59e0b', '#0ea5e9', '#ec4899', '#8b5cf6'
                     · <a href="/admin/knowledge-bases"><?= te('Voir les bases') ?></a></span>
                 </p>
             <?php endif; ?>
+        </section>
+        <?php endif; ?>
+
+        <!-- ================= Workflows ================= -->
+        <?php if ($ov['workflows'] !== []): ?>
+        <section class="card usage-ov-card" aria-labelledby="ovWorkflowsTitle">
+            <div class="card-head">
+                <span class="card-ic"><?= $ovIcon($featureIcons['workflows']) ?></span>
+                <div class="card-head-text">
+                    <h3 id="ovWorkflowsTitle"><?= te('Workflows') ?></h3>
+                    <p><?= te('Crédits débités par leurs exécutions sur la période : étapes, conditions, créations et recherches.') ?></p>
+                </div>
+            </div>
+            <div class="table-wrap">
+                <table class="usage-ov-table table-stack">
+                    <thead><tr><th><?= te('Workflow') ?></th><?php if ($userId === null): ?><th><?= te('Créé par') ?></th><?php endif; ?><th><?= te('Exécutions') ?></th><th><?= te('Crédits') ?></th><th title="<?= te('Crédits par exécution, en moyenne') ?>"><?= te('Par exécution') ?></th></tr></thead>
+                    <tbody>
+                    <?php foreach ($ov['workflows'] as $w): ?>
+                        <tr>
+                            <td><i class="usage-dot"<?= $w['color'] !== '' ? ' style="background:' . htmlspecialchars($w['color']) . '"' : '' ?>></i><?= htmlspecialchars($w['name']) ?></td>
+                            <?php if ($userId === null): ?><td><?= htmlspecialchars($w['owner']) ?></td><?php endif; ?>
+                            <td><?= Format::credits((int)$w['runs']) ?></td>
+                            <td><?= Format::credits((int)$w['credits']) ?></td>
+                            <td><?= Format::credits((int)round((int)$w['credits'] / max(1, (int)$w['runs']))) ?></td>
+                        </tr>
+                    <?php endforeach; ?>
+                    </tbody>
+                </table>
+            </div>
+            <?php if ($ov['workflows_more'] > 0): ?>
+                <p class="usage-ov-foot"><?= htmlspecialchars(I18n::plural((int)$ov['workflows_more'], 'Et {n} autre workflow moins coûteux.', 'Et {n} autres workflows moins coûteux.')) ?></p>
+            <?php endif; ?>
+            <p class="usage-ov-foot"><?= teb('Total : {b}{n}{/b} crédits pour {runs}. Ils sont déjà comptés dans les catégories ci-dessus (surtout « Conversations »), pas en plus.', [
+                'n' => Format::credits((int)$ov['workflows_credits']),
+                'runs' => I18n::plural((int)$ov['workflows_runs'], '{n} exécution', '{n} exécutions', ['n' => Format::credits((int)$ov['workflows_runs'])]),
+            ]) ?></p>
         </section>
         <?php endif; ?>
     </div>

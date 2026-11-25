@@ -5,6 +5,8 @@ declare(strict_types=1);
 /**
  * Export CSV téléchargeable, compatible Excel FR : BOM UTF-8 + séparateur ';'.
  * Neutralise l'injection de formule tableur (cellules commençant par = + - @).
+ * Aucun caractère d'échappement (RFC 4180, ce que lit Excel) : le passer
+ * explicitement évite aussi l'avertissement de PHP 8.4+, dont le défaut change.
  */
 final class CsvExport
 {
@@ -24,9 +26,9 @@ final class CsvExport
 
         $out = fopen('php://output', 'w');
         fwrite($out, "\xEF\xBB\xBF");
-        fputcsv($out, $header, self::SEPARATOR);
+        fputcsv($out, $header, self::SEPARATOR, '"', '');
         foreach ($rows as $row) {
-            fputcsv($out, array_map(self::sanitizeCell(...), $row), self::SEPARATOR);
+            fputcsv($out, array_map(self::sanitizeCell(...), $row), self::SEPARATOR, '"', '');
         }
         fclose($out);
         exit;

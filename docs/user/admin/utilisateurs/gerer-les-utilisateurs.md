@@ -10,10 +10,14 @@ dans [Les utilisateurs et les accès](index.md).
 
 ## La liste
 
-Cinq tuiles en haut de page : **Comptes**, **Actifs**, **Inactifs**, **Admins** et **Quota ≥ 90 %**.
-**Cliquer une tuile filtre la liste** ; re-cliquer revient à l'affichage complet.
+Cinq tuiles en haut de page : **Comptes**, **Actifs**, **Inactifs**, **Admins** et **Quota ≥ 90 %** —
+plus **Démos** et **Démos épuisées** dès qu'il existe un compte de démonstration (voir [Comptes de
+démonstration](comptes-de-demonstration.md)). **Cliquer une tuile filtre la liste** ; re-cliquer revient
+à l'affichage complet.
 
-Dessous, une recherche par nom ou e-mail, et trois filtres : rôle, statut, méthode de connexion. Les
+Dessous, une recherche par nom ou e-mail, et quatre filtres : rôle, groupe, statut, méthode de
+connexion. Un compte membre de plusieurs groupes apparaît sous chacun ; **Sans autre groupe** montre
+les comptes qui ne sont dans aucun groupe en dehors du groupe par défaut. Les
 colonnes — Utilisateur, Rôle, Groupes, Quota mensuel, Activité — se trient par leur en-tête. Sous le
 rôle, la méthode de connexion : **Google**, **Microsoft**, **Mot de passe**, **Admin local**. Un compte
 qui se connecte de plusieurs façons — *Google + Mot de passe* — apparaît sous chacune dans le filtre.
@@ -43,7 +47,8 @@ MIA n'envoie aucun e-mail : prévenez vous-même la personne que son compte est 
 **+ Nouvel utilisateur**, en haut à droite, crée un compte qui se connecte **par e-mail et mot de
 passe** : **Nom**, **Email**, **Mot de passe** (8 caractères au moins), **Rôle**, **Statut** et
 **Groupes** — **Par défaut** est coché d'office. Le quota se règle après la création, en modifiant le
-compte.
+compte. La case **Compte de démonstration** donne à la place une enveloppe de crédits qui ne se
+renouvelle pas — voir [Comptes de démonstration](comptes-de-demonstration.md).
 
 **Une personne qui se connecte par Google ou Microsoft n'a pas besoin d'être créée ici** : son compte
 apparaît de lui-même à sa première connexion — actif ou en attente selon la règle d'accès ci-dessus. Il
@@ -70,8 +75,9 @@ désactivée, le mot de passe saisi ne sert à rien ; la fenêtre le rappelle.
 **Le champ se saisit en milliers de crédits par mois.** Saisir **10** donne **10 000 crédits par
 mois**, pas 10.
 
-- **Renseigné**, il **prime** sur ceux des groupes, même s'il est plus bas. **0 bloque toute
-  consommation.**
+- **Renseigné**, il compte **avec** ceux des groupes : le plus généreux s'applique. Il sert à
+  **relever** une personne au-dessus de ses groupes, jamais à la limiter en dessous — pour cela,
+  retirez-la du groupe généreux. **0** ne bloque que si aucun groupe n'a de quota.
 - **Vide**, la personne reçoit le quota **le plus élevé** parmi ceux de ses groupes actifs. Elle n'est
   illimitée que si aucun de ses groupes ne définit de quota.
 
@@ -83,7 +89,8 @@ la personne. Détails et exemples : [Fixer les quotas](../credits/fixer-les-quot
 **Supprimer ce compte**, en bas de la fiche. Avant de confirmer, MIA affiche l'**impact réel** :
 conversations supprimées définitivement, assistants et bases de connaissances qui perdent leur
 créateur, partages qui tombent, synchronisations Drive ou OneDrive portées par ce compte qui
-casseront, connexions personnelles effacées.
+casseront, connexions personnelles effacées — et le nombre de ses bases **Privées**,
+supprimées avec le compte (sans leur nom : elles ne se montrent qu'à lui).
 
 **Lisez cette liste avant de confirmer : l'action est irréversible.**
 
@@ -119,7 +126,7 @@ autre administrateur : **gardez toujours au moins deux administrateurs actifs**.
 | « Nom, email et mot de passe (8 car. min.) sont requis. » | Compléter les trois champs. |
 | « Un utilisateur avec cet email existe déjà. » | Retrouver le compte par la recherche, et le modifier. |
 | Une personne voit « Votre compte est en attente de validation par un administrateur. » | L'activation automatique est décochée : activer son compte. |
-| Une personne est bloquée alors que son groupe a un quota élevé | Elle a un quota individuel, qui prime. Le vider ou l'augmenter. |
+| Une personne est bloquée alors que son groupe a un quota élevé | Le groupe est-il **actif** ? Un groupe inactif ne compte pas. Sinon, sa consommation du mois a atteint ce quota. |
 | « Votre propre rôle se change par un autre administrateur. » | Demander à un autre administrateur de changer votre rôle. |
 | « Ce compte a des droits plus larges que les vôtres : seul un administrateur peut le modifier. » | Votre rôle gère les comptes, pas ceux qui le dépassent : passer par un administrateur. |
 | « Vous ne pouvez pas donner ce rôle : il ouvre plus de droits que le vôtre. » | Choisir un rôle de la liste proposée, ou passer par un administrateur. |

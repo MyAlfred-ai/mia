@@ -102,7 +102,8 @@ final class ScheduleTools extends AbstractToolProvider
         $sourceProperty = [
             'type'        => 'array',
             'items'       => ['type' => 'string'],
-            'description' => "Sources que la tâche consultera à chaque exécution"
+            'description' => "Sources que la tâche consultera à chaque exécution — et les services où elle "
+                . "prépare ses actions (une messagerie pour un brouillon d'email, l'agenda pour un évènement)"
                 . ($sources !== [] ? ', parmi : ' . implode(', ', $sources) : '')
                 . ". Par défaut : celles de ce message.",
         ];
@@ -245,7 +246,7 @@ final class ScheduleTools extends AbstractToolProvider
                 continue;
             }
             $desc = $kb['description'] !== '' ? ' — ' . self::shorten($kb['description'], 90) : '';
-            $kbLines[] = $id . ' = « ' . $kb['name'] . ' »' . $desc . ($kb['live'] ? ' [cerveau MyBrain en direct]' : '');
+            $kbLines[] = $id . ' = « ' . $kb['name'] . ' »' . $desc . ($kb['live'] ? ' [cerveau MyBrain en direct]' : (!empty($kb['table']) ? ' [table de ' . (int)($kb['rows'] ?? 0) . ' lignes]' : ''));
         }
         if ($kbLines !== []) {
             $properties['bases'] = [
@@ -291,7 +292,10 @@ final class ScheduleTools extends AbstractToolProvider
             . "seule (« chaque lundi », « tous les matins », « le 1er du mois »). Ne l'appelle que si l'utilisateur "
             . "demande qu'une chose se répète. La consigne doit être autonome : la tâche s'exécutera sans cette "
             . "conversation. Nom et consigne s'écrivent en " . I18n::promptLanguage() . ", la langue que l'utilisateur "
-            . "a choisie pour MIA. Sans heure précisée, choisis 08:00 et dis-le. " . $choose
+            . "a choisie pour MIA. Sans heure précisée, choisis 08:00 et dis-le. Un rythme que l'outil ne sait pas "
+            . "faire (toutes les deux semaines, le dernier vendredi du mois, deux fois par jour) ne s'approxime jamais en "
+            . "silence ni ne s'écrit dans la consigne (elle ne saute aucune exécution) : propose le plus proche que "
+            . "l'outil sait faire en disant ce qui change, ou demande. " . $choose
             . "L'outil dépose une carte : la tâche "
             . "n'existe qu'après l'approbation de l'utilisateur — n'affirme jamais qu'elle est programmée ; résume "
             . "le rythme et la première exécution, et rappelle qu'il peut approuver, te demander des changements, "
@@ -352,6 +356,7 @@ final class ScheduleTools extends AbstractToolProvider
                     $llm,
                     $llm !== '' && (bool)(AssistantDraft::llmInfo($llm)['tools'] ?? false)
                 );
+                $issues = array_merge($issues, self::sourceIssues($data, $choices));
                 if ($issues !== []) {
                     return ['error' => implode(' ', $issues)];
                 }
@@ -372,6 +377,10 @@ final class ScheduleTools extends AbstractToolProvider
                     // La carte d'avant se ferme à l'écran (« remplacée »).
                     $this->sseEmit(['drive_superseded' => ['ids' => [(int)$previous['id']]]]);
                     $result['proposition_remplacee'] = true;
+                }
+                // Le nom de la tâche proposée (trace d'actions, même pour une retouche).
+                if (isset($result['statut'])) {
+                    $result['tache'] = $data['name'];
                 }
                 $notes = self::notes($data, $input, $args, $choices);
                 if ($ignored !== []) {
@@ -576,6 +585,71 @@ final class ScheduleTools extends AbstractToolProvider
         return ['Incohérent : ' . $who . ', qui ne sait pas utiliser d\'outils — la tâche ne pourrait pas consulter '
             . implode(', ', $needs) . '. Choisis un modèle marqué [outils] (sans assistant), un assistant dont le '
             . 'modèle en a, ou retire ces sources et outils.'];
+    }
+
+    /**
+     * Services qu'une consigne SUPPOSE (lire « mes emails », préparer un
+     * brouillon, consulter « mon agenda ») : sans eux dans `sources`, la tâche
+     * tournerait sans pouvoir les lire ni y écrire — et ne le dirait qu'à
+     * l'exécution. Clé de groupe → [connecteurs qui le servent, motif].
+     */
+    private const IMPLIED_SOURCES = [
+        'mail' => [
+            ['gmail', 'outlook'],
+            '/(?<![\p{L}])(?:mes|my)\s+(?:e-?mails?|mails?|courriels?|messages)|(?<![\p{L}])(?:ma\s+bo[iî]te|my\s+inbox|inbox)(?![\p{L}])/u',
+        ],
+        'calendar' => [
+            ['calendar', 'mscalendar'],
+            '/(?<![\p{L}])(?:(?:mon|my)\s+(?:agenda|calendrier|calendar)|mes\s+(?:rendez-vous|rdv|r[ée]unions)|my\s+(?:meetings|appointments))(?![\p{L}])/u',
+        ],
+        'drive' => [
+            ['drive', 'onedrive'],
+            '/(?<![\p{L}])(?:mon\s+(?:google\s+)?drive|mon\s+onedrive|my\s+(?:google\s+)?drive)(?![\p{L}])/u',
+        ],
+    ];
+
+    /** Une écriture qui part dans une messagerie : brouillon, email à préparer. */
+    private const MAIL_WRITE = '/(?<![\p{L}])(?:brouillons?|drafts?|e-?mails?|mails?|courriels?)(?![\p{L}])/u';
+
+    /**
+     * Sources manquantes, à renvoyer AU MODÈLE avant la carte : une tâche qui
+     * prépare des actions sans aucun service où écrire (la recherche Internet
+     * ne fait que lire) ; une consigne qui suppose une messagerie, un agenda
+     * ou un Drive absents de `sources` — seulement quand le compte en propose
+     * un (sinon le modèle ne pourrait rien corriger). Pure.
+     *
+     * @return list<string>
+     */
+    public static function sourceIssues(array $data, array $choices): array
+    {
+        $issues = [];
+        $sources = array_map('strval', (array)$data['sources']);
+        $instruction = mb_strtolower((string)$data['instruction']);
+        $acting = false;
+        foreach ((array)$data['tool_ids'] as $id) {
+            $acting = $acting || in_array((string)($choices['tools'][(int)$id]['type'] ?? ''), ScheduledTask::ACTING_TOOL_TYPES, true);
+        }
+        $available = array_map('strval', array_keys((array)($choices['sources'] ?? [])));
+        $missing = [];
+        foreach (self::IMPLIED_SOURCES as $group => [$serving, $pattern]) {
+            $needed = preg_match($pattern, $instruction) === 1
+                || ($group === 'mail' && !empty($data['allow_actions']) && preg_match(self::MAIL_WRITE, $instruction) === 1);
+            $offered = array_values(array_intersect($serving, $available));
+            if ($needed && $offered !== [] && array_intersect($serving, $sources) === []) {
+                $missing[] = implode(' ou ', $offered);
+            }
+        }
+        if ($missing !== []) {
+            $issues[] = 'La consigne suppose ' . implode(', ', $missing) . ', absent(s) de `sources` : la tâche ne '
+                . 'pourrait ni le lire ni y écrire. Ajoute-le à `sources` (pour une retouche : `remplace: true` et la '
+                . 'liste complète des sources).';
+        } elseif (!empty($data['allow_actions']) && !$acting
+            && array_diff($sources, [ConnectorRegistry::WEB]) === []) {
+            $issues[] = '`actions_a_approuver` est vrai, mais aucune source ne permet d\'agir (la recherche Internet '
+                . 'ne fait que lire) : ajoute à `sources` le service où la tâche écrit — gmail ou outlook pour un '
+                . 'brouillon d\'email, l\'agenda pour un évènement… — ou retire `actions_a_approuver`.';
+        }
+        return $issues;
     }
 
     /**

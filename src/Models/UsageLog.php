@@ -32,6 +32,8 @@ class UsageLog
      * kb_id, llm_provider, model, tokens_input, tokens_input_cached,
      * tokens_input_cache_write, tokens_output, tokens_output_reasoning,
      * quantity, credits_used, cost_eur, priced, quota_exempt, source.
+     * `origin` (workflow, tâche programmée) est lue sur la conversation au
+     * moment de l'écriture : cf. UsageHistory::SQL_STORED_ORIGIN.
      *
      * @return int identifiant de la ligne
      */
@@ -43,8 +45,8 @@ class UsageLog
                 (user_id, conversation_id, message_id, profile_id, kb_id, llm_provider, model,
                  tokens_input, tokens_input_cached, tokens_input_cache_write,
                  tokens_output, tokens_output_reasoning, quantity,
-                 credits_used, cost_eur, priced, quota_exempt, source)
-             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)'
+                 credits_used, cost_eur, priced, quota_exempt, source, origin)
+             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,' . UsageHistory::SQL_STORED_ORIGIN . ')'
         )->execute([
             self::nullableId($row['user_id'] ?? null),
             self::nullableId($row['conversation_id'] ?? null),
@@ -64,6 +66,7 @@ class UsageLog
             !array_key_exists('priced', $row) || !empty($row['priced']) ? 1 : 0,
             !empty($row['quota_exempt']) ? 1 : 0,
             UsageSource::normalize((string)($row['source'] ?? UsageSource::CHAT)),
+            self::nullableId($row['conversation_id'] ?? null),
         ]);
         return (int)$db->lastInsertId();
     }
@@ -93,8 +96,8 @@ class UsageLog
         $db->prepare(
             'INSERT INTO tool_usage_logs
                 (user_id, conversation_id, message_id, profile_id, tool_id, tool_type, source,
-                 credits_used, quantity_units, cost_eur, priced, quota_exempt, meta_json)
-             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)'
+                 credits_used, quantity_units, cost_eur, priced, quota_exempt, meta_json, origin)
+             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,' . UsageHistory::SQL_STORED_ORIGIN . ')'
         )->execute([
             self::nullableId($row['user_id'] ?? null),
             self::nullableId($row['conversation_id'] ?? null),
@@ -109,6 +112,7 @@ class UsageLog
             !array_key_exists('priced', $row) || !empty($row['priced']) ? 1 : 0,
             !empty($row['quota_exempt']) ? 1 : 0,
             $metaJson,
+            self::nullableId($row['conversation_id'] ?? null),
         ]);
         return (int)$db->lastInsertId();
     }
@@ -368,11 +372,13 @@ class UsageLog
                     COALESCE(SUM(tokens_output), 0)           AS tokens_out,
                     COALESCE(SUM(tokens_input_cached), 0)     AS tokens_in_cached,
                     COALESCE(SUM(tokens_output_reasoning), 0) AS tokens_out_reasoning,
-                    COALESCE(SUM(IF(source = ?, quantity, 0)), 0) AS web_searches
+                    COALESCE(SUM(IF(source IN (?, ?), quantity, 0)), 0) AS web_searches
              FROM usage_logs
              WHERE user_id = ? AND created_at BETWEEN ? AND ?'
         );
-        $tok->execute([UsageSource::WEB_SEARCH, $userId, $monthStart, $monthEnd . ' 23:59:59']);
+        // Recherches du chat ET de Claude dans Office (source à part, cf.
+        // UsageSource::searchSourceFor).
+        $tok->execute([UsageSource::WEB_SEARCH, UsageSource::OFFICE_SEARCH, $userId, $monthStart, $monthEnd . ' 23:59:59']);
         $t = $tok->fetch(PDO::FETCH_ASSOC) ?: [];
 
         $tokensIn  = (int)($t['tokens_in'] ?? 0);
@@ -508,7 +514,7 @@ class UsageLog
      * pour lui) et par modèle (opérations IA seulement). Anneaux de
      * Réglages → Usage & crédits : même base que le solde affiché au-dessus.
      *
-     * @return array{profiles:list<array{profile_id:?int, name:?string, color:?string, credits:int}>,
+     * @return array{profiles:list<array{profile_id:?int, office:bool, name:?string, color:?string, credits:int}>,
      *               models:list<array{provider:string, model:string, credits:int}>}
      */
     public static function quotaCreditsSplit(?string $from, ?string $to, ?int $userId = null): array
@@ -516,20 +522,24 @@ class UsageLog
         $db = Database::getInstance();
         [$where, $params] = self::usagePeriodWhere($from, $to, $userId);
         $where = ($where !== '' ? $where . ' AND' : 'WHERE') . ' quota_exempt = 0';
+        // Claude dans Office n'a pas d'assistant : sa part forme sa propre
+        // tranche (`office`), au lieu de grossir « Sans assistant ».
+        $office = "'" . implode("', '", UsageSource::OFFICE_SOURCES) . "'";
         $stmt = $db->prepare(
-            "SELECT t.profile_id, p.name, p.color, SUM(t.credits) AS credits
-             FROM (SELECT profile_id, credits_used AS credits FROM usage_logs $where
+            "SELECT t.profile_id, t.office, p.name, p.color, SUM(t.credits) AS credits
+             FROM (SELECT profile_id, IF(source IN ($office), 1, 0) AS office, credits_used AS credits FROM usage_logs $where
                    UNION ALL
-                   SELECT profile_id, credits_used AS credits FROM tool_usage_logs $where) t
+                   SELECT profile_id, 0 AS office, credits_used AS credits FROM tool_usage_logs $where) t
              LEFT JOIN profiles p ON p.id = t.profile_id
-             GROUP BY t.profile_id, p.name, p.color
+             GROUP BY t.profile_id, t.office, p.name, p.color
              HAVING credits > 0 ORDER BY credits DESC"
         );
         $stmt->execute(array_merge($params, $params));
         $profiles = array_map(static fn(array $r): array => [
-            'profile_id' => $r['profile_id'] !== null ? (int)$r['profile_id'] : null,
-            'name'       => $r['name'] !== null ? (string)$r['name'] : null,
-            'color'      => $r['color'] !== null ? (string)$r['color'] : null,
+            'profile_id' => $r['profile_id'] !== null && !(int)$r['office'] ? (int)$r['profile_id'] : null,
+            'office'     => (bool)(int)$r['office'],
+            'name'       => $r['name'] !== null && !(int)$r['office'] ? (string)$r['name'] : null,
+            'color'      => $r['color'] !== null && !(int)$r['office'] ? (string)$r['color'] : null,
             'credits'    => (int)$r['credits'],
         ], $stmt->fetchAll(PDO::FETCH_ASSOC));
 
@@ -544,6 +554,35 @@ class UsageLog
             $models[] = ['provider' => $provider, 'model' => $model, 'credits' => (int)$row['credits']];
         }
         return ['profiles' => $profiles, 'models' => $models];
+    }
+
+    /**
+     * Ce que Claude dans Office a consommé sur une période (toute
+     * l'organisation, ou une personne) : crédits des deux sources (jetons et
+     * recherches), demandes (lignes de jetons), recherches, personnes.
+     *
+     * @return array{credits:int, requests:int, searches:int, people:int}
+     */
+    public static function officeSummary(?string $from, ?string $to, ?int $userId = null): array
+    {
+        [$where, $params] = self::usagePeriodWhere($from, $to, $userId);
+        $in = implode(', ', array_fill(0, count(UsageSource::OFFICE_SOURCES), '?'));
+        $where = ($where !== '' ? $where . ' AND' : 'WHERE') . " source IN ($in)";
+        $stmt = Database::getInstance()->prepare(
+            "SELECT COALESCE(SUM(credits_used), 0) AS credits,
+                    COALESCE(SUM(source = ?), 0) AS requests,
+                    COALESCE(SUM(IF(source = ?, quantity, 0)), 0) AS searches,
+                    COUNT(DISTINCT user_id) AS people
+             FROM usage_logs $where"
+        );
+        $stmt->execute(array_merge([UsageSource::OFFICE_ADDIN, UsageSource::OFFICE_SEARCH], $params, UsageSource::OFFICE_SOURCES));
+        $r = $stmt->fetch(PDO::FETCH_ASSOC) ?: [];
+        return [
+            'credits'  => (int)($r['credits'] ?? 0),
+            'requests' => (int)($r['requests'] ?? 0),
+            'searches' => (int)round((float)($r['searches'] ?? 0)),
+            'people'   => (int)($r['people'] ?? 0),
+        ];
     }
 
     /**
@@ -745,6 +784,26 @@ class UsageLog
     }
 
     /** @return array<int, int> */
+    /**
+     * Crédits d'UN compte qui entament un quota, depuis un instant donné
+     * (inclus) : l'enveloppe d'un compte de démo (DemoAccount). Servi par les
+     * index (user_id, created_at) des deux tables.
+     */
+    public static function quotaCreditsSince(int $userId, string $since): int
+    {
+        $db    = Database::getInstance();
+        $total = 0;
+        foreach (['usage_logs', 'tool_usage_logs'] as $table) {
+            $stmt = $db->prepare(
+                "SELECT COALESCE(SUM(credits_used), 0) FROM $table
+                 WHERE user_id = ? AND created_at >= ? AND quota_exempt = 0"
+            );
+            $stmt->execute([$userId, $since]);
+            $total += (int)$stmt->fetchColumn();
+        }
+        return $total;
+    }
+
     private static function quotaCreditsByUser(?string $since, ?string $until = null): array
     {
         $db  = Database::getInstance();
@@ -898,6 +957,59 @@ class UsageLog
     }
 
     /**
+     * Crédits débités par les WORKFLOWS, workflow par workflow : tout ce que
+     * les conversations de leurs exécutions ont débité (étapes, conditions,
+     * créations, recherches), quelle que soit la source. Une étape s'écrit au
+     * grand livre comme un tour de chat : sans ce regroupement, un workflow se
+     * fondait dans « Conversations » et personne ne voyait ce qu'il coûtait.
+     * Fenêtre sur la date de la LIGNE débitée (comme tout le grand livre) ;
+     * `$quotaOnly` : seulement ce qui entame le quota (page de la personne).
+     * Une exécution dont le workflow a été supprimé n'est plus rattachée
+     * (sa conversation perd son lien) : elle reste dans les totaux.
+     *
+     * @return list<array{workflow_id:int, name:string, color:string, owner_id:int, owner:string, runs:int, credits:int}>
+     */
+    public static function workflowCredits(?string $from = null, ?string $to = null, ?int $userId = null, bool $quotaOnly = false, int $limit = 0): array
+    {
+        $part = static function (string $table, string $alias) use ($from, $to, $userId, $quotaOnly): array {
+            [$where, $params] = self::usagePeriodWhere($from, $to, $userId, $alias);
+            $where = ($where !== '' ? $where . ' AND' : 'WHERE') . ' c.workflow_run_id IS NOT NULL'
+                . ($quotaOnly ? " AND $alias.quota_exempt = 0" : '');
+            return [
+                "SELECT c.workflow_run_id AS run_id, SUM($alias.credits_used) AS credits
+                 FROM $table $alias JOIN conversations c ON c.id = $alias.conversation_id
+                 $where GROUP BY c.workflow_run_id",
+                $params,
+            ];
+        };
+        [$llmSql, $llmParams] = $part('usage_logs', 'l');
+        [$toolSql, $toolParams] = $part('tool_usage_logs', 't');
+        $stmt = Database::getInstance()->prepare(
+            "SELECT w.id AS workflow_id, w.name, w.color, w.user_id AS owner_id,
+                    COALESCE(NULLIF(u.name, ''), u.email, '') AS owner,
+                    COUNT(DISTINCT x.run_id) AS runs, SUM(x.credits) AS credits
+             FROM ($llmSql UNION ALL $toolSql) x
+             JOIN workflow_runs r ON r.id = x.run_id
+             JOIN workflows w ON w.id = r.workflow_id
+             LEFT JOIN users u ON u.id = w.user_id
+             GROUP BY w.id, w.name, w.color, w.user_id, u.name, u.email
+             HAVING credits > 0
+             ORDER BY credits DESC, w.name"
+            . ($limit > 0 ? ' LIMIT ' . (int)$limit : '')
+        );
+        $stmt->execute(array_merge($llmParams, $toolParams));
+        return array_map(static fn(array $r): array => [
+            'workflow_id' => (int)$r['workflow_id'],
+            'name'        => (string)$r['name'],
+            'color'       => preg_match('/^#[0-9a-fA-F]{6}$/', (string)$r['color']) ? (string)$r['color'] : '',
+            'owner_id'    => (int)$r['owner_id'],
+            'owner'       => (string)$r['owner'],
+            'runs'        => (int)$r['runs'],
+            'credits'     => (int)$r['credits'],
+        ], $stmt->fetchAll(PDO::FETCH_ASSOC));
+    }
+
+    /**
      * Répartition par outil (`tool_usage_logs`).
      *
      * @return list<array{tool_id:int, tool_name:string, tool_type:string, uses:int, credits:int, cost_eur:float}>
@@ -1012,7 +1124,7 @@ class UsageLog
      *
      * @return list<array{kb_id:?int, kb_name:string, requests:int, credits:int, cost_eur:float, tokens:int}>
      */
-    public static function byKnowledgeBase(?string $from = null, ?string $to = null, ?int $userId = null): array
+    public static function byKnowledgeBase(?string $from = null, ?string $to = null, ?int $userId = null, ?array $viewer = null): array
     {
         [$where, $params] = self::usagePeriodWhere($from, $to, $userId, 'l');
         $where = ($where !== '' ? $where . ' AND' : 'WHERE') . ' l.kb_id IS NOT NULL';
@@ -1022,17 +1134,20 @@ class UsageLog
                     COUNT(*)                       AS requests,
                     COALESCE(SUM(l.credits_used), 0) AS credits,
                     COALESCE(SUM(l.cost_eur), 0)     AS cost_eur,
-                    COALESCE(SUM(l.tokens_input + l.tokens_output), 0) AS tokens
+                    COALESCE(SUM(l.tokens_input + l.tokens_output), 0) AS tokens,
+                    kb.is_private, kb.created_by
              FROM usage_logs l
              LEFT JOIN knowledge_bases kb ON kb.id = l.kb_id
              $where
-             GROUP BY l.kb_id, kb.name
+             GROUP BY l.kb_id, kb.name, kb.is_private, kb.created_by
              ORDER BY credits DESC, tokens DESC"
         );
         $stmt->execute($params);
         return array_map(static fn(array $r): array => [
             'kb_id'    => $r['kb_id'] !== null ? (int)$r['kb_id'] : null,
-            'kb_name'  => (string)$r['kb_name'],
+            // Une base « Uniquement pour moi » reste comptée, jamais nommée
+            // devant quelqu'un d'autre que son créateur ($viewer).
+            'kb_name'  => KnowledgeBase::displayNameFor($r, $viewer),
             'requests' => (int)$r['requests'],
             'credits'  => (int)$r['credits'],
             'cost_eur' => (float)$r['cost_eur'],

@@ -126,7 +126,7 @@ final class WorkflowContractTest extends TestCase
 
         // Les trois écritures (lancement, étape ou action, création) passent par ces deux formes.
         $engine = self::src('src/Workflow/WorkflowEngine.php');
-        $this->assertStringContainsString('self::launchMessage($workflow, $def, $inputs, $trigger, $event)', self::methode($engine, 'launch'));
+        $this->assertStringContainsString('self::launchMessage($workflow, $def, $inputs, $trigger, $event, ', self::methode($engine, 'launch'));
         foreach (['startWork', 'startCreate'] as $m) {
             $this->assertStringContainsString('self::stepMessage(', self::methode($engine, $m), $m);
         }
@@ -323,5 +323,235 @@ final class WorkflowContractTest extends TestCase
                 $this->assertArrayHasKey($cle, $en, "$f : traduction absente de lang/en.client.php — $cle");
             }
         }
+    }
+
+    /**
+     * Historique du volet de gauche : une conversation née d'une exécution de
+     * workflow porte l'icône des workflows à gauche de son titre, comme
+     * l'horloge d'une tâche programmée — dans le chat ET dans le volet des
+     * pages d'espace (deux rendus du même historique).
+     */
+    public function testLHistoriqueMarqueLesConversationsDeWorkflow(): void
+    {
+        foreach (['templates/chat/index.php', 'templates/partials/chat-shell-sidebar.php'] as $gabarit) {
+            $src = self::src($gabarit);
+            $this->assertStringContainsString("\$isWorkflow  = !\$isScheduled && !empty(\$conv['workflow_run_id']);", $src, "$gabarit : drapeau absent");
+            $this->assertStringContainsString("<?= \$isWorkflow ? ' is-workflow' : '' ?>", $src, "$gabarit : classe de la ligne absente");
+            $horloge  = strpos($src, '<?= ScheduledTask::icon(13) ?>');
+            $workflow = strpos($src, '<span class="conv-workflow-icon" role="img" aria-label="<?= te(\'Workflow\') ?>"><?= Workflow::icon(13) ?></span>');
+            $titre    = strpos($src, '<span class="conv-title">');
+            $this->assertIsInt($horloge, $gabarit);
+            $this->assertIsInt($workflow, "$gabarit : icône des workflows absente");
+            $this->assertLessThan($titre, $workflow, "$gabarit : l'icône précède le titre");
+            $this->assertGreaterThan($horloge, $workflow, "$gabarit : même place que l'horloge, en alternative");
+        }
+        $css = self::src('public/assets/css/main.css');
+        $this->assertMatchesRegularExpression('/\.conv-scheduled-icon,\s*\.conv-workflow-icon\s*\{/', $css, 'Même habillage que l’horloge.');
+        // L'historique est lu en `c.*` : la colonne y est, sans requête de plus.
+        $this->assertStringContainsString('SELECT c.*', self::methode(self::src('src/Models/Conversation.php'), 'allForUser'));
+    }
+
+    // ------------------------------------------------------------------
+    // Supprimer un workflow : une corbeille là où on gère ses workflows, et
+    // jamais sans la fenêtre de confirmation.
+    // ------------------------------------------------------------------
+
+    /**
+     * La suppression était enfouie au bas des Réglages de l'éditeur. Elle est
+     * désormais sur chaque vignette de « Mes workflows » et dans l'en-tête de
+     * l'éditeur — toutes les portes passent par LA fenêtre de workflows.js,
+     * seule à poser `confirm`, sans lequel le serveur ne supprime rien.
+     */
+    public function testSupprimerPasseToujoursParLaFenetreDeConfirmation(): void
+    {
+        // Liste : un vrai formulaire par vignette, intercepté, droit « Supprimer ».
+        $liste = self::src('templates/workflows/index.php');
+        $this->assertStringContainsString("\$wfCanDelete = Workflow::allows(\$wfUser, 'delete');", $liste);
+        $this->assertStringContainsString('<?php if ($wfCanDelete):', $liste);
+        $this->assertStringContainsString('action="/workflows/<?= (int)$w[\'id\'] ?>/delete" class="wf-over" data-wf-delete', $liste);
+        foreach (['data-name=', 'data-runs=', 'data-live=', 'data-pausable=', "\$icons['trash']", 'Supprimer « {nom} »'] as $attendu) {
+            $this->assertStringContainsString($attendu, $liste);
+        }
+        $this->assertStringContainsString('$deletionFacts = $view === \'mes\'', self::methode(self::src('src/Controllers/WorkflowController.php'), 'index'));
+
+        // Éditeur : bouton d'en-tête, loin de « Publier ».
+        $edit = self::src('templates/workflows/edit.php');
+        $this->assertStringContainsString('id="wfDelete"', $edit);
+        $this->assertStringContainsString("<?php if (!empty(\$editor['can']['delete'])): ?>", $edit);
+        $this->assertLessThan(strpos($edit, 'id="wfPublish"'), strpos($edit, 'id="wfDelete"'));
+        $this->assertLessThan(strpos($edit, 'src="/assets/js/workflow-editor.js'), strpos($edit, 'src="/assets/js/workflows.js'), 'La fenêtre est chargée avant l’éditeur.');
+
+        $js = self::src('public/assets/js/workflows.js');
+        $this->assertStringContainsString("body.append('confirm', '1')", $js);
+        $this->assertStringContainsString("closest('form[data-wf-delete]')", $js);
+        $this->assertStringContainsString('role="alertdialog"', $js);
+        $this->assertStringContainsString('cancelBtn.focus()', $js, 'Le focus arrive sur Annuler : Entrée ne supprime rien.');
+        $this->assertStringContainsString('window.MiaWorkflowDelete', $js);
+
+        $editeur = self::src('public/assets/js/workflow-editor.js');
+        $supprimer = self::methode($editeur, 'deleteWorkflow');
+        $this->assertStringContainsString('window.MiaWorkflowDelete.open(', $supprimer);
+        $this->assertStringNotContainsString('window.confirm', $supprimer);
+        $this->assertStringNotContainsString('fetch(', $supprimer, 'Un seul envoi : celui de la fenêtre.');
+        $this->assertStringContainsString("\$('#wfDelete')", $editeur);
+        $this->assertStringContainsString('if (state.deleting) { return Promise.resolve(); }', self::methode($editeur, 'save'), 'Plus d’enregistrement automatique d’un workflow en cours de suppression.');
+        // Les Réglages gardent leur bouton, qui ouvre la même fenêtre.
+        $this->assertStringContainsString('data-act="delete"', $editeur);
+        $this->assertStringContainsString("case 'delete': return deleteWorkflow();", $editeur);
+
+        // Serveur : confirmation exigée, exécutions en cours arrêtées AVANT la suppression.
+        $ctl = self::methode(self::src('src/Controllers/WorkflowController.php'), 'delete');
+        $garde = strpos($ctl, "(string)(\$_POST['confirm'] ?? '') !== '1'");
+        $arret = strpos($ctl, 'WorkflowEngine::cancel($run, false, true)');
+        $suppr = strpos($ctl, 'Workflow::delete(');
+        $this->assertIsInt($garde);
+        $this->assertIsInt($arret);
+        $this->assertIsInt($suppr);
+        $this->assertLessThan($arret, $garde);
+        $this->assertLessThan($suppr, $arret);
+        $this->assertStringContainsString('WorkflowRun::unfinishedFor($workflow[\'id\'], (int)$user[\'id\'])', $ctl);
+        // Le message de la liste est posé AVANT MailPush::syncSoon, qui referme la session (JobQueue::dispatch).
+        $this->assertLessThan(strpos($ctl, 'MailPush::syncSoon('), strpos($ctl, "\$this->flash('workflows_success'"));
+        $this->assertStringContainsString("'deletion' => WorkflowRun::deletionFacts(", self::methode(self::src('src/Controllers/WorkflowController.php'), 'edit'));
+
+        // L'ancienne confirmation du navigateur a disparu, ses traductions aussi.
+        $this->assertStringNotContainsString('Supprimer ce workflow ? Ses exécutions passées', $editeur);
+        $this->assertStringNotContainsString('Supprimer ce workflow ? Ses exécutions passées', self::src('lang/en.client.php'));
+    }
+
+    public function testLesFaitsDeSuppressionSeComptentParWorkflow(): void
+    {
+        $this->assertSame([], WorkflowRun::foldDeletionFacts([]));
+        $this->assertSame(
+            [3 => ['runs' => 7, 'live' => 3], 9 => ['runs' => 1, 'live' => 0]],
+            WorkflowRun::foldDeletionFacts([
+                ['workflow_id' => '3', 'status' => 'done', 'n' => '4'],
+                ['workflow_id' => '3', 'status' => 'running', 'n' => '1'],
+                ['workflow_id' => '3', 'status' => 'waiting', 'n' => '2'],
+                ['workflow_id' => '9', 'status' => 'failed', 'n' => '1'],
+            ]),
+            'Une exécution en échec est un lancement, pas une exécution « en cours ».'
+        );
+        // Une suppression arrête aussi une exécution en échec ou en pause : plus rien ne la reprendrait.
+        foreach ([WorkflowRun::RUNNING, WorkflowRun::WAITING, WorkflowRun::PAUSED, WorkflowRun::FAILED] as $statut) {
+            $this->assertContains($statut, WorkflowRun::UNFINISHED);
+        }
+        foreach (WorkflowRun::TERMINAL as $statut) {
+            $this->assertNotContains($statut, WorkflowRun::UNFINISHED);
+        }
+    }
+
+    /**
+     * La VRAIE fenêtre (workflows.js) exécutée sous node, dans un DOM minimal :
+     * ce qu'elle dit, ce qu'elle échappe, ce qu'elle envoie — et qu'une
+     * corbeille de vignette l'ouvre au lieu de soumettre.
+     */
+    public function testLaFenetreDeSuppressionDitCeQuiPartEtEnvoieLaConfirmation(): void
+    {
+        $node = trim((string)@shell_exec('command -v node 2>/dev/null'));
+        if ($node === '') {
+            self::markTestSkipped('node indisponible.');
+        }
+        $harnais = <<<'JS'
+'use strict';
+globalThis.window = globalThis;
+window.I18N = { lang: 'fr' };
+window.t = (s, v) => String(s).replace(/\{(\w+)\}/g, (m, k) => (v && k in v ? String(v[k]) : m));
+window.tn = (n, un, plusieurs, v) => window.t(n > 1 ? plusieurs : un, Object.assign({}, v || {}, { n }));
+const docListeners = {};
+const made = [];
+function stub(extra) {
+    return Object.assign({ disabled: false, textContent: '', lastChild: { textContent: '' }, focus() { focused = this; } }, extra || {});
+}
+let focused = null;
+const goBtn = stub();
+const cancelBtn = stub();
+const err = stub();
+globalThis.document = {
+    activeElement: null,
+    body: { appendChild(el) { made.push(el); } },
+    addEventListener(t, f) { (docListeners[t] = docListeners[t] || []).push(f); },
+    removeEventListener() {},
+    getElementById() { return null; },
+    querySelector(s) { return s === 'meta[name="csrf-token"]' ? { getAttribute: () => 'jeton' } : null; },
+    contains() { return true; },
+    createElement() {
+        return {
+            className: '', innerHTML: '', listeners: {},
+            addEventListener(t, f) { (this.listeners[t] = this.listeners[t] || []).push(f); },
+            remove() { this.removed = true; },
+            querySelector(s) { return s === '[data-confirm]' ? goBtn : s === 'footer [data-close]' ? cancelBtn : s === '.err' ? err : null; },
+            querySelectorAll() { return [cancelBtn, goBtn]; },
+        };
+    },
+};
+window.location = { href: '' };
+let sent = null;
+globalThis.fetch = (url, init) => { sent = { url, init }; return Promise.resolve({ json: () => Promise.resolve({ ok: true, url: '/workflows' }) }); };
+__SCRIPT__
+const D = window.MiaWorkflowDelete;
+const out = {};
+out.none = D.lines({ runs: 0, live: 0 });
+out.one = D.lines({ runs: 1, live: 1 });
+out.many = D.lines({ runs: '12', live: '3' });
+
+// Corbeille d'une vignette : le formulaire n'est pas soumis, la fenêtre s'ouvre.
+let prevented = false;
+const form = { getAttribute: (n) => ({ action: '/workflows/42/delete', 'data-name': '<b>Veille & co</b>', 'data-runs': '2', 'data-live': '1', 'data-pausable': '1' })[n] ?? null };
+docListeners.submit.forEach((f) => f({ target: { closest: (s) => (s === 'form[data-wf-delete]' ? form : null) }, preventDefault() { prevented = true; } }));
+out.prevented = prevented;
+out.html = made[0] ? made[0].innerHTML : '';
+out.focusOnCancel = focused === cancelBtn;
+out.sentBefore = sent;
+
+// Annuler : rien n'est envoyé.
+const back = made[0];
+const target = (match) => ({ closest: (s) => (s === match ? {} : null) });
+// Confirmer : l'envoi part, avec confirm=1, puis la liste.
+back.listeners.click.forEach((f) => f({ target: target('[data-confirm]') }));
+setTimeout(() => {
+    out.url = sent && sent.url;
+    out.method = sent && sent.init.method;
+    out.confirm = sent && sent.init.body.get('confirm');
+    out.csrf = sent && sent.init.headers['X-CSRF-Token'];
+    out.after = window.location.href;
+    out.busy = goBtn.disabled;
+    process.stdout.write(JSON.stringify(out));
+}, 20);
+JS;
+        $script = str_replace('__SCRIPT__', self::src('public/assets/js/workflows.js'), $harnais);
+        $fichier = tempnam(sys_get_temp_dir(), 'mia-wfdel-');
+        file_put_contents($fichier, $script);
+        try {
+            $sortie = (string)shell_exec(escapeshellarg($node) . ' ' . escapeshellarg($fichier) . ' 2>&1');
+        } finally {
+            @unlink($fichier);
+        }
+        $r = json_decode($sortie, true);
+        $this->assertIsArray($r, "workflows.js a échoué sous node :\n" . $sortie);
+
+        $textes = static fn(array $lignes): string => implode(' | ', array_column($lignes, 'text'));
+        $this->assertStringContainsString('jamais été lancé', $textes($r['none']));
+        $this->assertCount(2, $r['none'], 'Rien en cours : aucun avertissement.');
+        $this->assertStringContainsString('L’historique de son lancement', $textes($r['one']));
+        $this->assertStringContainsString('Son exécution en cours sera arrêtée', $textes($r['one']));
+        $this->assertTrue($r['one'][2]['warn']);
+        $this->assertStringContainsString('ses 12 lancements', $textes($r['many']));
+        $this->assertStringContainsString('Ses 3 exécutions en cours', $textes($r['many']));
+
+        $this->assertTrue($r['prevented'], 'La corbeille ne soumet jamais seule.');
+        $this->assertNull($r['sentBefore'], 'Rien ne part avant la confirmation.');
+        $this->assertTrue($r['focusOnCancel']);
+        $this->assertStringContainsString('&lt;b&gt;Veille &amp; co&lt;/b&gt;', $r['html'], 'Le nom est échappé.');
+        $this->assertStringNotContainsString('<b>Veille', $r['html']);
+        $this->assertStringContainsString('Cette action est définitive', $r['html']);
+        $this->assertStringContainsString('mettez-le plutôt en pause', $r['html']);
+        $this->assertStringContainsString('Supprimer définitivement', $r['html']);
+
+        $this->assertSame('/workflows/42/delete', $r['url']);
+        $this->assertSame('POST', $r['method']);
+        $this->assertSame('1', $r['confirm']);
+        $this->assertSame('jeton', $r['csrf']);
+        $this->assertSame('/workflows', $r['after']);
     }
 }

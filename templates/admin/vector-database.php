@@ -7,11 +7,16 @@
 <body class="admin-page">
 <?php $page = 'knowledge-bases-vector'; require ROOT . '/templates/partials/admin-nav.php'; ?>
 <div class="admin-content">
+    <?php require ROOT . '/templates/partials/admin-topbar.php'; ?>
     <?php $ongletsGroupe = AdminTabs::DIAGNOSTIC; require ROOT . '/templates/partials/admin-tabs.php'; ?>
-    <h1><?= te('Moteur vectoriel') ?></h1>
-    <p style="color:var(--text-muted);font-size:13px;margin:-6px 0 18px">
+    <header class="page-head">
+    <div class="page-head-text">
+        <h1><?= te('Moteur vectoriel') ?></h1>
+        <p class="page-head-sub">
         <?= te('État du moteur qui porte les vecteurs des bases de connaissances, et gestes de remise en état. MySQL reste la source de vérité : sans vecteurs, les assistants répondent quand même, en recherche texte — moins pertinente.') ?>
     </p>
+    </div>
+    </header>
 
     <!--
         Rapport chargé en AJAX et non rendu côté serveur : sonder Qdrant

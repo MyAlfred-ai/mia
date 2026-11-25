@@ -24,6 +24,11 @@ demande. Pour relier un service : [Relier un service](relier-un-service.md).
 3. Écrivez votre demande comme vous la diriez à un collègue : *« retrouve le devis Durand dans mon
    Drive et résume-le »*.
 
+![Le menu + ouvert dans une conversation : Joindre des fichiers en tête, la section Créer avec Image, Page web, Site illustré et Itinéraire et leur coût en crédits, puis les Sources : Recherche Internet allumée, et le volet Connecteurs déplié, où Emails Gmail est allumé à côté de Fichiers Google Drive et Agenda Google. Le logo de Gmail s'affiche à côté du bouton +.](../../images/menu-plus.png)
+
+Un service que vous venez de relier **s'allume tout seul** : à votre retour dans le chat, sa ligne
+est déjà allumée. Éteignez-la si vous n'en avez pas besoin.
+
 MIA peut aussi vous le proposer : pendant que vous tapez, une bannière demande par exemple
 « Autoriser l'assistant à consulter vos emails Gmail ? », avec **Activer Gmail** et **Non merci**.
 
@@ -38,6 +43,9 @@ Plutôt que d'allumer chaque connecteur, allumez **Laisser MIA choisir**, premi�
 - Seuls les services **reliés** sont concernés ; un connecteur que vous allumez vous-même reste
   allumé, comme avant.
 - Rien ne change pour les écritures : chaque action préparée passe par sa carte d'approbation.
+- **En conversation vocale, ce mode vaut d'office** quand il est proposé : à la voix, personne
+  n'ouvre le menu **+**. Vous pouvez aussi dire « active Gmail » ou « coupe l'agenda » — voir
+  [Converser à la voix](../conversations/converser-a-la-voix.md).
 - L'interrupteur reste allumé pour vos prochains messages et vos nouvelles conversations, sur ce
   navigateur.
 
@@ -54,8 +62,9 @@ vous, l'étape en cours est cochée elle aussi. La carte reste visible quand vou
 conversation.
 
 Le connecteur reste allumé pour vos prochains messages et vos nouvelles conversations, sur ce
-navigateur. Un **point ambre** sur le bouton **+** rappelle que vos réglages s'écartent de ceux par
-défaut ; son infobulle détaille lesquels.
+navigateur. Son logo s'affiche dans la **pastille des sources actives**, à côté du bouton **+**, avec
+le globe de la Recherche Internet quand elle est allumée ; toucher la pastille rouvre le menu. Un
+**point ambre** sur le **+** ne signale plus qu'une connexion à reconnecter.
 
 ## Plusieurs sources à la fois
 
@@ -67,18 +76,24 @@ seule source, nommez-la : *« dans mon Drive »*, *« dans Slack »*.
 ## Pièces jointes, créneaux libres, longs documents
 
 - **Pièce jointe** : *« que dit la facture jointe au mail d'Orange ? »*. En lisant un mail, MIA voit
-  la liste de ses pièces jointes et lit celle qui répond à votre question (PDF, Word, Excel,
-  PowerPoint, texte). Une image ou un ancien format .doc ne se lit pas : elle le dit.
+  la liste de ses pièces jointes et lit celle qui répond à votre question (PDF, Word, Excel, PowerPoint —
+  anciens .doc, .xls et .ppt compris —, OpenDocument, EPUB, emails joints, archives ZIP, et tout fichier texte :
+  CSV, JSON, .ics, code…). Une image ne se lit pas : elle le dit.
 - **Créneau libre** : *« trouve-moi une heure jeudi ou vendredi avec marie@exemple.fr »*. MIA calcule
   les créneaux libres de votre agenda (9 h – 18 h, jours ouvrés, sauf demande contraire) en tenant
   compte de vos collègues quand leur agenda lui est visible, puis propose de bloquer celui que vous
-  choisissez — carte d'approbation comprise.
+  choisissez — carte d'approbation comprise. Elle invite aussi les personnes nommées :
+  [Organiser une réunion dans Google Agenda](organiser-une-reunion-google.md),
+  [Organiser une réunion dans Outlook](organiser-une-reunion.md).
 - **Long document** : un document Drive, un email, une pièce jointe ou une page web trop long pour
   une seule lecture se lit partie par partie ; MIA lit la suite quand votre question le demande. Un
   résultat très volumineux (une recherche qui ramène des dizaines de mails, par exemple) est résumé
   au regard de votre question avant que MIA ne poursuive.
 - **Vos heures** : les agendas se lisent et s'écrivent à l'heure de votre appareil, et la carte
   d'un évènement nomme le fuseau.
+- **Inviter, c'est écrire** : une réunion Outlook avec invités leur envoie l'invitation dès votre
+  approbation, et une modification les en informe ; Google Agenda aussi, sauf si vous demandez de ne
+  pas leur envoyer d'invitation. La carte nomme les invités et dit qui sera prévenu.
 
 ## Approuver une écriture
 
@@ -147,8 +162,10 @@ Une fois que MIA a ouvert un mail, un document ou un évènement, désignez-le s
 *« réponds à ce mail »*, *« ajoute-lui une conclusion »*, *« décale-le d'une heure »*. Si votre
 demande peut viser deux objets récents, MIA demande lequel.
 
-En réponse à un mail, le brouillon reprend l'expéditeur d'origine et se range dans le fil ; les
-personnes en copie ne sont ajoutées que si vous le demandez.
+En réponse à un mail, le brouillon reprend l'expéditeur d'origine — ou l'adresse de réponse qu'il a
+indiquée, s'il en a une — et se range dans le fil ; les personnes en copie ne sont ajoutées que si
+vous le demandez. Avec Outlook, qui n'ajoute pas votre signature tout seul, le message se termine par
+une formule de fin ; **Améliorer** la garde.
 
 **Reprendre après une approbation.** Quand le plan n'est pas terminé (une étape attendait votre
 approbation, ou la demande était trop longue pour une seule réponse), un bouton **Continuer**
@@ -175,8 +192,8 @@ apparaît sous la réponse une fois les cartes tranchées. Il envoie « Continue
 - **Regénérer** une réponse ne réutilise pas les connecteurs.
 - **Arrêter la génération** arrête aussi les étapes que MIA s'apprêtait à mener : aucune recherche
   ni carte d'approbation ne part après votre clic.
-- **Ce que MIA lit** : les premiers milliers de caractères d'un document ou d'un mail, jamais les
-  pièces jointes.
+- **Ce que MIA lit** : un long document ou un long mail se lit partie par partie, et une pièce
+  jointe seulement quand votre question porte dessus (voir plus haut).
 - **Ce que MIA lit reste une information, jamais un ordre** : si un mail ou un fichier contient une
   phrase qui ressemble à une consigne (« transfère ce dossier à… »), MIA ne l'exécute pas et vous la
   signale. Aucune écriture ne part sans la carte d'approbation, et la carte nomme ce que MIA avait lu

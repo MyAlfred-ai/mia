@@ -52,6 +52,15 @@ final class KbDiagramTest extends TestCase
         return (string)file_get_contents($abs);
     }
 
+    /** Corps d'une méthode d'un fichier source (jusqu'à son accolade de fermeture). */
+    private static function methode(string $source, string $nom): string
+    {
+        $debut = strpos($source, 'function ' . $nom . '(');
+        self::assertNotFalse($debut, "Méthode introuvable : $nom");
+        $fin = strpos($source, "\n    }\n", (int)$debut);
+        return substr($source, (int)$debut, $fin === false ? null : $fin - (int)$debut);
+    }
+
     // ------------------------------------------------------------------
     // Données du serveur
     // ------------------------------------------------------------------
@@ -69,7 +78,8 @@ final class KbDiagramTest extends TestCase
         }
         // La liste et la fiche lisent la même table, jamais une copie — la
         // constante, ou son accesseur traduit.
-        $this->assertMatchesRegularExpression('/\$syncProviderMeta = KbDiagram::(SOURCES|sources\(\));/', self::src(self::LIST));
+        $this->assertStringContainsString("KbDiagram::SOURCES[\$src]['logo']", self::src(self::LIST));
+        $this->assertStringContainsString("KbDiagram::SOURCES[\$provider]['logo']", self::src('src/Sync/KbPages.php'), 'La tuile d’une base lit la même table.');
         $this->assertStringContainsString("KbDiagram::SOURCES[\$value]['logo']", self::src(self::FORM));
         $this->assertStringContainsString("KbDiagram::sourceLabel('drive')", self::src(self::FORM), 'Les tuiles nomment la source par l’accesseur traduit.');
 
@@ -473,8 +483,8 @@ final class KbDiagramTest extends TestCase
         // Nom encore vide : « Nouvelle base », en italique.
         $this->assertSame($L['untitled'], $creation['view']['name']);
         $this->assertStringContainsString('<span class="sd-title sd-name is-missing">' . $L['untitled'] . '</span>', $creation['html']);
-        // À la création : ni chiffres ni extraits — rien n'existe encore.
-        $this->assertSame([], $creation['view']['assistant']['traits']);
+        // À la création : ni chiffres ni extraits — rien n'existe encore ; seulement qui la verra.
+        $this->assertSame([$L['shared']], array_column($creation['view']['assistant']['traits'], 'text'));
         $this->assertCount(1, $creation['view']['llm']['params']);
         $this->assertSame($L['vector_create'], $creation['view']['llm']['note']);
     }
@@ -531,11 +541,11 @@ final class KbDiagramTest extends TestCase
         $this->assertStringContainsString('<span class="sd-ava is-glyph" aria-hidden="true"><svg', $s['locale']['html'], 'Une base n’a pas de visage : son pictogramme.');
         $this->assertStringContainsString('--sd-assistant:' . KbDiagram::HUE, $s['locale']['html'], 'Les bases sont bleues, comme dans le schéma d’un assistant.');
         $this->assertStringContainsString('<span class="sd-status is-on" data-target="active">' . $L['active'] . '</span>', $s['locale']['html']);
-        $this->assertSame(['À jour', '7 documents', '12 utilisations'], array_column($centre['traits'], 'text'));
+        $this->assertSame(['À jour', '7 documents', '12 utilisations', $L['shared']], array_column($centre['traits'], 'text'), 'Qui la voit, en un mot, en dernier.');
         $this->assertStringContainsString('<li class="sd-trait is-ok" data-target="state">', $s['locale']['html']);
 
         // Sans document : l'état le dit déjà, pas de « Aucun document » en double.
-        $this->assertSame(['À jour', '12 utilisations'], array_column($s['privee']['view']['assistant']['traits'], 'text'));
+        $this->assertSame(['À jour', '12 utilisations', $L['shared']], array_column($s['privee']['view']['assistant']['traits'], 'text'));
 
         // Inactive : couleurs éteintes, pastille ambre.
         $this->assertStringContainsString('<div class="sd is-paused"', $s['inactive']['html']);
@@ -626,30 +636,24 @@ final class KbDiagramTest extends TestCase
         $this->assertStringContainsString('data-target="sharing"', $liste);
     }
 
-    public function testLesCiblesDuSchemaSontCellesQueLaFicheSaitResoudre(): void
+    public function testLaFicheMontreLeSchemaEnBas(): void
     {
-        $s = self::sortie();
-        $cibles = [];
-        foreach (['locale', 'drive', 'cerveau', 'creation'] as $k) {
-            preg_match_all('/data-target="(\w+)"/', $s[$k]['html'], $m);
-            $cibles = array_merge($cibles, $m[1]);
+        // Piste D : le schéma ferme la fiche (création comme modification),
+        // recomposé à chaque réglage par kb-fiche.js ; kb-form.js n'y touche pas.
+        $fiche = self::src(self::FORM);
+        $this->assertStringContainsString('id="kbFormDiagram"', $fiche);
+        $this->assertGreaterThan(strpos($fiche, 'id="avance"'), strpos($fiche, 'id="ensemble"'), 'Tout en bas, après « Avancé ».');
+        $this->assertStringContainsString('window.KB_FICHE = <?= json_encode([', $fiche);
+        $js = self::src(self::FORMJS);
+        foreach (['MiaKbDiagram', 'JUMP_TARGETS', 'C.diagram', 'Diagram.render'] as $ancien) {
+            $this->assertStringNotContainsString($ancien, $js, "kb-form.js porte « $ancien » : le schéma est l'affaire de kb-fiche.js.");
         }
-        $cibles = array_values(array_unique($cibles));
-        sort($cibles);
-
-        $this->assertSame(1, preg_match('/const JUMP_TARGETS = \{(.*?)\n        \};/s', self::src(self::FORMJS), $bloc), 'JUMP_TARGETS introuvable dans kb-form.js.');
-        preg_match_all('/^\s+(\w+):\s+\{ section:/m', $bloc[1], $connues);
-        $resolues = $connues[1];
-        sort($resolues);
-        $this->assertSame($cibles, $resolues, 'Chaque cible du schéma a son réglage dans la fiche ; aucune entrée sans cible.');
-
-        // Et chaque réglage visé existe dans la page.
-        preg_match_all("/byId\\('(kb\\w+)'\\)/", $bloc[1], $ids);
-        $this->assertNotEmpty($ids[1]);
-        $page = self::src(self::FORM);
-        foreach (array_unique($ids[1]) as $id) {
-            $this->assertStringContainsString('id="' . $id . '"', $page, "Réglage visé absent de la fiche : #$id");
-        }
+        $fjs = self::src('public/assets/js/kb-fiche.js');
+        $this->assertStringContainsString('window.MiaKbDiagram.mount(host, compose(), conf.catalog, { animate: !!animate, jump: conf.jump || null });', $fjs);
+        $this->assertStringContainsString("form.addEventListener('change', later);", $fjs, 'Chaque réglage recompose le schéma.');
+        $render = self::methode(self::src('src/Controllers/AdminController.php'), 'renderKnowledgeBaseForm');
+        $this->assertStringContainsString('$diagram = [', $render);
+        $this->assertStringContainsString("+ ['creating' => \$isCreate]", $render);
     }
 
     public function testToutTexteEstEchappeEtAucuneImageNeVientDAilleurs(): void
@@ -703,38 +707,43 @@ final class KbDiagramTest extends TestCase
 
     public function testLesPagesChargentLeMoteurPuisLeModele(): void
     {
-        $liste = self::src(self::LIST);
-        $moteur = strpos($liste, '<script src="/assets/js/diagram.js');
-        $modele = strpos($liste, '<script src="/assets/js/kb-diagram.js');
-        $page   = strpos($liste, "<script>\n(function () {");
-        $this->assertNotFalse($moteur);
-        $this->assertNotFalse($modele);
-        $this->assertNotFalse($page);
-        $this->assertLessThan($modele, $moteur, 'Le moteur avant le modèle, qui s’y branche.');
-        $this->assertLessThan($page, $modele, 'Le modèle avant le script de la page, qui s’en sert aussitôt.');
-        $this->assertStringContainsString('window.KB_DIAGRAMS = <?= json_encode($diagram, ', $liste);
+        // Consultation : ses données, le moteur, le modèle, puis le script de la page.
+        $show  = self::src('templates/admin/knowledge-bases/show.php');
+        $ordre = [
+            strpos($show, 'window.KB_SHOW = <?= json_encode(['),
+            strpos($show, '<script src="/assets/js/diagram.js'),
+            strpos($show, '<script src="/assets/js/kb-diagram.js'),
+            strpos($show, '<script src="/assets/js/kb-show.js'),
+        ];
+        $this->assertNotContains(false, $ordre);
+        $trie = $ordre;
+        sort($trie);
+        $this->assertSame($trie, $ordre, 'Données, moteur, modèle, puis la page.');
 
+        // Fiche : son état, le moteur, le modèle, kb-form.js, puis kb-fiche.js.
         $fiche = self::src(self::FORM);
         $ordre = [
             strpos($fiche, 'window.KB_FORM = <?= json_encode(['),
             strpos($fiche, '<script src="/assets/js/diagram.js'),
             strpos($fiche, '<script src="/assets/js/kb-diagram.js'),
             strpos($fiche, '<script src="/assets/js/kb-form.js'),
+            strpos($fiche, '<script src="/assets/js/kb-fiche.js'),
         ];
-        $this->assertNotContains(false, $ordre, 'La fiche charge son état, le moteur, le modèle puis son script.');
+        $this->assertNotContains(false, $ordre);
         $trie = $ordre;
         sort($trie);
         $this->assertSame($trie, $ordre);
-        foreach ([$liste, $fiche] as $html) {
-            $this->assertStringContainsString('JSON_HEX_TAG', $html, 'Les icônes voyagent dans un <script> : < et > échappés.');
-            $this->assertDoesNotMatchRegularExpression('#<script src="/assets/js/(diagram|kb-diagram|kb-form)\.js[^"]*" defer#', $html);
-            $this->assertStringContainsString('id="kbDiagramPanel"', $html);
-            $this->assertStringContainsString('id="kbDiagram"', $html);
-            $this->assertStringContainsString('admin-content pf-content kb-content', $html);
+
+        // La liste n'a plus de schéma : une ligne mène à la page de la base.
+        $liste = self::src(self::LIST);
+        $this->assertStringNotContainsString('kb-diagram.js', $liste);
+        foreach ([$show, $fiche] as $html) {
+            $this->assertStringContainsString('JSON_HEX_TAG', $html, 'Les données voyagent dans un <script> : < et > échappés.');
+            $this->assertDoesNotMatchRegularExpression('#<script src="/assets/js/(diagram|kb-diagram|kb-form|kb-fiche|kb-show)\.js[^"]*" defer#', $html);
         }
-        $this->assertStringContainsString('Composition de la base', $liste);
-        $this->assertStringContainsString('Aperçu de la base', $fiche);
-        $this->assertStringContainsString('class="sched-diagram-hint"', $fiche, 'Le panneau dit qu’un élément se clique.');
+        foreach ([$liste, $show, $fiche] as $html) {
+            $this->assertStringContainsString('admin-content pf-content kb-content kbx-page', $html);
+        }
     }
 
     public function testPlusAucuneFenetre(): void
@@ -745,9 +754,10 @@ final class KbDiagramTest extends TestCase
             $this->assertStringNotContainsString($ancien, $liste, "La liste porte encore « $ancien ».");
             $this->assertStringNotContainsString($ancien, $fiche, "La fiche porte encore « $ancien ».");
         }
-        // Créer et modifier mènent à la page de la fiche.
+        // Créer mène à la fiche ; une ligne, à la page de consultation, qui mène à la fiche.
         $this->assertStringContainsString('href="/admin/knowledge-bases/new"', $liste);
-        $this->assertStringContainsString("'/admin/knowledge-bases/' . \$kbId . '/edit'", $liste);
+        $this->assertStringContainsString('href="/admin/knowledge-bases/<?= $r[\'id\'] ?>"', $liste);
+        $this->assertStringContainsString("\$editUrl   = '/admin/knowledge-bases/' . \$kbId . '/edit';", self::src('templates/admin/knowledge-bases/show.php'));
         // L'explorateur de dossiers s'ouvre dans la fiche, sous le champ.
         $this->assertStringContainsString('id="kbBrowse"', $fiche);
     }
@@ -766,11 +776,18 @@ final class KbDiagramTest extends TestCase
         foreach (['public function newKnowledgeBase(): void', 'public function editKnowledgeBase(string $id): void', 'public function knowledgeBaseChunks(string $id): void'] as $methode) {
             $this->assertStringContainsString($methode, $ctrl);
         }
-        $this->assertSame(2, substr_count($ctrl, 'KbDiagram::catalog('), 'Liste ET fiche.');
-        $this->assertSame(2, substr_count($ctrl, 'KbDiagram::spec('), 'Liste ET fiche.');
+        $this->assertSame(3, substr_count($ctrl, 'KbDiagram::catalog('), 'Consultation, fiche, nouvelle table : le schéma ferme chacune.');
+        $this->assertSame(3, substr_count($ctrl, 'KbDiagram::spec('), 'Consultation, fiche, nouvelle table : le schéma ferme chacune.');
+        $this->assertStringNotContainsString('KbDiagram::', self::methode($ctrl, 'knowledgeBases'), 'La liste n’a plus de schéma.');
         $this->assertStringContainsString("require ROOT . '/templates/admin/knowledge-bases/edit.php';", $ctrl);
-        // Créer mène à la liste, ouverte sur la base créée ; une erreur ramène au formulaire.
-        $this->assertStringContainsString("header('Location: /admin/knowledge-bases#base-' . \$id);", $ctrl);
+        // Créer mène à la page de la base créée ; une erreur ramène au formulaire.
+        $this->assertStringContainsString("header('Location: /admin/knowledge-bases/' . \$id);", $ctrl);
+        // La page de consultation : déclarée APRÈS toutes les routes littérales.
+        $consult = strpos($routes, "get('/admin/knowledge-bases/{id}',");
+        $this->assertNotFalse($consult);
+        foreach (["get('/admin/knowledge-bases/new',", "get('/admin/knowledge-bases/status',", "get('/admin/knowledge-bases/vector',", "get('/admin/knowledge-bases/sync',", "get('/admin/knowledge-bases/{id}/search',"] as $avant) {
+            $this->assertLessThan($consult, strpos($routes, $avant), "$avant doit précéder la page de consultation.");
+        }
         $this->assertStringContainsString("header('Location: /admin/knowledge-bases/new');", $ctrl);
         // Modifier ramène à la fiche, jamais à la liste.
         $this->assertStringContainsString("\$back = '/admin/knowledge-bases/' . \$kbId . '/edit';", $ctrl);
@@ -786,9 +803,9 @@ final class KbDiagramTest extends TestCase
         $this->assertSame(1, preg_match('/public function knowledgeBaseChunks\(string \$id\): void\s*\{(.*?)\n    \}/s', $ctrl, $m));
         $corps = $m[1];
         $this->assertStringContainsString("AuthMiddleware::requirePermission('knowledge_bases.view');", $corps);
-        $this->assertStringContainsString('KnowledgeBase::manageableBy($kbId, Session::currentUser())', $corps, 'Seul qui gère la base voit ses extraits.');
+        $this->assertStringContainsString('KnowledgeBase::visibleBy($kbId, Session::currentUser())', $corps, 'Qui voit la base voit ses extraits (comme « Que sait-elle ? »), une base privée d’autrui reste fermée.');
         $this->assertStringContainsString('session_write_close();', $corps);
-        $this->assertStringContainsString('KnowledgeBase::isRemote($kb)', $corps, 'Un cerveau en direct n’a pas d’extraits chez MIA.');
+        $this->assertStringContainsString('!KnowledgeBase::holdsDocuments($kb)', $corps, 'Ni un cerveau en direct ni une table n’ont d’extraits chez MIA.');
         $this->assertStringContainsString('existingPointIds(', $corps);
         $this->assertStringContainsString("'vector' => \$present === null ? null : isset(\$present[\$row['id']])", $corps, 'Qdrant injoignable : « non vérifié », jamais « sans vecteur ».');
 
@@ -799,42 +816,212 @@ final class KbDiagramTest extends TestCase
         $qdrant = self::src('src/RAG/QdrantStore.php');
         $this->assertStringContainsString("['ids' => \$ids, 'with_payload' => false, 'with_vector' => false]", $qdrant, 'Lecture seule, sans vecteur ni payload.');
 
-        // Le détail ne se charge qu'à l'ouverture de « Avancé ».
+        // Un seul chargeur (kb-doc.js) ; « Avancé » ne charge qu'à l'ouverture.
+        $doc = self::src('public/assets/js/kb-doc.js');
+        $this->assertStringContainsString("'/admin/knowledge-bases/' + o.kbId + '/chunks?'", $doc);
         $js = self::src(self::FORMJS);
-        $this->assertStringContainsString("'/admin/knowledge-bases/' + C.id + '/chunks?'", $js);
         $this->assertStringContainsString("advanced?.addEventListener('toggle'", $js);
     }
 
-    public function testLaFicheSuitSesChamps(): void
+    public function testLaFicheEnSections(): void
     {
-        $js = self::src(self::FORMJS);
-        // Tout geste de la page, interrupteur « Active » (hors du formulaire) compris.
-        $this->assertStringContainsString("document.addEventListener('input',", $js);
-        $this->assertStringContainsString("document.addEventListener('change',", $js);
-        $this->assertStringContainsString('window.MiaKbDiagram.mount(host, s, conf.catalog, { animate: first, jump: jumpTitles });', $js);
-        // Le geste : défilement doux sauf préférence contraire, projecteur, focus sans second défilement.
-        $this->assertStringContainsString("el.scrollIntoView({ block: 'start', behavior: reduced ? 'auto' : 'smooth' });", $js);
-        $this->assertStringContainsString("el.classList.add('is-spotlit');", $js);
-        $this->assertStringContainsString('target.focus({ preventScroll: true });', $js);
-        // Les intitulés viennent des titres des sections, sans leur compteur.
-        $this->assertStringContainsString("copy.querySelectorAll('.kb-linked-count').forEach((n) => n.remove());", $js);
-        foreach (['kbSectionIdentity', 'kbSectionSources', 'kbSectionAssistants', 'kbSectionSharing'] as $section) {
-            $this->assertStringContainsString("sectionTitle('$section')", $js);
+        $fiche = self::src(self::FORM);
+        // Piste D : une carte par section, dans l'ordre du menu de gauche.
+        $ordre = [
+            strpos($fiche, 'id="identite"'),
+            strpos($fiche, 'id="<?= $isTable ? \'lignes\' : \'documents\' ?>"'),
+            strpos($fiche, 'id="visibilite"'),
+            strpos($fiche, 'id="assistants"'),
+            strpos($fiche, 'id="avance"'),
+            strpos($fiche, 'id="ensemble"'),
+        ];
+        $this->assertNotContains(false, $ordre);
+        $trie = $ordre;
+        sort($trie);
+        $this->assertSame($trie, $ordre);
+        foreach (['#identite', '#documents', '#lignes', '#visibilite', '#assistants', '#avance', '#ensemble'] as $ancre) {
+            $this->assertStringContainsString('<a href="' . $ancre . '"', $fiche, "Le menu des sections mène à $ancre.");
         }
+        // Les blocs que kb-form.js connaît gardent leurs identifiants.
+        foreach (['kbSectionIdentity', 'kbSectionSources', 'kbSectionSharing', 'kbSectionAssistants'] as $id) {
+            $this->assertStringContainsString('id="' . $id . '"', $fiche);
+        }
+        // L'état de la base vit dans « Documents », et la barre du haut le résume.
+        $this->assertGreaterThan(strpos($fiche, 'id="kbSectionSources"'), strpos($fiche, 'id="kbStatusPanel"'));
+        $this->assertStringContainsString('id="kbHeadState"', $fiche);
+        $this->assertStringContainsString('id="kbHeadDocs"', $fiche);
+        // Barre du haut : « Créer » à la création, « Terminé » ensuite ; la suppression dans « … ».
+        $this->assertStringContainsString('<div class="kbx-top">', $fiche);
+        $this->assertStringContainsString("te('Terminé')", $fiche);
+        $this->assertGreaterThan(strpos($fiche, 'id="kbMoreMenu"'), strpos($fiche, 'id="kbDeleteBtn"'));
+        $this->assertLessThan(strpos($fiche, '<form method="POST" action="<?= htmlspecialchars($formAction) ?>"'), strpos($fiche, 'id="kbDeleteBtn"'));
+        // Plus de volets : des cartes toujours ouvertes.
+        $this->assertStringNotContainsString('kbf-fold"', $fiche);
+
+        $js = self::src(self::FORMJS);
+        // En-tête suivi en direct : état et nombre de documents.
+        $this->assertStringContainsString('headState.textContent = data.title;', $js);
+        $this->assertStringContainsString("headDocs.textContent = tn(all.length, '{n} document', '{n} documents');", $js);
+        // Le menu « … » : clavier (flèches, Échap) et fermeture au clic ailleurs.
+        $this->assertStringContainsString("if (e.key === 'ArrowDown' || e.key === 'ArrowUp')", $js);
+        $this->assertStringContainsString("!e.target.closest('.kbf-more')", $js);
+        // Le menu des sections suit la lecture et y mène.
+        $fjs = self::src('public/assets/js/kb-fiche.js');
+        $this->assertStringContainsString("new IntersectionObserver(", $fjs);
+        $this->assertStringContainsString("a.setAttribute('aria-current', 'true');", $fjs);
+    }
+
+    public function testSeulesLesSourcesConfigureesSontProposees(): void
+    {
+        $fiche = self::src(self::FORM);
+        // La source de la base reste proposée même si ses identifiants ont été
+        // retirés : une radio absente déconfigurerait la base en silence.
+        $this->assertStringContainsString("if (\$tile['on'] || (!\$isCreate && \$value === \$savedProvider)) {", $fiche);
+        $this->assertStringContainsString('$otherTiles[] = $tile[\'label\'];', $fiche);
+        $this->assertStringContainsString('id="kbOtherSources"', $fiche);
+        $this->assertStringContainsString("'{n} autres sources existent ({liste}) : un administrateur peut les activer.'", $fiche);
+        $this->assertStringContainsString("'{n} autres sources existent ({liste}) : {a}configurez-les dans Sources synchronisées{/a}.'", $fiche);
+        // Plus aucune radio désactivée parmi les sources.
+        $this->assertDoesNotMatchRegularExpression('/name="sync_provider"[^>]*\$available/', $fiche);
+        $this->assertStringContainsString('class="kbf-pill"', $fiche);
+        $this->assertStringContainsString("tilesBox.querySelectorAll('.kbf-pill')", self::src(self::FORMJS));
+    }
+
+    public function testLesAidesTiennentEnUneLigneEtLeDetailEnInfobulle(): void
+    {
+        $fiche = self::src(self::FORM);
+        // Le point est focalisable (clavier, toucher) et porte son texte.
+        $this->assertStringContainsString('\' tabindex="0" role="img" aria-label="\' . htmlspecialchars($text)', $fiche);
+        // Jamais d'infobulle DANS une option à cocher : la toucher la cocherait.
+        $this->assertDoesNotMatchRegularExpression('/<label class="kbf-access-opt"[^>]*>(?:(?!<\/label>).)*kbf-tip/s', $fiche);
+        // Les formats acceptés quittent la zone de dépôt pour l'infobulle des documents.
+        $this->assertStringNotContainsString('kb-drop-sub', $fiche);
+
+        $js = self::src(self::FORMJS);
+        // Une bulle sur <body>, positions en pixels d'écran ÷ taille d'affichage.
+        $this->assertStringContainsString("bubble.className = 'kbf-bubble';", $js);
+        $this->assertStringContainsString('document.body.appendChild(bubble);', $js);
+        $this->assertStringContainsString("bubble.style.left = (left / z) + 'px';", $js);
+        $this->assertStringContainsString("window.miaUiZoom", $js);
+        $this->assertStringContainsString("document.addEventListener('focusin',", $js);
+        // Le détail d'une source suit le fournisseur choisi.
+        $this->assertStringContainsString('syncHintTip.dataset.tip = detail;', $js);
+
+        $css = self::src(self::CSS);
+        $this->assertStringContainsString('.kbf-bubble[hidden] { display: none; }', $css, 'Hors de .kb-content : son propre [hidden].');
+        $this->assertStringContainsString('max-width: min(300px, calc(calc(100vw / var(--ui-zoom, 1)) - 24px));', $css);
+    }
+
+    public function testQuiLaVoitEnTroisChoixQuiRetirentLesPartages(): void
+    {
+        $fiche = self::src(self::FORM);
+        // Trois choix, de VRAIS champs postés, et le marqueur qui dit qu'ils étaient là.
+        $this->assertStringContainsString('<input type="hidden" name="visibility_form" value="1">', $fiche);
+        $this->assertStringContainsString('<input type="radio" name="visibility" value="<?= htmlspecialchars($vKey) ?>"', $fiche);
+        $this->assertStringContainsString('[KnowledgeBase::VIS_PRIVATE, KnowledgeBase::VIS_COMMON, KnowledgeBase::VIS_PUBLIC]', $fiche);
+        $this->assertStringContainsString("\$vOff = \$vKey === KnowledgeBase::VIS_PRIVATE && empty(\$isCreator);", $fiche, 'Seul le créateur réserve une base à lui seul.');
+        $this->assertStringContainsString('id="kbShareBody"<?= $visibility === KnowledgeBase::VIS_COMMON ? \'\' : \' hidden\' ?>', $fiche);
+        $this->assertStringNotContainsString('name="kb_access"', $fiche);
+        $this->assertStringNotContainsString('name="is_private"', $fiche);
+
+        $js = self::src(self::FORMJS);
+        $this->assertStringContainsString("const radio = e.target.closest('input[name=\"visibility\"]');", $js);
+        $this->assertStringContainsString("t('Réserver cette base à vous seul ?", $js);
+        $this->assertStringContainsString("'Rendre la base publique ? Toute l’organisation la verra ; les {n} partages accordés deviennent inutiles et seront retirés.'", $js);
+        $this->assertStringContainsString('checkAccess(access);', $js, 'Une confirmation refusée remet le choix d’avant.');
+        $this->assertStringContainsString('if (shareBody) shareBody.hidden = !common;', $js);
+
+        $ctrl = self::src('src/Controllers/AdminController.php');
+        $apply = self::methode($ctrl, 'applyKbVisibilityFromPost');
+        $this->assertStringContainsString("isset(\$_POST['visibility_form'])", $apply);
+        $this->assertStringContainsString('KnowledgeBase::setVisibility(', $apply);
+        $update = self::methode($ctrl, 'updateKnowledgeBase');
+        $this->assertLessThan(strpos($update, 'applyKbSharesFromPost'), strpos($update, 'applyKbVisibilityFromPost'), 'La visibilité avant le partage.');
+    }
+
+    public function testPartageEtAssistantsEnPastilles(): void
+    {
+        $fiche = self::src(self::FORM);
+        foreach (['id="kbShareChips"', 'id="kbShareAddBtn"', 'id="kbSharePanel" hidden', 'id="kbAssistantChips"', 'id="kbAssistantAddBtn"', 'id="kbAssistantPicker" hidden'] as $id) {
+            $this->assertStringContainsString($id, $fiche);
+        }
+        // Les listes à cocher restent la vérité du POST.
+        foreach (['name="share_group_ids[]"', 'name="share_user_ids[]"', 'name="profile_ids[]"'] as $champ) {
+            $this->assertStringContainsString($champ, $fiche);
+        }
+
+        $js = self::src(self::FORMJS);
+        $this->assertStringContainsString('function renderShareChips()', $js);
+        $this->assertStringContainsString('function renderAssistantChips()', $js);
+        // Retirer une pastille repasse par la case : ligne, pastilles et enregistrement suivent.
+        $this->assertSame(2, substr_count($js, "dispatchEvent(new Event('change', { bubbles: true }));\n                },"));
+        $this->assertStringContainsString("sharePanelEl?.addEventListener('change', renderShareChips);", $js);
+        $this->assertStringContainsString("x.title = t('Retirer « {nom} »', { nom: o.label });", $js);
+    }
+
+    public function testUnDocumentOuvreSaFicheDansLeVolet(): void
+    {
+        $fiche = self::src(self::FORM);
+        // Le volet vit HORS du formulaire : en lecture seule, un fieldset
+        // désactivé ne doit pas fermer la lecture des extraits. UN markup,
+        // partagé avec la page de la base.
+        $volet = strpos($fiche, "require ROOT . '/templates/admin/knowledge-bases/partials/doc-drawer.php'");
+        $this->assertNotFalse($volet);
+        $this->assertGreaterThan(strpos($fiche, '</form>'), $volet);
+        $this->assertStringContainsString('<?php if (!$isCreate && !$noDocs): ?>', substr($fiche, 0, $volet), 'Ni à la création, ni pour un cerveau, ni pour une table.');
+        $this->assertMatchesRegularExpression('/\$noDocs\s+= \$isLive \|\| \$isTable;/', $fiche);
+        $drawer = self::src('templates/admin/knowledge-bases/partials/doc-drawer.php');
+        $this->assertStringContainsString('role="dialog" aria-modal="true" aria-labelledby="kbDocDrawerTitle" hidden', $drawer);
+        foreach (['kbDocScrim', 'kbDocDetail', 'kbDocChunkSearch', 'kbDocChunkList', 'kbDocChunkPager', 'kbDocDrawerPrev', 'kbDocDrawerNext', 'kbDocDrawerClose'] as $id) {
+            $this->assertStringContainsString('id="' . $id . '"', $drawer);
+        }
+        $this->assertStringContainsString('kb-doc.js', $fiche);
+        $this->assertLessThan(strpos($fiche, 'kb-form.js?v='), strpos($fiche, 'kb-doc.js?v='), 'Le module partagé avant la fiche.');
+
+        $js = self::src(self::FORMJS);
+        // TOUT document s'ouvre (un échec aussi : c'est lui qu'on veut comprendre) ; un lien.
+        $this->assertStringContainsString('const viewable = !!drawerEl;', $js);
+        $this->assertStringContainsString("document.createElement(viewable ? 'a' : 'span')", $js);
+        $this->assertStringContainsString("title.href = '#document-' + d.id;", $js);
+        $this->assertStringContainsString('window.MiaKbDoc.drawer({', $js);
+        $this->assertStringContainsString('Drawer.openFromHash();', $js);
+        $this->assertStringContainsString('if (onDocsRendered) onDocsRendered();', $js);
+
+        $mod = self::src('public/assets/js/kb-doc.js');
+        // UN chargeur d'extraits pour « Avancé » et le volet : même lecture, même rendu.
+        $this->assertSame(1, substr_count($mod, 'function chunkViewer('));
+        $this->assertStringNotContainsString('function chunkViewer(', $js);
+        $this->assertStringContainsString("docId: () => String(docId),", $mod);
+        // Fenêtre : Échap, focus gardé dedans, rendu au document ; lien direct (#document-ID, ancien #extraits-ID).
+        $this->assertStringContainsString("if (e.key === 'Escape') {", $mod);
+        $this->assertStringContainsString("if (e.key === 'Tab') {", $mod);
+        $this->assertStringContainsString('back.focus({ preventScroll: true });', $mod);
+        $this->assertStringContainsString('/^#(?:document|extraits)-(\\d+)$/', $mod);
+
+        $css = self::src(self::CSS);
+        $this->assertStringContainsString('.kb-doc-open::after { content: \'\'; position: absolute; inset: 0;', $css);
+        $this->assertStringContainsString('.kb-doc.is-viewable .kb-doc-del { position: relative; z-index: 1; }', $css, 'La corbeille reste cliquable au-dessus du lien.');
+        $this->assertStringContainsString('width: min(560px, 100%);', $css);
     }
 
     public function testLeSeuilCoteACoteEtLesStyles(): void
     {
         $css = self::src(self::CSS);
-        $this->assertStringContainsString("window.matchMedia('(min-width: 1200px)')", self::src(self::LIST));
+        $pages = self::src('public/assets/css/kb-pages.css');
+        $this->assertStringContainsString('.admin-content.kbx-page { overflow: visible; }', $pages, 'Sinon la barre du haut ne colle pas.');
+        $this->assertStringContainsString('.kbx-top { position: sticky;', $pages);
+        $this->assertStringContainsString('.kbx [hidden] { display: none !important; }', $pages);
+        $this->assertStringContainsString('.kbx-acc:has(input:checked)', $pages);
         $this->assertStringContainsString('.kb-content [hidden] { display: none !important; }', $css, 'Des règles display:flex l’emporteraient sur l’attribut hidden.');
-        foreach (['.sd-inputs', '.sd-live', '.sd-assistants', '.sd-sharing', '.sd-ava.is-glyph', '.sd-item-ic.is-dot', '.sd-status.is-muted', '.kb-advanced', '.kb-chunk', '.kb-source-tile'] as $classe) {
+        foreach (['.sd-inputs', '.sd-live', '.sd-assistants', '.sd-sharing', '.sd-ava.is-glyph', '.sd-item-ic.is-dot', '.sd-status.is-muted', '.kb-advanced', '.kb-chunk', '.kbf-pill', '.kbf-chip', '.kbf-access-opt', '.kbf-card'] as $classe) {
             $this->assertStringContainsString($classe, $css, "Style absent : $classe");
         }
         $this->assertStringContainsString('.kb-content .is-spotlit', $css);
-        // Barre d'actions : la mention d'enregistrement sur sa ligne, jamais un libellé coupé.
-        $this->assertStringContainsString('.pf-actions-right .btn-primary, .pf-actions-right .btn-secondary { white-space: nowrap; }', $css);
-        $this->assertStringContainsString('.pf-actions-note { flex-basis: 100%; }', $css);
+        // Les actions vivent dans la barre du haut (base comme assistant) : l'ancienne
+        // barre collante du bas n'a plus de styles.
+        $this->assertStringNotContainsString('.pf-actions-bar', $css);
+        // La fiche va d'un bord à l'autre au téléphone (marge négative = marge de .admin-content).
+        $this->assertStringContainsString('body.admin-page .admin-content > .kbx-fiche { width: auto; max-width: none; }', $pages);
     }
 
     #[\PHPUnit\Framework\Attributes\Group('doc-interne')]

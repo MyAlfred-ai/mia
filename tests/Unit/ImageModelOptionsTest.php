@@ -43,9 +43,41 @@ final class ImageModelOptionsTest extends TestCase
         // Flare est le modèle « Default » chez OpenAI : rapide, tarifé au même
         // prix par token que GPT Image 2 — l'adopter par défaut n'engage aucune
         // dépense de plus. Sunburst est le modèle premium : jamais un défaut.
-        $this->assertSame('gpt-image-2.5-flare', ToolCatalog::defaultModel('image', 'openai'));
-        $sunburst = ToolCatalog::model('image', 'openai', 'gpt-image-2.5-sunburst');
-        $this->assertArrayNotHasKey('default', (array)$sunburst);
+        $this->assertSame('gpt-image-2.6-flare', ToolCatalog::defaultModel('image', 'openai'));
+        foreach (['gpt-image-2.6-sunburst', 'gpt-image-2.5-sunburst', 'gpt-image-2.5-flare'] as $model) {
+            $this->assertArrayNotHasKey('default', (array)ToolCatalog::model('image', 'openai', $model), $model);
+        }
+    }
+
+    /**
+     * GPT Image 2.6 Flare et Sunburst (4 novembre 2026), fiches et guide
+     * relus le 2026-11-10 : mêmes options et même tarif que 2.5 ; ils
+     * remplacent GPT Image 2, arrêté par OpenAI le 10/02/2027.
+     */
+    public function testGptImage26RemplaceGptImage2(): void
+    {
+        $tarif25 = ToolCatalog::model('image', 'openai', 'gpt-image-2.5-flare')['pricing']['tokens_usd_per_1m'];
+        foreach (['gpt-image-2.6-flare', 'gpt-image-2.6-sunburst'] as $model) {
+            $info = ToolCatalog::model('image', 'openai', $model);
+            $this->assertSame('images_generations', $info['routing'], $model);
+            $this->assertSame($tarif25, $info['pricing']['tokens_usd_per_1m'], $model);
+            $this->assertSame(['auto', 'low', 'medium', 'high', 'xhigh', 'max'], ToolCatalog::modelOptions('image', 'openai', $model, 'qualities'), $model);
+            $this->assertSame(['auto', '1024x1024', '1536x1024', '1024x1536'], ToolCatalog::modelOptions('image', 'openai', $model, 'sizes'), $model);
+            $this->assertArrayHasKey($model, ToolCatalog::offerableModels('image', 'openai'), $model);
+        }
+
+        ToolCatalog::setToday('2027-02-09');
+        $this->assertFalse(ToolCatalog::isRetired('image', 'openai', 'gpt-image-2'));
+        $this->assertSame('2027-02-10', ToolCatalog::retirement('image', 'openai', 'gpt-image-2')['date']);
+        ToolCatalog::setToday('2027-02-10');
+        $this->assertTrue(ToolCatalog::isRetired('image', 'openai', 'gpt-image-2'));
+        $this->assertArrayNotHasKey('gpt-image-2', ToolCatalog::offerableModels('image', 'openai'));
+
+        // Natif image de GPT-5 Mini : même coupure que le modèle de chat.
+        ToolCatalog::setToday('2026-12-11');
+        $this->assertTrue(ToolCatalog::isRetired('image', 'openai', 'gpt-5-mini'));
+        $this->assertSame('gemini-nano-banana-2.1', ToolCatalog::defaultModel('image', 'gemini'));
+        $this->assertSame(0.0336, ToolCatalog::model('image', 'gemini', 'gemini-nano-banana-2.1')['pricing']['per_image_usd']);
     }
 
     public function testChaqueModeleDeclareLesQualitesQueSonApiAccepte(): void

@@ -65,7 +65,7 @@ final class PromptCacheTest extends TestCase
     public function testLaBoucleEtLeSecoursRecoiventLesOptions(): void
     {
         $src = AgentSource::chat();
-        $this->assertStringContainsString('$loopOptions = self::toolLoopOptions($convId, $engagedConnectors) + [', $src);
+        $this->assertStringContainsString('$loopOptions = self::toolLoopOptions($convId, $engagedConnectors, $voiceMode) + [', $src);
         $this->assertSame(3, substr_count($src, "\$loopOptions\n                );"),
             'L’appel principal, le passage au secours ET l’appel du secours portent les options.');
     }

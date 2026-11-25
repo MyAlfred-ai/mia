@@ -67,11 +67,13 @@ final class GeminiModelsTest extends TestCase
      */
     public function testIlsOuvrentLeFournisseurSansDevenirLeDefaut(): void
     {
-        // Du plus récent au plus ancien : 3.8 (2 sept.), 3.7 (13 août), 3.6 et
-        // 3.5 Flash-Lite (21 juillet), 3.5 Flash (19 mai), 3.1 Flash-Lite (7 mai).
+        // Du plus récent au plus ancien : 4 Neon (18 nov.), 4 Hydrogen
+        // (12 nov.), 4 Carbon (10 nov.), 4 Argon (13 oct.), 3.8 (2 sept.), 3.7
+        // (13 août), 3.6 et 3.5 Flash-Lite (21 juillet), 3.5 Flash (19 mai),
+        // 3.1 Flash-Lite (7 mai).
         $this->assertSame(
-            ['gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash-lite', 'gemini-3.5-flash', 'gemini-3.1-flash-lite'],
-            array_slice(array_keys(LlmCatalog::models('gemini')), 0, 6)
+            ['gemini-4-neon', 'gemini-4-hydrogen', 'gemini-4-carbon', 'gemini-4-argon', 'gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash-lite', 'gemini-3.5-flash', 'gemini-3.1-flash-lite'],
+            array_slice(array_keys(LlmCatalog::models('gemini')), 0, 10)
         );
         $this->assertSame('gemini-3-flash-preview', LlmCatalog::defaultModel('gemini'));
     }
@@ -118,22 +120,149 @@ final class GeminiModelsTest extends TestCase
         }
     }
 
+    /**
+     * Gemini 4 Hydrogen (GA 12/11/2026) et Gemini 4 Carbon (GA 10/11/2026),
+     * changelog, fiches, page Pricing et « What's new » relus le 2026-11-17.
+     * Température à retirer (Hydrogen rend un 400 hors limites), cache lu à
+     * 5 % de l'entrée, tarif de lancement de Carbon jusqu'au 30/11 inclus.
+     */
+    public function testGemini4HydrogenEtCarbon(): void
+    {
+        foreach (['gemini-4-hydrogen' => 'Gemini 4 Hydrogen', 'gemini-4-carbon' => 'Gemini 4 Carbon'] as $id => $label) {
+            $this->assertSame($label, LlmCatalog::model('gemini', $id)['label']);
+            $this->assertTrue(LlmCatalog::supportsToolUse('gemini', $id), $id);
+            $this->assertTrue(LlmCatalog::supportsWebSearch('gemini', $id), $id);
+            $this->assertTrue(LlmCatalog::supportsWebSearchWithTools('gemini', $id), $id);
+            $this->assertFalse(LlmCatalog::supportsTemperature('gemini', $id), $id);
+            $this->assertNull(LlmCatalog::temperatureFor('gemini', $id, 1.8), "$id : rien n'est envoyé.");
+            $this->assertTrue(LlmCatalog::acceptsImages('gemini', $id), $id);
+            $this->assertSame(1048576, LlmCatalog::contextWindow('gemini', $id), $id);
+            $this->assertSame('request', LlmCatalog::webSearchBilling('gemini', $id), $id);
+            $this->assertSame(14.0, LlmCatalog::webSearchPricingUsdPer1k('gemini', $id), $id);
+            $this->assertNull(LlmCatalog::longContext('gemini', $id), "$id : aucun palier au-delà de 200k.");
+            $this->assertNull(LlmCatalog::retirement('gemini', $id), $id);
+        }
+        $h = LlmCatalog::pricing('gemini', 'gemini-4-hydrogen');
+        $this->assertSame([1.5, 7.5, 0.075], [$h['input'], $h['output'], $h['cached_input']],
+            'Lecture de cache à 5 % : le ratio conventionnel donnerait 0,15 $.');
+        try {
+            LlmCatalog::setToday('2026-11-30');
+            $c = LlmCatalog::pricing('gemini', 'gemini-4-carbon');
+            $this->assertSame([2.0, 10.0, 0.1], [$c['input'], $c['output'], $c['cached_input']], 'Tarif de lancement, jour compris.');
+            LlmCatalog::setToday('2026-12-01');
+            $c = LlmCatalog::pricing('gemini', 'gemini-4-carbon');
+            $this->assertSame([4.0, 20.0, 0.2], [$c['input'], $c['output'], $c['cached_input']]);
+        } finally {
+            LlmCatalog::setToday(null);
+        }
+        $this->assertSame('gemini-3-flash-preview', LlmCatalog::defaultModel('gemini'), 'Hydrogen, défaut de Google, ne devient pas celui de MIA en silence.');
+    }
+
+    /**
+     * Gemini 4 Neon (GA 18/11/2026) — changelog, fiche, page Pricing et
+     * « What's new in Gemini 4 Neon » relus le 2026-11-19. Même conception
+     * d'API que les autres Gemini 4 : température retirée, cache implicite lu
+     * à 5 % de l'entrée (à déclarer : le ratio conventionnel donnerait 0,30 $),
+     * aucun palier au-delà de 200k, recherche Google à la requête. Il ouvre
+     * Gemini sans devenir le défaut.
+     */
+    public function testGemini4Neon(): void
+    {
+        $id = 'gemini-4-neon';
+        $this->assertSame('Gemini 4 Neon', LlmCatalog::model('gemini', $id)['label']);
+        $this->assertTrue(LlmCatalog::supportsToolUse('gemini', $id));
+        $this->assertTrue(LlmCatalog::supportsWebSearch('gemini', $id));
+        $this->assertTrue(LlmCatalog::supportsWebSearchWithTools('gemini', $id));
+        $this->assertFalse(LlmCatalog::supportsTemperature('gemini', $id));
+        $this->assertNull(LlmCatalog::temperatureFor('gemini', $id, 1.8), 'Hors limites, Google rend un 400 : rien ne part.');
+        $this->assertTrue(LlmCatalog::acceptsImages('gemini', $id));
+        $this->assertSame(1048576, LlmCatalog::contextWindow('gemini', $id));
+        $this->assertSame('request', LlmCatalog::webSearchBilling('gemini', $id));
+        $this->assertSame(14.0, LlmCatalog::webSearchPricingUsdPer1k('gemini', $id));
+        $this->assertNull(LlmCatalog::longContext('gemini', $id), 'Tarif plat sur toute la fenêtre de 1M.');
+        $this->assertNull(LlmCatalog::retirement('gemini', $id));
+        $p = LlmCatalog::pricing('gemini', $id);
+        $this->assertSame([3.0, 15.0, 0.15], [$p['input'], $p['output'], $p['cached_input']]);
+        $this->assertArrayNotHasKey('launch', LlmCatalog::model('gemini', $id)['pricing'], 'Aucun tarif de lancement annoncé.');
+        $this->assertSame('gemini-4-neon', array_key_first(LlmCatalog::models('gemini')));
+        $this->assertSame('gemini-3-flash-preview', LlmCatalog::defaultModel('gemini'));
+    }
+
+    /**
+     * Pages Models, Pricing, Deprecations et Changelog de Google relues le
+     * 2026-11-10 : Gemini 4 Argon (GA 13/10) et les modèles que Google fait
+     * désormais répondre par un autre.
+     */
+    public function testGemini4ArgonEtLesRedirectionsDeGoogle(): void
+    {
+        $this->assertTrue(LlmCatalog::supportsToolUse('gemini', 'gemini-4-argon'));
+        $this->assertTrue(LlmCatalog::supportsWebSearchWithTools('gemini', 'gemini-4-argon'));
+        $this->assertFalse(LlmCatalog::supportsTemperature('gemini', 'gemini-4-argon'));
+        $this->assertSame(1048576, LlmCatalog::contextWindow('gemini', 'gemini-4-argon'));
+        $this->assertSame(14.0, LlmCatalog::webSearchPricingUsdPer1k('gemini', 'gemini-4-argon'));
+        $this->assertSame('request', LlmCatalog::webSearchBilling('gemini', 'gemini-4-argon'));
+        $this->assertNull(LlmCatalog::longContext('gemini', 'gemini-4-argon'), 'Aucun palier au-delà de 200k.');
+        try {
+            LlmCatalog::setToday('2026-11-30');
+            $p = LlmCatalog::pricing('gemini', 'gemini-4-argon');
+            $this->assertSame([2.0, 10.0, 0.1], [$p['input'], $p['output'], $p['cached_input']], 'Tarif de lancement, jour compris.');
+            LlmCatalog::setToday('2026-12-01');
+            $p = LlmCatalog::pricing('gemini', 'gemini-4-argon');
+            $this->assertSame([4.0, 20.0, 0.2], [$p['input'], $p['output'], $p['cached_input']],
+                'Lecture de cache à 5 % : le ratio conventionnel donnerait 0,40 $.');
+
+            // 3.7 et 3.5 Flash : redirigés depuis le 08/10 ; 2.5 Pro et Flash le 01/12.
+            LlmCatalog::setToday('2026-11-10');
+            foreach (['gemini-3.7-flash' => 'gemini-3.8-flash', 'gemini-3.5-flash' => 'gemini-3.6-flash'] as $id => $cible) {
+                $r = LlmCatalog::retirement('gemini', $id);
+                $this->assertSame(['2026-10-08', $cible, true], [$r['date'], $r['replacement'], $r['retired']], $id);
+            }
+            foreach (['gemini-2.5-pro' => 'gemini-3.8-flash', 'gemini-2.5-flash' => 'gemini-3.5-flash-lite'] as $id => $cible) {
+                $r = LlmCatalog::retirement('gemini', $id);
+                $this->assertSame(['2026-12-01', $cible, false], [$r['date'], $r['replacement'], $r['retired']], $id);
+            }
+            $this->assertNull(LlmCatalog::retirement('gemini', 'gemini-2.5-flash-lite'), 'Ni déprécié ni redirigé.');
+            $this->assertNull(LlmCatalog::retirement('gemini', 'gemini-3-flash-preview'), 'Le défaut reste servi, sans date.');
+        } finally {
+            LlmCatalog::setToday(null);
+        }
+        $this->assertSame('gemini-3-flash-preview', LlmCatalog::defaultModel('gemini'), 'Argon ne devient pas le défaut en silence.');
+    }
+
+    /**
+     * Depuis le 26/10/2026, Google conserve par défaut les requêtes d'un projet
+     * payant récent (« Logs and datasets ») : MIA demande que les siennes ne
+     * le soient pas, sur les DEUX chemins.
+     */
+    public function testLesRequetesNeSontPasConserveesChezGoogle(): void
+    {
+        $adapter = (new ReflectionClass(GeminiAdapter::class))->newInstanceWithoutConstructor();
+        (new ReflectionProperty(GeminiAdapter::class, 'model'))->setValue($adapter, 'gemini-4-argon');
+        $payload = $adapter->buildPayload([['role' => 'user', 'content' => 'Bonjour']], 'Consigne', 0.7, true);
+        $this->assertFalse($payload['store']);
+        $this->assertArrayNotHasKey('generationConfig', $payload, 'Argon : temperature jamais envoyée.');
+
+        $tool = (new ReflectionMethod(GeminiAdapter::class, 'toolPayload'))
+            ->invoke($adapter, [['role' => 'user', 'parts' => [['text' => 'x']]]], '', null, [], false, false);
+        $this->assertFalse($tool['store']);
+    }
+
     /** Coupé par Google le 25/05/2026 : il répondait 404 depuis le picker. */
     public function testLeModeleCoupeParGoogleAQuitteLeCatalogue(): void
     {
         $this->assertNull(LlmCatalog::model('gemini', 'gemini-3.1-flash-lite-preview'));
-        $this->assertStringContainsString(
-            'gemini-3.1-flash-lite-preview — coupé le 25/05/2026',
-            (string)file_get_contents(ROOT . '/config/llm_catalog.php'),
-            'La disparition doit se lire au catalogue, avec sa date.'
-        );
+        // La disparition se lit au catalogue, avec sa date : `retired_models`.
+        $arret = LlmCatalog::retirement('gemini', 'gemini-3.1-flash-lite-preview');
+        $this->assertNotNull($arret);
+        $this->assertSame('2026-05-25', $arret['date']);
+        $this->assertSame('gemini-3.1-flash-lite', $arret['replacement']);
     }
 
     public function testAucunModeleGemini3NeRecoitDeTemperature(): void
     {
         foreach (array_keys(LlmCatalog::models('gemini')) as $id) {
             $id = (string)$id;
-            if (str_starts_with($id, 'gemini-3')) {
+            if (str_starts_with($id, 'gemini-3') || str_starts_with($id, 'gemini-4')) {
                 $this->assertFalse(LlmCatalog::supportsTemperature('gemini', $id), $id);
             } elseif (str_starts_with($id, 'gemini-2.5')) {
                 $this->assertTrue(LlmCatalog::supportsTemperature('gemini', $id), $id);
@@ -202,7 +331,8 @@ final class GeminiModelsTest extends TestCase
         $this->assertSame(14.0, LlmCatalog::webSearchPricingUsdPer1k('gemini', 'modele-absent-du-catalogue'));
         $this->assertSame(35.0, LlmCatalog::webSearchPricingUsdPer1k('gemini', 'gemini-2.5-pro'));
         $this->assertSame(10.0, LlmCatalog::webSearchPricingUsdPer1k('openai', 'gpt-5.6'));
-        $this->assertNull(LlmCatalog::webSearchPricingUsdPer1k('deepseek', 'deepseek-flash'));
+        $this->assertSame(0.75, LlmCatalog::webSearchPricingUsdPer1k('deepseek', 'deepseek-flash'));
+        $this->assertNull(LlmCatalog::webSearchPricingUsdPer1k('zai', 'glm-5.2'));
 
         $this->assertSame('request', LlmCatalog::webSearchBilling('gemini', 'gemini-3.8-flash'));
         $this->assertSame('request', LlmCatalog::webSearchBilling('anthropic', 'claude-opus-5'));

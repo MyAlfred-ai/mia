@@ -118,6 +118,11 @@ if [ -z "$MIA_ADMIN_PASSWORD" ]; then
   ADMIN_MDP_GENERE=1
 fi
 
+# Avant le .env : un échec ici ne doit pas bloquer la relance (« .env existe déjà »).
+kit_verifier_disque || exit 1
+kit_dire "vérification de la signature de MIA $MIA_VERSION"
+kit_verifier_signatures "$MIA_VERSION" || exit 1
+
 umask 077
 trap 'rm -f "$KIT_ENV.tmp"' EXIT
 cat > "$KIT_ENV.tmp" <<EOF
@@ -155,9 +160,6 @@ case "$MIA_DOWNLOADS_DIR" in
 esac
 
 kit_verifier_variables || exit 1
-kit_verifier_disque || exit 1
-kit_dire "vérification de la signature de MIA $MIA_VERSION"
-kit_verifier_signatures "$MIA_VERSION" || exit 1
 kit_dire "téléchargement des images"
 kit_compose pull || erreur "le téléchargement d'une image a échoué"
 kit_dire "démarrage de MIA"

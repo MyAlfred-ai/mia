@@ -8,10 +8,10 @@ declare(strict_types=1);
  * UserSettingsController::calendarCallback().
  *
  * Scopes : calendar.readonly (agendas + lecture des évènements) et
- * calendar.events (création/modification d'évènements — les créations passent
- * par la file d'approbation, et `sendUpdates` reste toujours à `none` : aucune
- * invitation n'est envoyée automatiquement). Le scope `calendar` (contrôle
- * total, partages, suppression d'agendas) n'est JAMAIS demandé.
+ * calendar.events (création/modification d'évènements — toutes deux passent
+ * par la file d'approbation ; l'invitation des invités par email, demandée par
+ * défaut, est nommée sur la carte). Le scope `calendar` (contrôle total,
+ * partages, suppression d'agendas) n'est JAMAIS demandé.
  * Les scopes réellement accordés sont stockés (colonne scope) et vérifiés par
  * UserCalendarService (canRead / canWrite).
  */

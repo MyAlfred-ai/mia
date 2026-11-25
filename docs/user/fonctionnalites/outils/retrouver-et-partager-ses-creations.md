@@ -1,12 +1,13 @@
 ---
 title: Retrouver et partager ses créations
-description: Rassembler images, vidéos, pages web, présentations et itinéraires, et les envoyer à un collègue par lien.
+description: Rassembler images, vidéos, pages web, présentations, itinéraires et versions soignées, et les envoyer à un collègue par lien.
 sidebar:
   order: 8
 ---
 
 Tout ce que produisent les outils — images, vidéos, pages web, présentations, itinéraires — est
-réuni dans une galerie, toutes conversations confondues. Ce qu'est un outil :
+réuni dans une galerie, toutes conversations confondues, avec les **versions soignées** de vos
+fichiers. Ce qu'est un outil :
 [Les outils](index.md).
 
 ## Retrouver toutes ses créations
@@ -23,8 +24,22 @@ s'ouvre, les créations les plus récentes d'abord.
   lisible hors connexion ; une présentation en PowerPoint, PDF ou page HTML. Un itinéraire s'exporte
   depuis sa conversation, en PDF.
 
-Les résultats des outils d'un assistant — présentations Gamma, automatisations n8n — n'y figurent
-pas : ils restent dans leur conversation.
+## Les versions soignées
+
+Le type **Version soignée** réunit les fichiers mis en forme par un autre que MIA (voir
+[Télécharger un fichier créé par MIA](../conversations/telecharger-un-fichier.md)) :
+
+- une **présentation PowerPoint** ou un **classeur Excel** réalisés par un modèle : la carte affiche
+  le format, le modèle qui l'a fait et le nombre de jours pendant lesquels le fichier reste
+  disponible. Un clic le télécharge. Passé **30 jours**, le fichier est effacé et sa carte disparaît
+  de la galerie ;
+- une **présentation Gamma** : **Ouvrir dans Gamma** l'affiche sur gamma.app ; son export
+  (**Télécharger le PDF** ou **Télécharger le PPTX**) reste proposé environ une semaine, la durée de
+  son lien.
+
+Une version soignée ne se partage pas par lien : téléchargez-la et envoyez le fichier.
+
+Les automatisations n8n d'un assistant n'y figurent pas : leur résultat reste dans la conversation.
 
 ## Partager par lien
 

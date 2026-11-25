@@ -48,12 +48,13 @@ $mockOf = static fn(string $slug): string => $slug === '' ? $instanceTheme : $sl
 <?php $navVariant = 'settings'; $navTitle = t('Affichage'); $page = 'display'; require ROOT . '/templates/partials/admin-nav.php'; ?>
 
 <div class="admin-content ai-prefs-page">
+    <?php require ROOT . '/templates/partials/admin-topbar.php'; ?>
     <div class="ai-prefs-wrap">
 
-        <div class="ai-prefs-head">
-            <div class="ai-prefs-head-text">
+        <div class="ai-prefs-head page-head">
+            <div class="ai-prefs-head-text page-head-text">
                 <h1><?= te('Affichage') ?></h1>
-                <p class="ai-prefs-lead">
+                <p class="ai-prefs-lead page-head-sub">
                     <?= te('Le thème, la taille et le contraste de l\'interface, et la touche qui envoie vos messages. Ces réglages sont personnels : ils suivent votre compte sur tous vos appareils, sans rien changer pour les autres.') ?>
                 </p>
             </div>

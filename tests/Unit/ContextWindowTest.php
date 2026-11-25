@@ -219,12 +219,12 @@ final class ContextWindowTest extends TestCase
         $this->assertStringNotContainsString('$llmMsgs  = $this->buildLLMMessages($history);', $send, 'Plus jamais l\'historique entier.');
         $this->assertStringContainsString('[$fittedHistory, $contextFragment, $contextPlan] = $this->fitHistory($conv, $history, $llm, $userId);', $send);
         $this->assertLessThan(strpos($send, 'fitHistory('), strpos($send, '$supportsTools = $adapter->supportsToolUse();'));
-        $this->assertStringContainsString('$fileMention   = $filesStripped && ContextWindow::mentionsCompactedFile($content, $history, $contextPlan);', $send);
+        $this->assertStringContainsString("\$fileMention   = \$filesStripped && (\$contextPlan['files_cut_now']\n            || ContextWindow::mentionsCompactedFile(\$content, \$history, \$contextPlan));", $send);
         $this->assertStringContainsString('|| $pageUrlInMessage || $pastReference || $fileMention;', $send,
             'Seul un message qui évoque un fichier compte comme demande explicite.');
         $this->assertStringContainsString('$fileReread = $filesStripped && ($fileMention || $loopRunsAnyway);', $send,
             'Jamais de boucle forcée par la seule présence de fichiers anciens.');
-        $this->assertStringContainsString('new ConversationTools($turn, true, $loopRunsAnyway && !$unattended, $fileReread)', $send);
+        $this->assertStringContainsString('new ConversationTools($turn, true, $loopRunsAnyway && !$unattended && UserMemory::isEnabled(), $fileReread)', $send);
 
         // Régénération : même fenêtre, sans outil de relecture.
         $regen = substr($src, (int)strpos($src, 'public function regenerate('), 20000);

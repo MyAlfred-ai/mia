@@ -92,10 +92,15 @@ $polyline = static fn(array $pts): string => implode(' ', array_map(
 <body class="admin-page">
 <?php $page = 'budget'; require ROOT . '/templates/partials/admin-nav.php'; ?>
 <div class="admin-content budget-cockpit">
-    <h1 style="margin-bottom:4px"><?= te('Budget IA') ?></h1>
-    <p class="budget-intro">
+    <?php require ROOT . '/templates/partials/admin-topbar.php'; ?>
+    <header class="page-head">
+    <div class="page-head-text">
+        <h1 style="margin-bottom:4px"><?= te('Budget IA') ?></h1>
+        <p class="budget-intro page-head-sub">
         <?= te("Plafond mensuel de ce que l'IA coûte réellement à l'organisation : ce que facturent les fournisseurs, hors marge. Le budget protège l'organisation ; les quotas, en crédits, répartissent entre les personnes.") ?>
     </p>
+    </div>
+    </header>
 
     <?php if (!empty($success)): ?><div class="alert alert-success" style="margin-bottom:16px"><?= htmlspecialchars($success) ?></div><?php endif; ?>
     <?php if (!empty($error)): ?><div class="alert alert-error" style="margin-bottom:16px"><?= htmlspecialchars($error) ?></div><?php endif; ?>

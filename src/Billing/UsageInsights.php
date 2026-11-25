@@ -32,6 +32,8 @@ final class UsageInsights
      */
     public const FEATURES = [
         'chat'         => ['label' => 'Conversations', 'llm' => ['chat', 'regenerate']],
+        // Excel, Word, PowerPoint : une demande de l'add-in = un usage.
+        'office'       => ['label' => 'Claude dans Office', 'llm' => ['office_addin']],
         'assistants'   => ['label' => 'Assistants', 'assistants' => true],
         'web'          => ['label' => 'Recherche Internet', 'llm' => ['web_search'], 'actions' => ['web_read']],
         'kb'           => ['label' => 'Bases de connaissances', 'actions' => [
@@ -44,9 +46,13 @@ final class UsageInsights
         'map'          => ['label' => 'Cartes et itinéraires', 'llm' => ['map_tool'], 'tools' => ['map']],
         'video'        => ['label' => 'Vidéos', 'tools' => ['video']],
         'voice'        => ['label' => 'Dictée et voix', 'llm' => ['transcribe', 'speech']],
-        'memory'       => ['label' => 'Mémoire « MIA pour vous »', 'actions' => ['memorizing']],
+        'memory'       => ['label' => 'Mémoire', 'actions' => ['memorizing']],
         'automation'   => ['label' => 'Automatisations n8n', 'tools' => ['n8n'], 'actions' => ['n8n_run']],
         'scheduled'    => ['label' => 'Tâches programmées', 'scheduled' => true],
+        // Exécutions lancées (à la main, depuis le chat, programmées, sur un
+        // évènement) : leurs étapes s'écrivent au grand livre comme des tours
+        // de chat, seul `workflow_runs` dit qu'un workflow a servi.
+        'workflows'    => ['label' => 'Workflows', 'workflows' => true],
     ];
 
     /** Types de la trace d'actions qui disent « un connecteur a servi ». */
@@ -56,7 +62,7 @@ final class UsageInsights
         'creer_google_doc', 'modifier_google_doc', 'creer_google_sheet', 'modifier_google_sheet',
         'renommer_google_drive', 'deplacer_google_drive', 'dupliquer_google_drive',
         'mettre_en_forme_google_doc', 'mettre_en_forme_google_sheet',
-        'creer_brouillon_gmail', 'creer_brouillon_outlook', 'creer_evenement_agenda', 'creer_evenement_agenda_outlook',
+        'creer_brouillon_gmail', 'creer_brouillon_outlook', 'creer_evenement_agenda', 'creer_evenement_agenda_outlook', 'modifier_evenement_agenda', 'modifier_evenement_agenda_outlook',
         'creer_tache', 'modifier_tache', 'supprimer_tache', 'creer_tache_todo', 'modifier_tache_todo',
     ];
 
@@ -98,9 +104,10 @@ final class UsageInsights
      * @param list<array{t:string,user_id:?int,n:int}>         $actions
      * @param list<array{user_id:?int,n:int}>                  $scheduled
      * @param list<array{user_id:?int,n:int}>                  $assistants
+     * @param list<array{user_id:?int,n:int}>                  $workflows exécutions lancées
      * @return array<string, array{people:int, uses:int}>
      */
-    public static function aggregateFeatures(array $llm, array $tools, array $actions, array $scheduled, array $assistants): array
+    public static function aggregateFeatures(array $llm, array $tools, array $actions, array $scheduled, array $assistants, array $workflows = []): array
     {
         $bySource = $byTool = $byAction = [];
         foreach ($llm as $r)   { $bySource[(string)$r['source']][] = $r; }
@@ -122,6 +129,7 @@ final class UsageInsights
             }
             if (!empty($def['scheduled']))  { array_push($rows, ...$scheduled); }
             if (!empty($def['assistants'])) { array_push($rows, ...$assistants); }
+            if (!empty($def['workflows']))  { array_push($rows, ...$workflows); }
 
             $people = [];
             $uses   = 0;
@@ -449,8 +457,12 @@ final class UsageInsights
         $kbs = $db->query(
             "SELECT id, name, query_count, last_used_at,
                     (last_used_at IS NULL OR last_used_at < NOW() - INTERVAL " . self::DORMANT_DAYS . " DAY) AS dormant
-             FROM knowledge_bases WHERE is_active = 1 ORDER BY query_count DESC, name"
+             FROM knowledge_bases WHERE is_active = 1 AND is_private = 0 ORDER BY query_count DESC, name"
         )->fetchAll(PDO::FETCH_ASSOC);
+
+        // Crédits débités par les exécutions de workflows, workflow par
+        // workflow : leurs étapes sont aussi comptées dans « Conversations ».
+        $workflows = UsageLog::workflowCredits($from, $to, $userId, false);
 
         $categories = [];
         foreach ($byCategory as $c) {
@@ -477,6 +489,10 @@ final class UsageInsights
                                   array_filter($kbs, static fn(array $k): bool => (int)$k['dormant'] === 1))),
             'kb_total'     => count($kbs),
             'treemap'      => self::treemap($categories),
+            'workflows'    => array_slice($workflows, 0, self::TOP_ROWS),
+            'workflows_more' => max(0, count($workflows) - self::TOP_ROWS),
+            'workflows_credits' => array_sum(array_column($workflows, 'credits')),
+            'workflows_runs' => array_sum(array_column($workflows, 'runs')),
         ];
     }
 
@@ -526,6 +542,11 @@ final class UsageInsights
         );
         $assistants->execute($mp);
 
+        // Workflows : une exécution lancée dans la période = un usage.
+        $ww = str_replace(['AND created_at', 'AND user_id'], ['AND r.started_at', 'AND r.user_id'], $lw);
+        $workflows = $db->prepare("SELECT r.user_id, COUNT(*) AS n FROM workflow_runs r WHERE 1 = 1$ww GROUP BY r.user_id");
+        $workflows->execute($lp);
+
         $norm = static fn(array $rows): array => array_map(static function (array $r): array {
             $r['user_id'] = $r['user_id'] !== null ? (int)$r['user_id'] : null;
             $r['n'] = (int)$r['n'];
@@ -537,7 +558,8 @@ final class UsageInsights
             $norm($tools->fetchAll(PDO::FETCH_ASSOC)),
             $norm($actions->fetchAll(PDO::FETCH_ASSOC)),
             $norm($scheduled->fetchAll(PDO::FETCH_ASSOC)),
-            $norm($assistants->fetchAll(PDO::FETCH_ASSOC))
+            $norm($assistants->fetchAll(PDO::FETCH_ASSOC)),
+            $norm($workflows->fetchAll(PDO::FETCH_ASSOC))
         );
     }
 

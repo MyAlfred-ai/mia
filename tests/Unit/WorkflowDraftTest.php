@@ -182,7 +182,7 @@ final class WorkflowDraftTest extends TestCase
     public function testLaFormeDecriteNommeCeQueLaPersonnePeutUtiliser(): void
     {
         $guide = WorkflowDraft::schemaGuide(self::choices());
-        $this->assertStringContainsString('5. Veille', $guide);
+        $this->assertStringContainsString('n° 5 : Veille', $guide);
         $this->assertStringContainsString('"gmail"', $guide);
         $this->assertStringContainsString('si_oui', $guide);
         $this->assertStringContainsString('[Nom de la pièce]', $guide);

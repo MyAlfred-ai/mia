@@ -47,6 +47,12 @@ require ROOT . '/src/Models/ApiKey.php';
 require ROOT . '/src/Models/LlmModel.php';
 require ROOT . '/src/Models/UsageLog.php';
 require ROOT . '/src/Models/UserMemory.php';
+// Mémoire de MIA : demandes explicites du chat (porte, consignes du juge),
+// questions posées sous une réponse, apprentissage automatique.
+require ROOT . '/src/Memory/MemoryCapture.php';
+require ROOT . '/src/Memory/MemoryQuestions.php';
+require ROOT . '/src/Memory/MemoryLearner.php';
+require ROOT . '/src/Memory/MemorySignals.php';
 require ROOT . '/src/Helpers/TextChunker.php';
 require ROOT . '/src/Helpers/BackgroundJob.php';
 require ROOT . '/src/Models/ProfileDocument.php';
@@ -57,6 +63,7 @@ require ROOT . '/src/Models/ConversationSummary.php';
 require ROOT . '/src/Models/KnowledgeBaseRemote.php';
 require ROOT . '/src/Models/Settings.php';
 require ROOT . '/src/Changelog/Nouveautes.php';
+require ROOT . '/src/Changelog/MajorFeatures.php';
 require ROOT . '/src/Models/DefaultAssistant.php';
 require ROOT . '/src/Models/ChatTool.php';
 require ROOT . '/src/Models/ToolTestRun.php';
@@ -71,8 +78,11 @@ require ROOT . '/src/Billing/UsageMeter.php';
 // Budget IA mensuel de l'organisation (lu par CreditQuota, la barrière commune).
 require ROOT . '/src/Billing/UsagePeriod.php';
 require ROOT . '/src/Billing/AiBudget.php';
+// Comptes de démonstration : enveloppe de crédits non renouvelable (lue par CreditQuota).
+require ROOT . '/src/Billing/DemoAccount.php';
 require ROOT . '/src/Billing/UsageInsights.php';
 require ROOT . '/src/Billing/PersonalUsage.php';
+require ROOT . '/src/Billing/UsageHistory.php';
 // Estimations avant usage : tarifs de CreditService appliqués à la consommation réelle.
 require ROOT . '/src/Billing/CreditEstimate.php';
 require ROOT . '/src/Models/CreationShare.php';
@@ -101,30 +111,43 @@ require ROOT . '/src/Workflow/WorkflowLoop.php';
 require ROOT . '/src/Workflow/LoopSources.php';
 require ROOT . '/src/Workflow/LoopFiles.php';
 require ROOT . '/src/Workflow/LoopRunner.php';
+require ROOT . '/src/Workflow/WorkflowEventFiles.php';
 require ROOT . '/src/Models/Workflow.php';
 require ROOT . '/src/Models/WorkflowRun.php';
 require ROOT . '/src/Workflow/WorkflowPrompt.php';
+require ROOT . '/src/Workflow/WorkflowChat.php';
 require ROOT . '/src/Workflow/WorkflowAi.php';
 require ROOT . '/src/Workflow/WorkflowNotifier.php';
 require ROOT . '/src/Workflow/WorkflowFiles.php';
 require ROOT . '/src/Workflow/WorkflowDeliveries.php';
+require ROOT . '/src/Workflow/WorkflowSlack.php';
 // Brique « Création » : image, page web, carte par un outil du chat.
 require ROOT . '/src/Workflow/WorkflowCreations.php';
 require ROOT . '/src/Workflow/WorkflowTriggers.php';
+// Brique « Appeler un workflow » : signature, contrôles des paramètres, résultat.
+require ROOT . '/src/Workflow/WorkflowCall.php';
+require ROOT . '/src/Workflow/WorkflowTables.php';
+// Déclencheur « email reçu » en push (Gmail Pub/Sub, abonnements Graph).
+require ROOT . '/src/Models/MailPushSubscription.php';
+require ROOT . '/src/Workflow/MailPush.php';
+require ROOT . '/src/Workflow/WorkflowPreflightException.php';
 require ROOT . '/src/Workflow/WorkflowEngine.php';
 require ROOT . '/src/Workflow/WorkflowCatalog.php';
 require ROOT . '/src/Workflow/WorkflowCover.php';
 require ROOT . '/src/Workflow/WorkflowFit.php';
 require ROOT . '/src/Workflow/WorkflowJournal.php';
+require ROOT . '/src/Workflow/WorkflowProgress.php';
 require ROOT . '/src/Workflow/WorkflowContentView.php';
 require ROOT . '/src/Workflow/WorkflowInserts.php';
 require ROOT . '/src/Workflow/WorkflowTemplates.php';
 require ROOT . '/src/Workflow/WorkflowDraft.php';
 require ROOT . '/src/Tools/ToolCatalog.php';
+require ROOT . '/src/Tools/ImageOptions.php';
 require ROOT . '/src/Tools/ToolPrompts.php';
 require ROOT . '/src/Assistants/PromptStarters.php';
 // Schéma d'un assistant (données ; le rendu vit dans diagram.js, partagé avec les tâches).
 require ROOT . '/src/Assistants/AssistantDiagram.php';
+require ROOT . '/src/Assistants/AssistantPages.php';
 // MIA prépare un assistant (outil `creer_assistant`) : droits, choix permis, carte, création.
 require ROOT . '/src/Assistants/AssistantDraft.php';
 require ROOT . '/src/Helpers/ImageGenerator.php';
@@ -133,13 +156,23 @@ require ROOT . '/src/Helpers/ReferenceImages.php';
 require ROOT . '/src/Helpers/VideoGenerator.php';
 // Conversation vocale : synthèse des réponses (lit Settings ; aucune dépendance vendor/).
 require ROOT . '/src/Helpers/SpeechSynthesisException.php';
+require ROOT . '/src/Helpers/WebSocketClient.php';
+require ROOT . '/src/Helpers/RealtimeSpeech.php';
 require ROOT . '/src/Helpers/SpeechSynthesizer.php';
+// Dictée vocale : moteur choisi (OpenAI Realtime ou Voxtral) et transcription Voxtral.
+require ROOT . '/src/Helpers/Dictation.php';
 // … et les réglages de voix de l'utilisateur (vitesse de lecture, longueur des
 // réponses orales) : lus par le chat, les paramètres et le worker.
 require ROOT . '/src/Helpers/VoicePreferences.php';
 // Réglages d'affichage de l'utilisateur (thème, taille) : lus par TOUS les
 // gabarits pour les attributs de <html>.
 require ROOT . '/src/Helpers/DisplayPreferences.php';
+// Sections repliées du volet, gardées sur le compte : lues par head-meta.php
+// (toutes les pages à volet) et écrites par POST /settings/sidebar.
+require ROOT . '/src/Helpers/SidebarPreferences.php';
+// Modèle préféré de l'utilisateur (il ouvre ses nouvelles conversations) :
+// lu par le chat et les réglages.
+require ROOT . '/src/Helpers/LlmPreference.php';
 require ROOT . '/src/Helpers/Geocoder.php';
 // Octets d'une image : type réel, JPEG allégé (pièces jointes).
 require ROOT . '/src/Helpers/ImageBytes.php';
@@ -212,6 +245,8 @@ require ROOT . '/src/Files/PptxFileBuilder.php';
 require ROOT . '/src/Files/FileFactory.php';
 require ROOT . '/src/Files/NativeDeck.php';
 require ROOT . '/src/Files/NativeDeckStore.php';
+require ROOT . '/src/Files/NativeDeckRun.php';
+require ROOT . '/src/Files/PolishOffer.php';
 // Générations asynchrones (file de jobs) — interface avant handlers.
 require ROOT . '/src/Jobs/JobErrorException.php';
 require ROOT . '/src/Jobs/JobContext.php';
@@ -229,6 +264,8 @@ require_once ROOT . '/src/Auth/Sso/SsoRegistry.php';
 require_once ROOT . '/src/Auth/GoogleOAuth.php';
 require_once ROOT . '/src/Auth/Sso/GoogleSsoProvider.php';
 require_once ROOT . '/src/Auth/Sso/MicrosoftSsoProvider.php';
+// Jeton Microsoft reçu du navigateur (Claude dans Office) : signature vérifiée.
+require_once ROOT . '/src/Auth/EntraJwt.php';
 // Socle des OAuth par utilisateur AVANT ses quatre sous-classes déclaratives.
 require_once ROOT . '/src/Auth/GoogleUserOAuth.php';
 require_once ROOT . '/src/Auth/GoogleDriveOAuth.php';
@@ -268,11 +305,17 @@ require ROOT . '/src/Helpers/NavShell.php';
 require ROOT . '/src/Helpers/AdminAccess.php';
 // Où mène chaque menu : espace de travail, mon compte, administration, palette.
 require ROOT . '/src/Helpers/NavRegistry.php';
+// Tuiles d'espace du volet : teinte et ligne d'information (sidebar-shortcuts.php).
+require ROOT . '/src/Helpers/SidebarSpaces.php';
+// Fil d'Ariane de la barre du haut des pages d'administration et de réglages.
+require ROOT . '/src/Helpers/AdminBreadcrumb.php';
 // Administrateurs à prévenir depuis l'encadré d'erreur du chat.
 require ROOT . '/src/Helpers/AdminContacts.php';
 require ROOT . '/src/Controllers/HealthController.php';
 require ROOT . '/src/Controllers/MediaController.php';
 require ROOT . '/src/Controllers/FileController.php';
+require ROOT . '/src/Controllers/WorkTableController.php';
+require ROOT . '/src/Controllers/KbTableController.php';
 require ROOT . '/src/Controllers/AuthController.php';
 require ROOT . '/src/Controllers/ChatController.php';
 require ROOT . '/src/Controllers/JobController.php';
@@ -288,6 +331,7 @@ require ROOT . '/src/Jobs/CreditsRefreshJob.php';
 require ROOT . '/src/Jobs/GammaGenerationJob.php';
 require ROOT . '/src/Jobs/NativeDeckJob.php';
 require ROOT . '/src/Jobs/MyBrainFeedJob.php';
+require ROOT . '/src/Jobs/TableMissionJob.php';
 require ROOT . '/src/Jobs/WorkflowJob.php';
 require ROOT . '/src/Jobs/JobQueue.php';
 require ROOT . '/src/Backup/BackupService.php';
@@ -301,10 +345,19 @@ require ROOT . '/src/Controllers/LogsController.php';
 require ROOT . '/src/Controllers/BudgetController.php';
 require ROOT . '/src/Controllers/ProfileController.php';
 require ROOT . '/src/Controllers/AboutController.php';
+// Captures de la documentation, affichées par l'assistant « MIA : mode d'emploi ».
+require ROOT . '/src/Controllers/HelpImageController.php';
 require ROOT . '/src/Controllers/UserSettingsController.php';
+// Réglages → Mémoire (« Ce que MIA sait de vous »).
+require ROOT . '/src/Controllers/MemoryController.php';
+require ROOT . '/src/Controllers/FeatureNewsController.php';
 require ROOT . '/src/Controllers/ScheduledTaskController.php';
 require ROOT . '/src/Controllers/WorkflowController.php';
 require ROOT . '/src/Controllers/WorkflowHookController.php';
+require ROOT . '/src/Controllers/MailPushHookController.php';
+// Claude dans Office : passerelle Anthropic (avant la session) et ses écrans.
+require ROOT . '/src/Controllers/OfficeGatewayController.php';
+require ROOT . '/src/Controllers/OfficeAddinController.php';
 require ROOT . '/src/Controllers/PushController.php';
 require ROOT . '/src/Controllers/PwaController.php';
 require ROOT . '/src/Controllers/MobileAppController.php';
@@ -315,12 +368,20 @@ require ROOT . '/src/LLM/LlmErrorPresenter.php';
 // Incidents de compte chez un fournisseur (crédit épuisé, clé refusée) :
 // consignés par le chat et les jobs, lus par les points à régler.
 require ROOT . '/src/LLM/ProviderIncident.php';
+// Claude dans Office : réglages, jetons personnels, passerelle (formes pures).
+require ROOT . '/src/Office/OfficeAddin.php';
+require ROOT . '/src/Office/OfficeAddinToken.php';
+require ROOT . '/src/Office/OfficeGateway.php';
+require ROOT . '/src/Office/OfficeManifest.php';
 require ROOT . '/src/LLM/ToolUseUnsupportedTrait.php';
 // Boucle d'outils au format Chat Completions (DeepSeek, Kimi, GLM, Mistral,
 // LLM local) : déclarée AVANT les adaptateurs qui l'emploient.
 require ROOT . '/src/LLM/ChatCompletionsToolLoopTrait.php';
 require ROOT . '/src/LLM/LlmAdapterHelpers.php';
 require ROOT . '/src/LLM/LlmCatalog.php';
+// Dates d'arrêt relevées chez l'éditeur (GET /v1/models d'OpenAI), lues en
+// repli du catalogue par LlmCatalog::retirement().
+require ROOT . '/src/LLM/LlmShutdownWatch.php';
 require ROOT . '/src/LLM/OpenAIAdapter.php';
 require ROOT . '/src/LLM/MistralAdapter.php';
 require ROOT . '/src/LLM/AnthropicAdapter.php';
@@ -344,7 +405,10 @@ require ROOT . '/src/Sync/GoogleCalendarProvider.php';
 require ROOT . '/src/Sync/OneDriveProvider.php';
 require ROOT . '/src/Sync/KbSync.php';
 require ROOT . '/src/Sync/KbStatus.php';
+require ROOT . '/src/Sync/KbDocIssue.php';
+require ROOT . '/src/Sync/KbAdvice.php';
 require ROOT . '/src/Sync/KbDiagram.php';
+require ROOT . '/src/Sync/KbPages.php';
 require ROOT . '/src/MyBrain/MyBrainException.php';
 require ROOT . '/src/MyBrain/MyBrainClient.php';
 require ROOT . '/src/MyBrain/MyBrainContext.php';
@@ -366,6 +430,7 @@ require ROOT . '/src/Calendar/UserCalendarService.php';
 require ROOT . '/src/Calendar/FreeSlots.php';
 require ROOT . '/src/Tasks/UserTasksService.php';
 require ROOT . '/src/Outlook/UserOutlookService.php';
+require ROOT . '/src/Outlook/UserOutlookPushService.php';
 // Après UserOutlookService (mise en forme des destinataires, HTML → texte) et
 // UserCalendarService (analyse de date partagée) : le calendrier Outlook réutilise
 // leurs statiques pures plutôt que d'en faire un second exemplaire.
@@ -426,10 +491,35 @@ require ROOT . '/src/Agent/Tools/WebPageTools.php';
 require ROOT . '/src/Agent/Tools/ScheduleTools.php';
 require ROOT . '/src/Agent/Tools/AssistantTools.php';
 require ROOT . '/src/Agent/Tools/WorkflowTools.php';
+require ROOT . '/src/Agent/Tools/WorkflowPieceTools.php';
 require ROOT . '/src/Agent/Tools/ConversationTools.php';
 require ROOT . '/src/Agent/Tools/IntentTools.php';
+// Tables de travail (src/Tables/) : collecte exhaustive, croisement, export.
+// L'interface du magasin AVANT son implémentation (pas d'autoloader).
+require ROOT . '/src/Tables/WorkTableOps.php';
+require ROOT . '/src/Tables/WorkTableRows.php';
+require ROOT . '/src/Tables/ArrayTableRows.php';
+require ROOT . '/src/Tables/WorkTableRecipe.php';
+require ROOT . '/src/Tables/WorkTableStore.php';
+require ROOT . '/src/Tables/SqlWorkTableStore.php';
+require ROOT . '/src/Tables/WorkTableCollector.php';
+require ROOT . '/src/Tables/WorkTableExport.php';
+require ROOT . '/src/Tables/WorkTableView.php';
+require ROOT . '/src/Tables/KbTableStore.php';
+require ROOT . '/src/Tables/KbTableHistory.php';
+require ROOT . '/src/Tables/KbTableImport.php';
+require ROOT . '/src/Tables/KbTableWrite.php';
+require ROOT . '/src/Tables/KbTableView.php';
+require ROOT . '/src/Tables/KbTablePrompt.php';
+require ROOT . '/src/Tables/WorkTableEnricher.php';
+require ROOT . '/src/Tables/WorkTableActions.php';
+require ROOT . '/src/Agent/Tools/WorkTableTools.php';
 require ROOT . '/src/Tools/ToolTriggers.php';
 require ROOT . '/src/Helpers/Encryption.php';
+require ROOT . '/src/Helpers/LegacyOffice.php';
+require ROOT . '/src/Helpers/MailFile.php';
+require ROOT . '/src/Helpers/ImageConvert.php';
+require ROOT . '/src/Helpers/ArchiveReader.php';
 require ROOT . '/src/Helpers/FileExtractor.php';
 require ROOT . '/src/Helpers/WebSearch.php';
 require ROOT . '/src/Helpers/WebPageReader.php';

@@ -43,6 +43,8 @@ final class WorkflowInserts
         'creer_tache' => ['notes'], 'modifier_tache' => ['notes'],
         'creer_tache_todo' => ['notes'], 'modifier_tache_todo' => ['notes'],
         'creer_evenement_agenda' => ['description'], 'creer_evenement_agenda_outlook' => ['description'],
+        'modifier_evenement_agenda' => ['description'],
+        'modifier_evenement_agenda_outlook' => ['description'],
     ];
     /** Forme du texte qui reçoit une pièce : Markdown, HTML (email), mrkdwn (Slack), texte brut. */
     public const FORMAT_MARKDOWN = '';
@@ -174,6 +176,17 @@ final class WorkflowInserts
         };
         $embed = static fn(string $k, array $p, array $content, string $real): ?string
             => $imageExists($p, $content) ? MailHtml::imageMarker($cidOf($k, $real)) : null;
+        // Un message Slack ne porte pas d'image dans son texte : l'image citée
+        // part en FICHIER joint au message, son repère disparaît du texte.
+        $slack = $tool === 'envoyer_message_slack';
+        $slackImages = []; // clé citable → clé réelle
+        $attachImage = static function (string $k, array $p, array $content, string $real) use (&$slackImages, $imageExists): ?string {
+            if (!$imageExists($p, $content)) {
+                return null;
+            }
+            $slackImages[$k] = $real;
+            return '';
+        };
 
         foreach (array_merge(self::bodyArgs($tool), self::LINE_ARGS) as $arg) {
             if (!is_string($args[$arg] ?? null) || !str_contains($args[$arg], '@')) {
@@ -183,7 +196,7 @@ final class WorkflowInserts
             $text = self::byName($args[$arg], $pieces, $map);
             $args[$arg] = self::expandText(
                 $text, $pieces, $top,
-                $mail && $arg === 'corps' ? $embed : null,
+                $mail && $arg === 'corps' ? $embed : ($slack && $arg === 'texte' ? $attachImage : null),
                 $line, $nested,
                 $line ? self::FORMAT_MARKDOWN : self::formatFor($tool, $arg, $text)
             );
@@ -202,6 +215,30 @@ final class WorkflowInserts
                 ), $rows);
             } catch (\RuntimeException) {
                 // Valeurs illisibles : le service le dira à l'exécution, rien à remplir.
+            }
+        }
+
+        if ($slack) {
+            // Les images citées (par le texte, ou par la consigne sans que le
+            // modèle les place) : jointes au message, une fois chacune.
+            foreach ((array)($inserts['images'] ?? []) as $k) {
+                $hit = is_string($k) ? $top($k) : null;
+                if ($hit !== null && !isset($slackImages[$k]) && self::isImage($pieces[$k], $hit['content']) && $imageExists($pieces[$k], $hit['content'])) {
+                    $slackImages[$k] = $hit['key'];
+                }
+            }
+            if ($slackImages !== []) {
+                $refs = is_array($args[WorkflowDeliveries::ATTACH_KEY] ?? null) ? $args[WorkflowDeliveries::ATTACH_KEY] : [];
+                $have = array_map(static fn($r): string => is_array($r) ? (string)($r['piece'] ?? '') : '', $refs);
+                foreach ($slackImages as $k => $real) {
+                    if (!in_array($real, $have, true)) {
+                        $refs[] = ['run_id' => $runId, 'piece' => $real, 'name' => (string)$pieces[$k]['name']];
+                    }
+                }
+                $args[WorkflowDeliveries::ATTACH_KEY] = $refs;
+                if (is_string($args['texte'] ?? null)) {
+                    $args['texte'] = trim((string)preg_replace("/[ \t]+\n/", "\n", (string)preg_replace("/\n{3,}/", "\n\n", $args['texte'])));
+                }
             }
         }
 
@@ -481,13 +518,17 @@ final class WorkflowInserts
                 $content['text'] = $text($content['text'] ?? '');
                 break;
             case 'document':
-                $content['source'] = match ((string)($content['language'] ?? '')) {
-                    'html'         => $text($content['source'] ?? '', self::FORMAT_HTML),
-                    'text', 'txt'  => $text($content['source'] ?? '', self::FORMAT_PLAIN),
-                    // Un classeur (csv) : chaque repère est une cellule.
-                    'csv'          => $one($content['source'] ?? ''),
-                    default        => $text($content['source'] ?? ''),
-                };
+                // Un fichier brut (script, données) : ce qu'on y insère est du texte simple, jamais du Markdown.
+                $rawFile = ArtifactContract::isRawFile((string)($content['format'] ?? ''));
+                $content['source'] = $rawFile && !in_array((string)($content['language'] ?? ''), ['html', 'csv'], true)
+                    ? $text($content['source'] ?? '', self::FORMAT_PLAIN)
+                    : match ((string)($content['language'] ?? '')) {
+                        'html'         => $text($content['source'] ?? '', self::FORMAT_HTML),
+                        'text', 'txt'  => $text($content['source'] ?? '', self::FORMAT_PLAIN),
+                        // Un classeur (csv) : chaque repère est une cellule.
+                        'csv'          => $one($content['source'] ?? ''),
+                        default        => $text($content['source'] ?? ''),
+                    };
                 break;
             case 'list':
                 // Un élément de liste tient sur une ligne : le contenu inséré aussi.

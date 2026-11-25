@@ -154,9 +154,59 @@ final class CompanyProfile
         return self::sanitizeDescription(self::setting(self::SETTING_DESCRIPTION));
     }
 
+    /**
+     * Ce que la personne embarque dans le fichier qu'elle fait fabriquer :
+     * le modèle de l'entreprise (PowerPoint ou Word) et le logo, chacun
+     * décochable sur la carte du fichier (generated-files.js). Retiré, il
+     * n'existe plus pour les fabricants le temps de l'appel : templatePath(),
+     * wordTemplatePath() rendent null, logoUrl() rend ''. Toujours remis en
+     * place à la sortie (le worker enchaîne les fichiers de plusieurs comptes).
+     */
+    private static bool $useTemplate = true;
+    private static bool $useLogo = true;
+
+    /**
+     * Exécute `$fn` avec le modèle et le logo de l'entreprise embarqués ou
+     * non (un élément absent le reste, quoi qu'on demande).
+     *
+     * @template T
+     * @param callable(): T $fn
+     * @return T
+     */
+    public static function withReferences(bool $template, bool $logo, callable $fn): mixed
+    {
+        $before = [self::$useTemplate, self::$useLogo];
+        self::$useTemplate = $template;
+        self::$useLogo     = $logo;
+        try {
+            return $fn();
+        } finally {
+            [self::$useTemplate, self::$useLogo] = $before;
+        }
+    }
+
+    /**
+     * Références que l'entreprise a déposées (sans tenir compte d'un choix en
+     * cours) : de quoi proposer les cases « Modèle … » et « Logo … ».
+     *
+     * @return array{name: string, pptx: bool, docx: bool, logo: bool}
+     */
+    public static function availableReferences(): array
+    {
+        return self::withReferences(true, true, static fn (): array => [
+            'name' => self::name(),
+            'pptx' => self::templatePath() !== null,
+            'docx' => self::wordTemplatePath() !== null,
+            'logo' => self::logoPath() !== null,
+        ]);
+    }
+
     /** URL publique du logo (avec son cache-buster), '' sans logo. */
     public static function logoUrl(): string
     {
+        if (!self::$useLogo) {
+            return '';
+        }
         $url = self::setting(self::SETTING_LOGO);
 
         return str_starts_with($url, '/assets/img/branding/' . self::LOGO_STEM . '.') ? $url : '';
@@ -199,9 +249,23 @@ final class CompanyProfile
         return ['footer' => self::documentFooter(), 'logo' => self::logoPath()];
     }
 
+    /**
+     * Logo imposé par un test (null = celui du volume) : `public/assets/img/branding`
+     * est en lecture seule dans le conteneur de test. Même patron que overrideTemplate.
+     */
+    private static ?string $logoOverride = null;
+
+    public static function overrideLogo(?string $path): void
+    {
+        self::$logoOverride = $path;
+    }
+
     /** Chemin LOCAL du logo (pour Dompdf, PhpWord), null sans logo. */
     public static function logoPath(): ?string
     {
+        if (self::$logoOverride !== null) {
+            return self::$useLogo && is_file(self::$logoOverride) ? self::$logoOverride : null;
+        }
         $url = self::logoAssetUrl();
         if ($url === '') {
             return null;
@@ -233,6 +297,9 @@ final class CompanyProfile
     /** Chemin local du modèle Word, null s'il n'y en a pas. */
     public static function wordTemplatePath(): ?string
     {
+        if (!self::$useTemplate) {
+            return null;
+        }
         if (self::$wordTemplateOverride !== null) {
             return is_file(self::$wordTemplateOverride) ? self::$wordTemplateOverride : null;
         }
@@ -312,6 +379,9 @@ final class CompanyProfile
     /** Chemin local du modèle PowerPoint, null s'il n'y en a pas. */
     public static function templatePath(): ?string
     {
+        if (!self::$useTemplate) {
+            return null;
+        }
         if (self::$templateOverride !== null) {
             return is_file(self::$templateOverride) ? self::$templateOverride : null;
         }

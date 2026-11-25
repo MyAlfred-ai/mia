@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 /**
  * Tâches système hors chat : ingestion d'un document, réindexation d'une base,
- * synchronisation d'un dossier distant, extraction d'un document d'assistant.
+ * synchronisation d'un dossier distant, extraction d'un document d'assistant,
+ * apprentissage de la mémoire d'une personne (MemoryLearner), relevé des dates
+ * d'arrêt des modèles chez l'éditeur (LlmShutdownWatch, cible = 1, sans objet).
  *
  * Ces traitements étaient lancés par `BackgroundJob` (fork POSIX, sinon
  * exécution synchrone dans la requête). Les faire passer par la file leur
@@ -42,6 +44,15 @@ class MaintenanceJob implements JobHandler
             case 'kb_document':
                 KnowledgeBaseDocument::processIngestion($id);
                 break;
+            case 'kb_vectorize':
+                // Nouvel essai de la seule vectorisation d'un document : ses
+                // extraits sont gardés, le découpage n'est pas repayé.
+                $doc = KnowledgeBaseDocument::findById($id);
+                $kb  = $doc !== null ? KnowledgeBase::findById((int)$doc['kb_id']) : null;
+                if ($kb !== null && KnowledgeBase::holdsDocuments($kb)) {
+                    KnowledgeBaseDocument::vectorizeDocument($id, $kb, (int)($doc['chunk_count'] ?? 0) ?: null);
+                }
+                break;
             case 'profile_document':
                 ProfileDocument::processExtraction($id);
                 break;
@@ -51,6 +62,12 @@ class MaintenanceJob implements JobHandler
             case 'kb_sync':
                 KbSync::syncKb($id, $heartbeat);
                 break;
+            case 'memory_learn':
+                // Cible = la personne ; un rejeu ne relit rien (repères avancés avant l'appel).
+                return ['op' => $op, 'id' => $id] + MemoryLearner::learn($id, $heartbeat);
+            case LlmShutdownWatch::JOB_OP:
+                // Lecture seule de GET /v1/models, non facturée ; un rejeu relit la liste.
+                return ['op' => $op, 'id' => $id] + LlmShutdownWatch::refresh();
             default:
                 throw new \RuntimeException('Opération de maintenance inconnue : ' . $op);
         }

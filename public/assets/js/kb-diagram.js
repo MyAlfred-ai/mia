@@ -85,6 +85,18 @@
     function inputs(spec, cat) {
         const L = cat.labels || {};
         const I = cat.icons || {};
+        if (spec.table) {
+            // Table permanente : d'où viennent ses lignes (fichier importé,
+            // saisie à la main, conversation), combien elle en compte.
+            const origin = String(spec.table.origin || '').trim();
+            return [{
+                kind: 'docs', title: L.table_content, icon: I.table,
+                headline: origin, missing: origin === '' && !spec.table.rows && !(spec.table.columns || []).length,
+                sub: plural(cat, Number(spec.table.rows) || 0, 'rows'),
+                empty: origin === '' && !spec.table.rows && !(spec.table.columns || []).length ? L.table_content_empty : '',
+                items: [],
+            }];
+        }
         if (spec.live) {
             const remote = spec.remote || {};
             const src = pick(cat.sources, 'mybrain') || {};
@@ -143,6 +155,14 @@
     function search(spec, cat) {
         const L = cat.labels || {};
         const I = cat.icons || {};
+        if (spec.table) {
+            // Une table n'est pas cherchée par le sens : MIA la lit ligne à ligne.
+            return {
+                kicker: L.table_read, icon: I.eye,
+                label: L.table_read_title, provider: L.table_read_sub, logo: '', note: L.table_read_note,
+                params: [{ icon: '', text: spec.table.mia_write ? L.table_write : L.table_readonly, tone: '', target: '' }],
+            };
+        }
         if (spec.live) {
             const src = pick(cat.sources, 'mybrain') || {};
             return {
@@ -179,7 +199,13 @@
             const tone = TONES[state.tone] ? state.tone : '';
             traits.push({ icon: I['state_' + (tone || 'idle')], text: state.title, tone, target: 'state' });
         }
-        if (!spec.creating) {
+        const table = spec.table || null;
+        if (table) {
+            traits.push({ icon: I.trait_rows, text: plural(cat, Number(table.rows) || 0, 'rows'), tone: '', target: '' });
+            const cols = Number(table.cols) || (table.columns || []).length;
+            if (cols > 0) traits.push({ icon: I.trait_cols, text: plural(cat, cols, 'cols'), tone: '', target: '' });
+            if (!spec.creating) traits.push({ icon: I.trait_usage, text: plural(cat, Number(spec.usage) || 0, 'usage'), tone: '', target: '' });
+        } else if (!spec.creating) {
             // Une base vide le dit déjà par son état : pas de « Aucun document » en double.
             const docs = (spec.files || []).length + (Number(spec.synced_total) || 0);
             if (!spec.live && docs > 0) {
@@ -192,15 +218,34 @@
         if (access.shared && !access.owned) {
             traits.push({ icon: I.trait_shared, text: access.can_manage ? L.shared_manage : L.shared_read, tone: '', target: '' });
         }
+        // Qui la voit, en un mot : privée, commune ou publique.
+        const vis = visibilityOf(spec);
+        const VIS = {
+            private: { icon: I.trait_private, text: L.only_me },
+            common: { icon: I.trait_common, text: L.shared },
+            public: { icon: I.trait_public, text: L.public },
+        };
+        traits.push({ icon: VIS[vis].icon, text: VIS[vis].text, tone: '', target: 'sharing' });
 
+        // Une table montre ses colonnes, comme la citation d'un assistant.
+        const columns = table ? (table.columns || []).filter(Boolean) : [];
         return {
-            kind: 'kb', kicker: L.base, icon: I.base,
-            name: name || L.untitled || '', missingName: name === '',
-            avatar: '', glyph: I.glyph, color: cat.hue || '',
+            kind: 'kb', kicker: table ? L.table : L.base, icon: table ? I.table : I.base,
+            name: name || (table ? L.table_untitled : L.untitled) || '', missingName: name === '',
+            avatar: '', glyph: table ? I.table_glyph : I.glyph, color: table ? (cat.table_hue || cat.hue || '') : (cat.hue || ''),
             description: String(spec.description || '').trim(),
+            quote: columns.length ? { text: columns.join(' · '), target: 'columns' } : null,
             status: { text: active ? L.active : L.inactive, on: active, target: 'active' },
             traits,
         };
+    }
+
+    /** Visibilité d'une base : `private`, `common` ou `public` (la base système sert tout le monde). */
+    function visibilityOf(spec) {
+        const access = spec.access || {};
+        if (access.private || spec.visibility === 'private') return 'private';
+        if (spec.system || access.public || spec.visibility === 'public') return 'public';
+        return 'common';
     }
 
     /** Les assistants qui interrogent la base — avatar ou pastille, qui les voit. */
@@ -256,7 +301,19 @@
 
         if (spec.system) {
             items.push({ label: L.everyone, icon: I.everyone, note: L.everyone_note });
-            status = { text: L.shared, on: true };
+            status = { text: L.public, on: true };
+        } else if (visibilityOf(spec) === 'public' && !access.private) {
+            // Publique : toute l'organisation la voit ; son créateur et les
+            // administrateurs la modifient.
+            items.push({ label: access.you ? L.you : (access.creator || L.creator_unknown), icon: I.person, note: L.owner });
+            items.push({ label: L.public_everyone, icon: I.everyone, note: L.public_note });
+            items.push({ label: L.admins, icon: I.admins, note: L.admins_note });
+            status = { text: L.public, on: true };
+        } else if (access.private) {
+            // « Uniquement pour moi » : son créateur, personne d'autre — pas
+            // même la ligne « Administrateurs ».
+            items.push({ label: access.you ? L.you : (access.creator || L.creator_unknown), icon: I.person, note: L.only_me_note });
+            status = { text: L.only_me, on: false, muted: true };
         } else if (access.owned) {
             const live = !!spec.live;
             const noteOf = (share) => (live

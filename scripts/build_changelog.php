@@ -5,13 +5,15 @@ declare(strict_types=1);
 /**
  * Recalcule VERSION et republie public/changelog.json.
  *
- * Appelé par scripts/hooks/post-commit après CHAQUE commit. Trois sorties :
+ * Appelé par scripts/hooks/post-commit après CHAQUE commit. Quatre sorties :
  *
  *   1. VERSION            = <VERSION_BASE>.<nombre d'améliorations depuis le
  *                           commit qui a posé cette base>  (inchangé)
  *   2. changelog.nouveautes = les 20 entrées rédigées de docs/NOUVEAUTES.md,
  *                           datées et numérotées depuis l'historique git
- *   3. changelog.commits  = les 30 derniers sujets de commit, réservés au
+ *   3. changelog.anciennes = l'historique : les entrées suivantes, affichées
+ *                           à la demande (« nouveautés plus anciennes »)
+ *   4. changelog.commits  = les 30 derniers sujets de commit, réservés au
  *                           détail technique (comptes @myalfred.ai)
  *
  * DÉTERMINISME OBLIGATOIRE. Le hook amende le commit pour y glisser ces
@@ -187,13 +189,15 @@ foreach ($entrees as &$e) {
 }
 unset($e);
 
-$publiees = Nouveautes::publiables($entrees);
+$publiees  = Nouveautes::publiables($entrees);
+$anciennes = Nouveautes::archivees($entrees);
 
 // ===================== Écriture =====================
 
 $charge = [
     'version'    => $version,
     'nouveautes' => $publiees,
+    'anciennes'  => $anciennes,
     'commits'    => $journal,
 ];
 $json = json_encode($charge, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT);

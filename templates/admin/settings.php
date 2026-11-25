@@ -32,10 +32,11 @@ $langueDefaut = (string)($settings[I18n::SETTING_DEFAULT] ?? '');
 $taglineVue  = I18n::editorial($appTagline, 'Votre assistant IA multi-modèles');
 ?>
 <div class="admin-content brand-page">
-    <div class="brand-page-head">
-        <div>
+    <?php require ROOT . '/templates/partials/admin-topbar.php'; ?>
+    <div class="brand-page-head page-head">
+        <div class="page-head-text">
             <h1><?= te('Marque & apparence') ?></h1>
-            <p class="brand-lead">
+            <p class="brand-lead page-head-sub">
                 <?= str_replace(['{a}', '{/a}'], ['<a href="/admin/company">', '</a>'],
                     te("L'habillage de l'application : ce qu'on lit et ce qu'on voit — nom, logos, couleurs, liens de contact, page d'installation mobile. L'entreprise qui utilise MIA (nom, descriptif, vocabulaire, logo, modèles PowerPoint et Word) a sa page : {a}Entreprise{/a}.")) ?>
             </p>
@@ -304,8 +305,8 @@ $taglineVue  = I18n::editorial($appTagline, 'Votre assistant IA multi-modèles')
         <p class="brand-footnote">
             <?= str_replace(
                 ['{a1}', '{/a1}', '{a2}', '{/a2}'],
-                ['<a href="/admin/company">', '</a>', '<a href="/admin/llms/models#defaut">', '</a>'],
-                te("Le nom, le descriptif, le vocabulaire, le logo et les modèles PowerPoint et Word de l'entreprise se règlent dans {a1}Organisation → Entreprise{/a1} ; le LLM par défaut et le LLM de secours dans {a2}Modèles IA → Modèles{/a2}.")
+                ['<a href="/admin/company">', '</a>', '<a href="/admin/llms#defaut">', '</a>'],
+                te("Le nom, le descriptif, le vocabulaire, le logo et les modèles PowerPoint et Word de l'entreprise se règlent dans {a1}Organisation → Entreprise{/a1} ; le LLM par défaut et le LLM de secours dans {a2}Modèles IA → Fournisseurs et modèles{/a2}.")
             ) ?>
         </p>
     </form>

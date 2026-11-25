@@ -17,6 +17,10 @@ $page       = $page       ?? '';
 // variante « réglages », le lien « Comptes connectés ». Calculé ICI, avant le
 // header : une requête pour les trois partials, dans l'ordre où ils sont rendus.
 $navUser = Session::currentUser();
+// Nouveautés majeures (MajorFeatures) : ouvrir la page où se trouve l'une
+// d'elles éteint sa pastille verte — consigné ICI, avant tout rendu, pour que
+// ni ce menu ni les tuiles ne la reposent sur la page même où l'on arrive.
+MajorFeatures::forViewer($navUser, $page);
 // Pages des espaces du créateur atteintes depuis la discussion : elles gardent
 // LE VOLET DU CHAT (NavShell, chat-shell-sidebar.php) au lieu du menu latéral
 // de l'administration ou des paramètres.
@@ -72,6 +76,7 @@ $navBurgerLevel = AdminAttention::worstLevel($navAttention);
             aria-label="<?= te('Ouvrir le menu') ?>" aria-controls="adminSidebar" aria-expanded="false">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
         <?= $navBurgerLevel !== null ? '<span class="nav-signal-dot ' . ($navBurgerLevel === AdminAttention::ALERT ? 'is-alert' : 'is-warn') . '" aria-hidden="true"></span>' : '' ?>
+        <?= $navBurgerLevel === null ? MajorFeatures::dotHtml(array_merge(MajorFeatures::dotsAt(MajorFeatures::PLACE_SPACE), MajorFeatures::dotsAt(MajorFeatures::PLACE_ADMIN))) : '' ?>
     </button>
     <img src="<?= htmlspecialchars(Settings::get('logo_url', '/assets/img/logo.png')) ?>"
          alt="" class="mobile-header-logo">
@@ -126,12 +131,29 @@ $navBurgerLevel = AdminAttention::worstLevel($navAttention);
             // En bas : À propos et déconnexion, qui n'ont pas d'autre place.
         ?>
         <div class="admin-nav-label"><?= te('Mon compte') ?></div>
+        <?php
+            // Mémoire : souvenirs que MIA a déduits et qui attendent un « oui »
+            // — une pastille au nombre sur l'entrée (une requête, best-effort).
+            $navMemoryToConfirm = 0;
+            if ($navUser && UserMemory::isEnabled()) {
+                try {
+                    $navMemoryToConfirm = UserMemory::counts((int)$navUser['id'])['proposed'];
+                } catch (\Throwable) {
+                    $navMemoryToConfirm = 0;
+                }
+            }
+        ?>
         <?php foreach (NavRegistry::accountFor($navUser) as $navKey => $navItem): ?>
-        <a href="<?= htmlspecialchars($navItem['href']) ?>" class="admin-nav-link <?= $page === $navItem['page'] ? 'active' : '' ?>"<?= $navKey === 'connections' && $connectorsToReconnect !== [] ? ' title="' . htmlspecialchars(ConnectorRegistry::reconnectSummary($connectorsToReconnect)) . '"' : '' ?>>
+        <a href="<?= htmlspecialchars($navItem['href']) ?>" class="admin-nav-link <?= $page === $navItem['page'] ? 'active' : '' ?>">
             <?= NavRegistry::icon($navItem['icon'], 15) ?>
             <?= te($navItem['label']) ?>
-            <?php // Pastille discrète (sans pulsation) : une connexion expirée à rétablir. ?>
-            <?php if ($navKey === 'connections' && $connectorsToReconnect !== []): ?><span class="reconnect-dot" aria-hidden="true"></span><?php endif; ?>
+            <?php // Pastille verte : une nouveauté majeure se trouve sur cette page. ?>
+            <?= MajorFeatures::dotAt(MajorFeatures::PLACE_ACCOUNT, $navKey) ?>
+            <?php // Pastille discrète (sans pulsation) : une connexion expirée à rétablir — son texte en bulle. ?>
+            <?php if ($navKey === 'connections'): ?><?= ConnectorRegistry::reconnectDot($connectorsToReconnect) ?><?php endif; ?>
+            <?php // Pastille bleue d'info : « Votre contexte » est vide — elle mène à la carte. ?>
+            <?php if ($navKey === 'memory'): ?><?= UserPreferences::contextDot($navUser, true) ?><?php endif; ?>
+            <?php if ($navKey === 'memory' && $navMemoryToConfirm > 0): ?><span class="user-action-count mem-nav-count" data-tip="<?= htmlspecialchars(I18n::plural($navMemoryToConfirm, '{n} souvenir à confirmer', '{n} souvenirs à confirmer')) ?>" data-tip-tone="warn"><?= (int)$navMemoryToConfirm ?></span><?php endif; ?>
         </a>
         <?php endforeach; ?>
         <div class="admin-nav-sep" role="separator"></div>
@@ -168,7 +190,7 @@ $navBurgerLevel = AdminAttention::worstLevel($navAttention);
                 [$attr, $dot, $hint] = $sig;
                 $title = ($attr === '' && isset($navTitles[$p])) ? ' title="' . htmlspecialchars($navTitles[$p]) . '"' : '';
                 return '<a href="' . htmlspecialchars(AdminAccess::PAGE_HREFS[$p]) . '" class="admin-nav-link admin-nav-sublink' . ($navCurrent === $p ? ' active' : '') . '"' . $title . $attr . '>'
-                    . htmlspecialchars(AdminMenu::pageText($p)) . $dot . '</a>' . $hint;
+                    . htmlspecialchars(AdminMenu::pageText($p)) . $dot . MajorFeatures::dotAt(MajorFeatures::PLACE_ADMIN, $p) . '</a>' . $hint;
             };
             // Une rubrique repliable. $sig : signal du groupe ; $dots : pastilles
             // propres (clé API absente, budget) posées avant celle du groupe.
@@ -181,6 +203,13 @@ $navBurgerLevel = AdminAttention::worstLevel($navAttention);
                 $open   = $active || $force;
                 $id     = 'adminNavGroup' . ucfirst($key);
                 [$attr, $dot, $hint] = $sig;
+                // Nouveauté majeure sur l'une de ses pages : la rubrique le dit
+                // aussi, repliée ou non.
+                $news = [];
+                foreach ($pages as $newsPage) {
+                    $news = array_merge($news, MajorFeatures::dotsAt(MajorFeatures::PLACE_ADMIN, $newsPage));
+                }
+                $dots .= MajorFeatures::dotHtml($news);
                 return '<div class="admin-nav-group' . ($open ? ' open' : '') . $extraClass . '" data-nav-group="' . $key . '">'
                     . '<button type="button" class="admin-nav-link admin-nav-group-toggle' . ($active ? ' active' : '') . '" aria-expanded="' . ($open ? 'true' : 'false') . '" aria-controls="' . $id . '"' . $attr . '>'
                     . AdminMenu::icon(AdminMenu::ENTRIES[$key]['icon'], 15)
@@ -205,7 +234,12 @@ $navBurgerLevel = AdminAttention::worstLevel($navAttention);
             $llmSetupEtat   = $llmSetupNeeded ? ['level' => AdminAttention::WARN, 'text' => $llmSetupTitle] : null;
             $llmSetupDot    = $llmSetupNeeded ? '<span class="nav-attention-dot" aria-hidden="true"></span>' : '';
             [$llmSetupAttr, , $llmSetupHint] = $navSignal($llmSetupEtat, 'navHintLlmSetup');
-            [$llmKeyAttr, , $llmKeyHint]     = $navSignal($llmSetupEtat, 'navHintLlmKeys');
+            // « Fournisseurs et modèles » : la pastille pulsante de la configuration
+            // initiale, sinon les constats de la page (modèles, clés, comptes refusés).
+            [$llmKeyAttr, $llmKeyDot, $llmKeyHint] = $navSignal($llmSetupEtat ?? AdminAttention::forEntry($navAttention, 'llms-keys'), 'navHintLlmKeys');
+            if ($llmSetupNeeded) {
+                $llmKeyDot = $llmSetupDot;
+            }
             [$llmGAttr, $llmGDot, $llmGHint] = $navSignal($llmSetupNeeded ? null : AdminAttention::forGroup($navAttention, 'models'), 'navHintGroupModels');
 
             // Coûts : budget mensuel, consommation, tarifs. Pastille dès le seuil
@@ -234,8 +268,7 @@ $navBurgerLevel = AdminAttention::worstLevel($navAttention);
             . $navSub('roles'),
             $navSignal(AdminAttention::forGroup($navAttention, 'people'), 'navHintGroupPeople')) ?>
         <?= $navGroup('models',
-            $navSub('llms-keys', [$llmKeyAttr, $llmSetupDot, $llmKeyHint])
-            . $navSub('llms-models', $navSignal(AdminAttention::forEntry($navAttention, 'llms-models'), 'navHintLlmModels'))
+            $navSub('llms-keys', [$llmKeyAttr, $llmKeyDot, $llmKeyHint])
             . $navSub('llms-tests'),
             [$llmSetupAttr . $llmGAttr, $llmGDot, $llmSetupHint . $llmGHint], $llmSetupDot, $llmSetupNeeded, $llmSetupNeeded ? ' nav-attention' : '') ?>
         <?= $navGroup('capabilities',
@@ -263,6 +296,11 @@ $navBurgerLevel = AdminAttention::worstLevel($navAttention);
         <?php require ROOT . '/templates/partials/user-account-trigger.php'; ?>
     </div>
 </aside>
+<?php /* Carte du compte repliable : même module que le volet du chat (qui le
+         charge lui-même, avec l'historique). Ici, sans historique, il ne sert
+         qu'au chevron de la carte ; l'état est déjà posé par head-meta.php. */ ?>
+<?php $sbSectionsJsVersion = @filemtime(ROOT . '/public/assets/js/sidebar-sections.js') ?: time(); ?>
+<script src="/assets/js/sidebar-sections.js?v=<?= (int)$sbSectionsJsVersion ?>"></script>
 <?php endif; // $navChatShell ?>
 
 <?php require ROOT . '/templates/partials/command-palette.php'; ?>
@@ -296,7 +334,9 @@ $navBurgerLevel = AdminAttention::worstLevel($navAttention);
             // Textes posés par textContent : une traduction n'est jamais lue comme du HTML.
             banner.querySelector('strong').textContent = <?= tj('Lecture seule.') ?>;
             banner.querySelector('span').appendChild(document.createTextNode(<?= tj('Votre rôle vous permet de consulter cette page, pas de la modifier.') ?>));
-            content.insertBefore(banner, content.firstChild);
+            // Sous la barre du haut (socle commun), sinon en tête du contenu.
+            var topbar = document.getElementById('adminTopbar');
+            content.insertBefore(banner, topbar ? topbar.nextSibling : content.firstChild);
         }
         document.body.classList.add('is-admin-readonly');
         document.querySelectorAll('form').forEach(function (form) {
@@ -320,10 +360,10 @@ $navBurgerLevel = AdminAttention::worstLevel($navAttention);
 })();
 </script>
 <?php endif; ?>
-<?php if ($navVariant === 'admin'): // Bulles des pastilles du menu (points à régler, clé API, budget). ?>
+<?php // Info-bulles de TOUTES les pastilles (points à régler, clé API, budget,
+      // nouveautés, reconnexion, éléments concernés sur la page), toutes variantes. ?>
 <?php $navSignalsJsVersion = @filemtime(ROOT . '/public/assets/js/nav-signals.js') ?: time(); ?>
 <script src="/assets/js/nav-signals.js?v=<?= (int)$navSignalsJsVersion ?>"></script>
-<?php endif; ?>
 <?php
 /* Enregistrement automatique des formulaires de configuration. Chargé ici parce
    que ce partial est la seule ossature commune à /admin/* ET à /settings/*.
@@ -332,3 +372,9 @@ $navBurgerLevel = AdminAttention::worstLevel($navAttention);
 $autosaveJsVersion = @filemtime(ROOT . '/public/assets/js/autosave.js') ?: time();
 ?>
 <script defer src="/assets/js/autosave.js?v=<?= (int)$autosaveJsVersion ?>"></script>
+<?php
+/* Socle commun des pages (barre du haut : état d'enregistrement ; tableaux en
+   cartes au téléphone). `defer` : la barre et les tableaux sont rendus après. */
+$adminUiJsVersion = @filemtime(ROOT . '/public/assets/js/admin-ui.js') ?: time();
+?>
+<script defer src="/assets/js/admin-ui.js?v=<?= (int)$adminUiJsVersion ?>"></script>

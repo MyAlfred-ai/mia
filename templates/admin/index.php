@@ -31,8 +31,13 @@
     $prevMonthLabel = Format::monthLabel(date('Y-m', strtotime('first day of last month')));
 ?>
 <div class="admin-content">
-    <h1><?= te('Tableau de bord') ?></h1>
-    <p style="color:var(--text-muted);font-size:13px;margin:-8px 0 20px"><?= te('Situation au {date} — mois en cours ({mois}) comparé à {mois_prec}.', ['date' => Format::dateFr(date('Y-m-d')), 'mois' => $monthLabel, 'mois_prec' => $prevMonthLabel]) ?></p>
+    <?php require ROOT . '/templates/partials/admin-topbar.php'; ?>
+    <header class="page-head">
+    <div class="page-head-text">
+        <h1><?= te('Tableau de bord') ?></h1>
+        <p class="page-head-sub"><?= te('Situation au {date} — mois en cours ({mois}) comparé à {mois_prec}.', ['date' => Format::dateFr(date('Y-m-d')), 'mois' => $monthLabel, 'mois_prec' => $prevMonthLabel]) ?></p>
+    </div>
+    </header>
 
     <?php if (!empty($llmSetupNeeded)): // calculé par admin-nav.php (requis ci-dessus) : aucune clé API LLM active ?>
     <div class="llm-setup-banner">
@@ -224,7 +229,7 @@
                             <span class="badge <?= $sig['level'] === AdminAttention::ALERT ? 'badge-red' : 'badge-yellow' ?>"><?= te('Config') ?></span>
                             <?php // Chemin traduit depuis le menu (« Personnes › Comptes »), le même mot pour mot en français. ?>
                             <span><strong><?= htmlspecialchars(AdminMenu::pathText((string)$sig['entry'], (string)$sigPath)) ?></strong> — <?= htmlspecialchars($sig['text']) ?>
-                                <a href="<?= htmlspecialchars($sigHref) ?>" style="color:var(--accent)"><?= te('Régler →') ?></a></span>
+                                <a href="<?= htmlspecialchars(AdminAttention::linkFor($sig)) ?>" style="color:var(--accent)"><?= te('Régler →') ?></a></span>
                         </div>
                     <?php endforeach; ?>
                     <?php foreach ($quotaAlerts as $alert): ?>

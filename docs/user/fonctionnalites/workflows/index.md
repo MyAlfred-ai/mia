@@ -14,6 +14,8 @@ assistants ; elle **remet une pièce au dossier** (une synthèse, un tableau, un
 Word…) que les étapes suivantes reprennent. Vous **validez** là où il le faut, et vous obtenez un
 **livrable** à la fin.
 
+![L'éditeur du workflow « Trier les demandes reçues par email », publié en version 1, avec Versions, Lancements, Réglages, Lancer et Publier en haut. Le rail descend du Départ (un email arrive) à « Comprendre la demande », qui remet la Fiche de la demande, puis à « Aiguiller la demande », où MIA choisit parmi quatre voies : Demande de devis, Réclamation, Prise de rendez-vous et Rien à traiter, chacune avec ses briques — étapes de MIA, actions dans Gmail ou Google Tasks à approuver, notification — et un bouton Ajouter.](../../images/workflow-editeur.png)
+
 ## Avant de commencer
 
 - Les workflows sont en **bêta** (pastille « Bêta » sur la tuile) : ils fonctionnent, mais
@@ -29,7 +31,9 @@ Word…) que les étapes suivantes reprennent. Vous **validez** là où il le fa
 ## Comment ça marche
 
 - **Le rail se lit de haut en bas.** Le départ, puis les briques dans l'ordre du travail, puis le
-  livrable — une ligne par brique : qui la fait (l'avatar de l'assistant, ou MIA), son titre, les
+  livrable — une ligne par brique : qui la fait (l'avatar de l'assistant, ou le logo de MIA quand
+  elle travaille avec le modèle de votre organisation — le logo de l'éditeur du modèle si l'étape en
+  impose un autre), son titre, les
   pièces qu'elle lit (des points de leur couleur) et celle qu'elle remet (une étiquette). Entre deux
   briques, de petits **paquets** de la couleur des pièces descendent le lien : vous voyez ce qui
   passe d'une étape à l'autre. Survolez une pièce : les briques qui la touchent restent, les autres
@@ -40,41 +44,57 @@ Word…) que les étapes suivantes reprennent. Vous **validez** là où il le fa
 - **Le détail s'ouvre dans un volet.** Touchez une brique : ses réglages (dans l'éditeur) ou ce
   qu'elle a fait (pendant une exécution) s'ouvrent sur le côté, et l'écran reste lisible. Le volet ne
   montre que ce que vous avez **choisi**, une ligne par réglage ; touchez-la pour changer.
-- **Dix briques.** Une **étape** fait travailler MIA ou un assistant et remet une pièce ; une
-  **création** fait produire une image, une page web ou une carte par un outil de création du chat ;
+- **Onze briques.** Une **étape** fait travailler MIA ou un assistant et remet une pièce — un
+  texte, une Fiche, un document, ou un **fichier de tout format** (script Python, Markdown, JSON…,
+  l'entrée **Un fichier** du groupe Créer) ; une **création** fait produire une image, une page web ou une carte par un outil de création du chat ;
   une **action** agit dans un outil relié (email, agenda, tâches, Slack, Drive, automatisation n8n,
   présentation Gamma) ; une **décision de MIA** choisit une suite parmi deux à six scénarios ; une
   **condition** ouvre deux voies, « si oui » et « si non » ; une **validation** attend votre
   décision ; une **boucle** répète des briques pour chaque élément — chaque ligne d'un Excel,
   chaque pièce jointe d'un email, chaque slide, page ou section, chaque fichier d'un dossier Drive,
   chaque email d'une recherche, chaque sujet repéré par MIA — ou jusqu'à un bon résultat ; **Attendre** fait patienter le workflow ; **Me prévenir** vous envoie un message en
-  route ; **Arrêter le workflow**, au bout d'une voie, le termine proprement là où il en est.
+  route ; **Arrêter le workflow**, au bout d'une voie, le termine proprement là où il en est ;
+  **Appeler un workflow** lance un autre de vos workflows avec ses paramètres et récupère son résultat.
 - **« @ » cite le dossier partout** : une consigne, des critères, un filtre, l'objet d'un email, un
   dossier Drive. Seul ce qui a un sens dans le champ est proposé (un destinataire n'accepte qu'un
   champ email).
 - **Plusieurs façons de démarrer.** À la main, depuis le chat, à heure fixe — ou tout seul, à
   l'arrivée d'un email, d'un fichier dans Drive, à l'appel de son adresse par un autre logiciel, ou à
   la fin d'un autre workflow.
+- **Un workflow peut en appeler un autre.** Un travail réglé une fois (analyser un client, chiffrer
+  un devis) se réutilise : la brique **Appeler un workflow** lui donne ses paramètres, attend qu'il
+  ait fini et reprend avec son résultat. MIA signale un paramètre manquant ou de mauvaise nature
+  avant la publication.
 - **Un livrable qui part tout seul, si vous voulez.** Par email avec ses pièces jointes, dans Google
-  Drive, dans Slack ou dans une base de connaissances.
+  Drive, dans Slack, dans une base de connaissances ou dans une table (ajouter ou mettre à jour ses
+  lignes).
+- **Les tables de vos bases, en entier.** Une étape lit une table de plusieurs milliers de lignes
+  pour compter, filtrer ou croiser, et remet le résultat comme pièce Tableau sans le recopier ; une
+  boucle la parcourt ligne par ligne.
 - **Des filtres pour vos emails et vos fichiers.** Une étape ou une action qui touche à Gmail, à
   Outlook ou à Google Drive ne voit que ce que vous avez filtré (expéditeur, objet, période,
   dossier, nature de fichier), et ses emails ne partent que vers les destinataires permis.
 - **Une panne n'oblige pas à tout refaire.** Une étape peut réessayer seule quand un service est
   saturé ; une brique facultative peut être passée ; une exécution arrêtée se reprend là où elle en
   était.
-- **Cinq formes de pièce pour une étape.** Texte, Liste, Tableau (exportable en Excel), Fiche (des
+- **Les formes de pièce d'une étape.** Texte, Liste, Tableau (exportable en Excel), Fiche (des
   champs nommés : montant, date, email… qu'une condition peut lire) et Document (Word, PDF,
-  PowerPoint, Excel, au modèle de votre entreprise). Une création remet une **image**, une **page
-  web** ou une **carte**.
+  PowerPoint, Excel, au modèle de votre entreprise) — ou une **image**, une **page web**, une
+  **carte**, que fabrique un outil de création d'après ce que l'étape prépare, si vos groupes vous en
+  ouvrent un. Une création remet, elle aussi, une image, une page web ou une carte.
 - **Un brouillon, puis une version publiée.** L'éditeur enregistre au fil de l'eau ; seule la version
   **publiée** s'exécute. Vous pouvez donc retoucher un workflow sans crainte : les exécutions en
-  cours gardent la version avec laquelle elles sont parties.
+  cours gardent la version avec laquelle elles sont parties, et chaque version publiée se revoit
+  (bouton **Versions**) — le brouillon peut repartir de l'une d'elles.
+- **Tout est vérifié avant de partir.** Au lancement, MIA vérifie que le workflow pourra aller au
+  bout (un compte relié, un outil en service) : sinon, rien ne démarre et la fenêtre dit quoi régler.
 - **Rien ne part sans vous, sauf si vous l'avez décidé.** Une étape lit et rédige ; elle n'agit dans
   vos outils que si vous l'avez réglée ainsi, et ses actions attendent alors votre accord — à moins
   que vous ne l'ayez réglée sur **Agir sans validation**.
-- **Chaque exécution a sa conversation.** Tout ce que font les étapes y est écrit, et vous la
-  retrouvez dans votre historique comme une autre conversation.
+- **Chaque exécution se suit dans sa conversation.** Lancer un workflow vous y amène : tout ce que
+  font les étapes y est écrit, un volet **Avancement** montre où il en est, et les décisions
+  (validation, voie à choisir, reprise) s'y prennent. Vous la retrouvez dans votre historique comme
+  une autre conversation.
 
 ## Exemples
 
@@ -96,14 +116,19 @@ Word…) que les étapes suivantes reprennent. Vous **validez** là où il le fa
 | Être guidé de l'idée au workflow qui tourne seul, avec un exemple complet | [Mettre en place un workflow, pas à pas](mettre-en-place-un-workflow.md) |
 | Créer un workflow : le décrire à MIA, partir d'un modèle, ou le composer brique par brique | [Créer un workflow](creer-un-workflow.md) |
 | Ajouter une condition, une validation ou une action dans un outil | [Conditions, validations et actions](conditions-validations-actions.md) |
+| Publier dans Slack (un canal, une personne, des fichiers joints) ou lire un canal pour en tirer une pièce | [Lire ou publier dans Slack](lire-ou-publier-dans-slack.md) |
 | Laisser MIA choisir la suite parmi plusieurs scénarios | [Laisser MIA choisir la voie](laisser-mia-choisir-la-voie.md) |
-| Faire créer une image, une page web ou une carte par un outil, à partir du dossier | [Créer une image, une page web ou une carte](creer-une-image-une-page-ou-une-carte.md) |
+| Faire créer une image, une page web ou une carte par un outil, à partir du dossier ou d'une étape | [Créer une image, une page web ou une carte](creer-une-image-une-page-ou-une-carte.md) |
+| Faire écrire un fichier de tout format : script Python, Markdown, JSON, CSV, HTML… | [Créer un fichier de tout format](creer-un-fichier.md) |
 | Limiter les emails et les fichiers qu'une étape voit, et à qui elle écrit | [Filtrer les emails et les fichiers](filtrer-emails-et-fichiers.md) |
 | Lancer un workflow, depuis sa page ou depuis le chat, et suivre son exécution | [Lancer et suivre un workflow](lancer-et-suivre.md) |
 | Relire une pièce, la corriger, renvoyer une étape | [Valider et corriger](valider-et-corriger.md) |
 | Faire le même travail pour chaque ligne d'un Excel, chaque pièce jointe, chaque fichier, chaque sujet — avec filtre, relecture et reprise des échecs | [Répéter pour chaque élément](repeter-pour-chaque-element.md) |
 | Refaire une étape jusqu'à un bon résultat, faire patienter un workflow, être prévenu en route | [Boucles, attentes et notifications](boucles-et-attentes.md) |
+| Réutiliser un workflow dans un autre : l'appeler avec ses paramètres et récupérer son résultat | [Appeler un autre workflow](appeler-un-workflow.md) |
 | Lancer un workflow à l'arrivée d'un email, d'un fichier, d'un appel ou à la fin d'un autre | [Démarrer sur un évènement](demarrer-sur-un-evenement.md) |
-| Envoyer le livrable par email, dans Drive, dans Slack ou dans une base | [Envoyer le livrable](envoyer-le-livrable.md) |
+| Envoyer le livrable par email, dans Drive, dans Slack, dans une base ou dans une table | [Envoyer le livrable](envoyer-le-livrable.md) |
+| Lire une table de vos bases en entier, la parcourir ligne par ligne, y écrire le résultat | [Utiliser des tables dans un workflow](utiliser-des-tables.md) |
 | Réessayer seul, ignorer une brique, reprendre ou refaire une exécution | [Reprendre après une erreur](reprendre-apres-une-erreur.md) |
 | Retrouver chaque lancement, relire ce que chaque brique a fait, remis ou raté, et le relancer | [Revoir l'historique des exécutions](revoir-l-historique.md) |
+| Retirer définitivement un workflow dont vous n'avez plus besoin | [Supprimer un workflow](supprimer-un-workflow.md) |

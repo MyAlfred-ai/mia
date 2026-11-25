@@ -81,9 +81,9 @@ final class UsageLedgerTest extends DatabaseTestCase
     public function testRepliSurLeTarifCureDuCatalogue(): void
     {
         try {
-            // gpt-5.6 : 5 $ / 30 $ au catalogue (hors promotion) ; la ligne
-            // configurée à 0 € est ignorée.
-            LlmCatalog::setToday('2026-11-22');
+            // gpt-5.6 : 5 $ / 30 $ au catalogue (hors promotion, close le
+            // 30/11/2026) ; la ligne configurée à 0 € est ignorée.
+            LlmCatalog::setToday('2026-12-01');
             $r = CreditService::computeLlmCredits('openai::gpt-5.6', 1_000_000, 0);
             $this->assertTrue($r['priced']);
             $this->assertEqualsWithDelta(5.0 / self::FX, $r['cost_eur'], 0.0001);
@@ -93,8 +93,8 @@ final class UsageLedgerTest extends DatabaseTestCase
             $cached = CreditService::computeLlmCredits('openai::gpt-5.6', 1_000_000, 0, 1_000_000);
             $this->assertEqualsWithDelta(0.5 / self::FX, $cached['cost_eur'], 0.0001);
 
-            // Promotion d'OpenAI (4 $, cache 0,40 $) jusqu'au 21/11/2026 inclus.
-            LlmCatalog::setToday('2026-11-21');
+            // Promotion d'OpenAI (4 $, cache 0,40 $) jusqu'au 30/11/2026 inclus.
+            LlmCatalog::setToday('2026-11-30');
             $promo = CreditService::computeLlmCredits('openai::gpt-5.6', 1_000_000, 0);
             $this->assertEqualsWithDelta(4.0 / self::FX, $promo['cost_eur'], 0.0001);
             $promoLu = CreditService::computeLlmCredits('openai::gpt-5.6', 1_000_000, 0, 1_000_000);
@@ -201,10 +201,21 @@ final class UsageLedgerTest extends DatabaseTestCase
         $this->assertTrue($t['priced']);
         $this->assertEqualsWithDelta(2.5 * 0.006 / self::FX, $t['cost_eur'], 0.0001);
 
+        // Dictée Voxtral : tarif du fournisseur MISTRAL, pas d'OpenAI.
+        $v = CreditService::computeTranscriptionCredits('voxtral-mini-transcribe-3', 2.0, 'mistral');
+        $this->assertTrue($v['priced']);
+        $this->assertEqualsWithDelta(2.0 * 0.0035 / self::FX, $v['cost_eur'], 0.0001);
+        $this->assertNotNull(CreditService::catalogUnitCost('transcribe:mistral::voxtral-mini-latest'));
+
         // Fournisseur sans tarif de recherche : non tarifé, minimum facturé.
-        $u = CreditService::computeWebSearchCredits('deepseek::deepseek-flash', 1);
+        $u = CreditService::computeWebSearchCredits('zai::glm-5.2', 1);
         $this->assertFalse($u['priced']);
         $this->assertSame(1, $u['total_credits']);
+
+        // Recherche intégrée de DeepSeek (13/11/2026) : 0,75 $ les 1 000.
+        $d = CreditService::computeWebSearchCredits('deepseek::deepseek-flash', 4);
+        $this->assertTrue($d['priced']);
+        $this->assertEqualsWithDelta(4 * 0.75 / 1000 / self::FX, $d['cost_eur'], 0.0001);
     }
 
     public function testOutilConfigureEtOutilSansTarif(): void
@@ -407,6 +418,18 @@ final class UsageLedgerTest extends DatabaseTestCase
 
         // Un outil sans identifiant n'est jamais journalisé (et ne casse rien).
         $this->assertFalse(UsageMeter::toolUse(['type' => 'html'], [], $ctx));
+    }
+
+    public function testUneDicteeVoxtralEstEcriteAuNomDeMistral(): void
+    {
+        $ctx = $this->seedUserAndConversation();
+        $r = UsageMeter::transcription('voxtral-mini-transcribe-3', 30.0, $ctx, 'mistral');
+        $this->assertTrue($r['logged']);
+        $this->assertTrue($r['priced']);
+        $row = Database::getInstance()->query('SELECT llm_provider, source, quantity FROM usage_logs ORDER BY id DESC LIMIT 1')->fetch();
+        $this->assertSame('mistral::voxtral-mini-transcribe-3', $row['llm_provider']);
+        $this->assertSame(UsageSource::TRANSCRIBE, $row['source']);
+        $this->assertEqualsWithDelta(0.5, (float)$row['quantity'], 0.0001);
     }
 
     public function testAgregatsParCategorieCoutReelEtNonTarife(): void

@@ -84,19 +84,30 @@ final class MyBrainKbContractTest extends TestCase
     public function testLesCheminsDeDocumentsRefusentUneBaseEnDirect(): void
     {
         $admin = self::lire('src/Controllers/AdminController.php');
+        // Même garde pour toute base sans documents (cerveau en direct, table) :
+        // le refus dit laquelle des deux natures est en cause.
         foreach (['reindexKnowledgeBase', 'reindexKnowledgeBaseAjax', 'uploadKnowledgeBaseDocument'] as $m) {
-            $this->assertStringContainsString('self::REMOTE_KB_NO_DOCUMENTS', self::methode($admin, $m), $m);
+            $this->assertStringContainsString('!KnowledgeBase::holdsDocuments($kb)', self::methode($admin, $m), $m);
+            $this->assertStringContainsString('self::noDocumentsMessage($kb)', self::methode($admin, $m), $m);
         }
+        $this->assertStringContainsString(
+            'KnowledgeBase::isTable($kb) ? self::TABLE_KB_NO_DOCUMENTS : self::REMOTE_KB_NO_DOCUMENTS',
+            self::methode($admin, 'noDocumentsMessage')
+        );
+        $this->assertFalse(KnowledgeBase::holdsDocuments(['backend' => KnowledgeBase::BACKEND_MYBRAIN]));
         // Pas de collection Qdrant à supprimer, ni de synchronisation à écrire.
-        $this->assertStringContainsString('!KnowledgeBase::isRemote($kbRow)', self::methode($admin, 'deleteKnowledgeBase'));
+        // (La suppression passe par KnowledgeBase::destroy, partagée avec
+        // celle d'un compte : ses bases « Uniquement pour moi » partent avec lui.)
+        $this->assertStringContainsString('KnowledgeBase::destroy($kbId)', self::methode($admin, 'deleteKnowledgeBase'));
+        $this->assertStringContainsString('self::holdsDocuments($kb)', self::methode(self::lire('src/Models/KnowledgeBase.php'), 'destroy'));
         $update = self::methode($admin, 'updateKnowledgeBase');
         $this->assertLessThan(
             strpos($update, 'applyKbSyncConfigFromPost'),
-            strpos($update, 'KnowledgeBase::isRemote($kbRow)'),
-            'Une base en direct doit sortir AVANT la configuration de synchronisation.'
+            strpos($update, '!KnowledgeBase::holdsDocuments($kbRow)'),
+            'Une base sans documents (en direct, table) doit sortir AVANT la configuration de synchronisation.'
         );
 
-        $this->assertStringContainsString('if (!$kb || self::isRemote($kb))', self::methode(self::lire('src/Models/KnowledgeBase.php'), 'reindex'));
+        $this->assertStringContainsString('if (!$kb || !self::holdsDocuments($kb))', self::methode(self::lire('src/Models/KnowledgeBase.php'), 'reindex'));
         $this->assertStringContainsString("WHERE backend = 'local'", self::lire('src/Backup/BackupService.php'));
     }
 
@@ -308,7 +319,7 @@ final class MyBrainKbContractTest extends TestCase
 
         $admin = self::lire('src/Controllers/AdminController.php');
         $this->assertStringContainsString("\$_POST['share_group_feed'] ?? []", $admin);
-        $this->assertStringContainsString('KnowledgeBase::feedersFor((int)$kb[\'id\'])', $admin);
+        $this->assertStringContainsString('KnowledgeBase::feedersFor($kbId)', $admin);
         $this->assertStringContainsString('.kb-share-feed[hidden]', self::lire('public/assets/css/main.css'));
     }
 

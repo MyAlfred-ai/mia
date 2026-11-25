@@ -23,7 +23,12 @@ require __DIR__ . '/_cli_bootstrap.php';
 
 set_time_limit(0);
 
-const IDLE_SLEEP_US  = 700_000;  // 0,7 s entre deux boucles à vide
+// Entre deux boucles à vide : c'est le délai avant que le message d'un
+// utilisateur soit pris en charge. La boucle ne coûte qu'une lecture sans
+// verrou (JobQueue::hasPending), le léger décalage aléatoire répartit les
+// workers d'un même pool dans le temps.
+const IDLE_SLEEP_US  = 120_000;
+const IDLE_JITTER_US = 40_000;
 const HEARTBEAT_SEC  = 15;       // fréquence de la balise « worker vivant »
 const MAINTENANCE_SEC = 60;      // fréquence du reaper + purge des events
 const MAX_JOBS       = 200;
@@ -146,6 +151,11 @@ while (!$stopping) {
                 WorkflowEngine::maintain();
                 // Présentations et classeurs réalisés par le modèle : gardés 30 jours.
                 NativeDeckStore::purgeExpired();
+                // Mémoire : sujets oubliés, propositions et empreintes anciennes (une fois par jour).
+                MemoryLearner::maintain();
+                // Dates d'arrêt des modèles chez l'éditeur (une fois par jour) :
+                // enfile le relevé, aucun appel réseau ici.
+                LlmShutdownWatch::tick();
             });
         } catch (\Throwable $e) {
             error_log('[worker] entretien impossible : ' . $e->getMessage());
@@ -170,6 +180,12 @@ while (!$stopping) {
                 if ($workflows > 0) {
                     fwrite(STDOUT, '[worker] ' . $workflows . " workflow(s) programmé(s) lancé(s)\n");
                 }
+                // Mémoire : conversations échues confiées à l'apprentissage
+                // (couloir `memory`, une personne = un job).
+                $learning = MemoryLearner::tick();
+                if ($learning > 0) {
+                    fwrite(STDOUT, '[worker] ' . $learning . " apprentissage(s) de mémoire enfilé(s)\n");
+                }
             });
         } catch (\Throwable $e) {
             error_log('[worker] tâches programmées : ' . $e->getMessage());
@@ -190,14 +206,14 @@ while (!$stopping) {
     }
 
     try {
-        $job = JobQueue::claimNext();
+        $job = JobQueue::hasPending() ? JobQueue::claimNext() : null;
     } catch (\Throwable $e) {
         error_log('[worker] réclamation impossible : ' . $e->getMessage());
         $job = null;
     }
 
     if ($job === null) {
-        usleep(IDLE_SLEEP_US);
+        usleep(IDLE_SLEEP_US + random_int(0, IDLE_JITTER_US));
         continue;
     }
 

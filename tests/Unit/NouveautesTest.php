@@ -309,6 +309,33 @@ MD;
         $this->assertStringContainsString('IS_STAFF', $js);
     }
 
+    public function testLHistoriqueEstPublieAPartDesPlusRecentes(): void
+    {
+        $entrees = [];
+        for ($i = 1; $i <= 25; $i++) {
+            $entrees[] = ['id' => "e$i", 'titre' => "T$i", 'corps' => 'C', 'genre' => 'nouveaute', 'pour' => 'tous'];
+        }
+        $recentes  = Nouveautes::publiables($entrees);
+        $anciennes = Nouveautes::archivees($entrees);
+        $this->assertCount(Nouveautes::MAX_PUBLIEES, $recentes);
+        $this->assertCount(25 - Nouveautes::MAX_PUBLIEES, $anciennes);
+        // Aucune entrée en double ni oubliée, et la même forme des deux côtés.
+        $this->assertSame('e21', $anciennes[0]['id']);
+        $this->assertSame(array_keys($recentes[0]), array_keys($anciennes[0]));
+
+        // Le générateur publie l'historique, la modale le lit et le cherche.
+        $this->assertStringContainsString("'anciennes'", file_get_contents(ROOT . '/scripts/build_changelog.php'));
+        $js = file_get_contents(ROOT . '/public/assets/js/whats-new.js');
+        $this->assertStringContainsString('data.anciennes', $js);
+        $this->assertStringContainsString('data-wn-more', $js);
+    }
+
+    public function testLIdentifiantLePlusRecentSeLitSansDecoderLHistorique(): void
+    {
+        $charge = Nouveautes::chargePubliee(ROOT);
+        $this->assertSame((string) ($charge['nouveautes'][0]['id'] ?? ''), Nouveautes::dernierId(ROOT));
+    }
+
     #[\PHPUnit\Framework\Attributes\Group('doc-interne')]
     public function testLaRegleDeMiseAJourEstDocumentee(): void
     {

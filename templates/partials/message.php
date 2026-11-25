@@ -5,12 +5,25 @@
 $msgAgent = $msg['role'] === 'assistant' ? Message::agentOf($msg) : [];
 $msgPlan  = isset($msgAgent['plan']) && is_array($msgAgent['plan']) ? PlanTools::normalize($msgAgent['plan']) : null;
 $msgSuite = in_array($msgAgent['suite'] ?? null, ['plan', 'budget'], true) ? $msgAgent['suite'] : '';
+// Offre « Version rapide / soignée » (PolishOffer) : genre du fichier offert —
+// chat.js pose sous ses boutons les cases « Modèle » et « Logo ».
+// NOTE SYNCHRONISATION : appendMessage() (chat.js) pose le même attribut.
+$msgOffer = in_array($msgAgent['offer'] ?? null, PolishOffer::OFFERED_KINDS, true) ? $msgAgent['offer'] : '';
 // Suggestion de suite déjà calculée (FollowUpSuggestion, '' = aucune suite) :
 // chat.js la pose dans la zone de saisie sans nouvel appel. NOTE
 // SYNCHRONISATION : appendMessage() (chat.js) pose le même attribut.
 $msgSuggestion = $msg['role'] === 'assistant' ? FollowUpSuggestion::storedOf($msg) : null;
+// Carte de réalisation d'une « Version soignée » (NativeDeckRun), calculée par
+// le contrôleur pour toute la conversation (relue contre la file des jobs).
+// NOTE SYNCHRONISATION : appendMessage() (chat.js) pose le même HTML (run_html).
+$msgRun = isset($nativeRuns) && is_array($nativeRuns) ? ($nativeRuns[(int)$msg['id']] ?? null) : null;
+// Tables de travail établies ou consultées par cette réponse (WorkTableView),
+// calculées par le contrôleur : une ligne discrète avec un bouton « Voir »,
+// jamais la grille. NOTE SYNCHRONISATION : appendMessage() (chat.js) pose le
+// même HTML (tables_html), rendu par le même gabarit.
+$msgTables = isset($tableLines) && is_array($tableLines) ? ($tableLines[(int)$msg['id']] ?? []) : [];
 ?>
-<div class="message message-<?= $msg['role'] ?>" data-message-id="<?= (int)$msg['id'] ?>"<?= $msgSuite !== '' ? ' data-suite="' . $msgSuite . '"' : '' ?><?= $msgSuggestion !== null ? ' data-suggestion="' . htmlspecialchars($msgSuggestion) . '"' : '' ?>>
+<div class="message message-<?= $msg['role'] ?>" data-message-id="<?= (int)$msg['id'] ?>"<?= $msgSuite !== '' ? ' data-suite="' . $msgSuite . '"' : '' ?><?= $msgOffer !== '' ? ' data-polish-offer="' . $msgOffer . '"' : '' ?><?= $msgSuggestion !== null ? ' data-suggestion="' . htmlspecialchars($msgSuggestion) . '"' : '' ?>>
     <?php if ($msg['role'] === 'assistant'): ?>
         <div class="msg-avatar assistant-avatar">
             <?php $avatarSrc = !empty($profileAvatar) ? '/assets/img/profils/' . htmlspecialchars(basename($profileAvatar)) : htmlspecialchars(Settings::get('logo_url', '/assets/img/logo.png')); ?>
@@ -102,7 +115,8 @@ $msgSuggestion = $msg['role'] === 'assistant' ? FollowUpSuggestion::storedOf($ms
         }
 
         // Détecter si le message contient une page HTML, vidéo ou carte générée
-        $hasRichAttachment = false;
+        // (ou porte une carte de réalisation, qui a ses propres actions).
+        $hasRichAttachment = $msgRun !== null;
         foreach ($msgFiles as $mf) {
             $t = $mf['type'] ?? '';
             if ($t === 'html_page' || $t === 'video_file' || $t === 'map_route' || $t === 'slide_deck') { $hasRichAttachment = true; break; }
@@ -255,6 +269,8 @@ $msgSuggestion = $msg['role'] === 'assistant' ? FollowUpSuggestion::storedOf($ms
             <?php endif;
         endforeach; ?>
 
+        <?php if ($msgRun !== null): $nativeRun = $msgRun; include ROOT . '/templates/partials/native-run-card.php'; endif; ?>
+
         <?php if (!$hasRichAttachment): ?>
         <div class="msg-content"
              data-role="<?= $msg['role'] ?>"
@@ -263,6 +279,8 @@ $msgSuggestion = $msg['role'] === 'assistant' ? FollowUpSuggestion::storedOf($ms
                 ? '<span class="md-render"></span>'
                 : htmlspecialchars($msg['content']) ?></div>
         <?php endif; ?>
+
+        <?php if ($msgTables !== []): $tableLine = WorkTableView::line($msgTables); include ROOT . '/templates/partials/work-table-line.php'; endif; ?>
 
         <?php if ($msg['role'] === 'user' && trim((string)($msg['content'] ?? '')) !== ''): ?>
         <!-- Bouton Copier du message utilisateur — révélé au clic sur le texte (chat.js) -->

@@ -16,9 +16,9 @@ distribution se fait en deux gestes, et le premier seul ne suffit pas.
 ## Étapes
 
 1. **Espaces → Assistants** : la tuile **Assistants** de la barre latérale.
-2. Sur la ligne de l'assistant, activez l'interrupteur **Partage organisation**. Le message confirme
-   qu'il est désormais partagé et rappelle l'étape suivante. L'assistant passe dans la section
-   **Partagés — organisation**.
+2. Au bout de la ligne de l'assistant, ouvrez le menu **⋯** et choisissez **Partager à
+   l'organisation**. Le message confirme qu'il est désormais partagé et rappelle l'étape suivante.
+   L'assistant passe dans la colonne **Organisation**, avec l'icône de groupe de **Partagé**.
 3. **Administration → Personnes → Groupes.** Ouvrez la carte du groupe concerné, section **Droits
    d'accès**, colonne **Assistants**, et cochez l'assistant. L'enregistrement est automatique.
 4. Recommencez l'étape 3 pour chaque groupe. Cocher dans le groupe **★ Par défaut** donne l'accès à
@@ -42,12 +42,13 @@ partagés, qu'ils soient autorisés ou non.
   administrateurs, de personne d'autre.
 - **Retirer l'accès à un groupe** : décochez-le dans sa colonne **Assistants**. Les conversations
   déjà ouvertes avec l'assistant redeviennent des conversations standard pour ses membres.
-- **Rendre l'assistant personnel à nouveau** : désactivez **Partage organisation**. **Toutes** ses
-  autorisations de groupe sont supprimées ; un nouveau partage demandera de les cocher à nouveau.
+- **Rendre l'assistant personnel à nouveau** : menu **⋯** → **Rendre personnel**, puis confirmez.
+  **Toutes** ses autorisations de groupe sont supprimées ; un nouveau partage demandera de les cocher
+  à nouveau.
 - **Le créateur garde la main** : une fois l'assistant partagé, il peut toujours le modifier, le
   désactiver ou le supprimer. Ses changements s'appliquent à tous.
-- **Un assistant sans créateur** — son auteur a été supprimé — affiche « créé par Système ». Il ne
-  peut pas redevenir personnel : l'interrupteur de partage n'est plus proposé une fois partagé.
+- **Un assistant sans créateur** — son auteur a été supprimé — ne peut pas redevenir personnel une
+  fois partagé : **Rendre personnel** n'est plus proposé dans son menu.
 
 ## En cas de problème
 

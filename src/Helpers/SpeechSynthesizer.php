@@ -9,9 +9,20 @@ declare(strict_types=1);
  * transcription Realtime, la même que la dictée), le texte part comme un
  * message ordinaire (assistant, bases, connecteurs, quota : tout le
  * pipeline du chat, rien de parallèle), puis la réponse lui est LUE à voix
- * haute — c'est cette dernière étape qui vit ici. L'audio est produit par
- * `POST /v1/audio/speech` d'OpenAI, côté serveur (la clé ne quitte jamais le
- * serveur), et renvoyé au navigateur en MP3.
+ * haute — c'est cette dernière étape qui vit ici. L'audio est produit côté
+ * serveur (la clé ne quitte jamais le serveur) par la VOIX DE LECTURE que
+ * l'administrateur a choisie (carte « Conversation vocale ») :
+ *
+ *  - `openai`     : API Realtime, `gpt-realtime-2.1-mini` (RealtimeSpeech),
+ *                   rendu en WAV ;
+ *  - `mistral`    : Voxtral TTS 3 (`voxtral-mini-tts-3-0`), en MP3 ;
+ *  - `openai_tts` : `gpt-4o-mini-tts` sur `POST /v1/audio/speech`, la voix
+ *                   d'origine, qu'OpenAI ARRÊTE le 6 janvier 2027 (bloc
+ *                   `retirement` d'ENGINES) — défaut d'une instance qui n'a
+ *                   rien choisi, jusqu'à cette date ; ensuite, sans écriture
+ *                   en base, la lecture passe d'elle-même sur `openai`.
+ *
+ * Quel que soit le moteur, la conversation ÉCOUTE par OpenAI (Realtime).
  *
  * Quatre formes pures, testables sans réseau ni base :
  *   - `speakableText()`   : Markdown → texte qui se lit (plus de balises, de
@@ -20,26 +31,95 @@ declare(strict_types=1);
  *                            la PREMIÈRE courte pour que la voix démarre vite ;
  *   - `liveSegment()`     : le passage suivant d'une réponse qui S'ÉCRIT
  *                            ENCORE — la voix démarre dès la première phrase ;
- *   - `mp3DurationSeconds()` : durée réelle de l'audio reçu, lue dans les
- *                            en-têtes de trames — c'est la grandeur facturée
- *                            (OpenAI publie un tarif « à la minute »).
+ *   - `audioDurationSeconds()` : durée réelle de l'audio reçu (trames MP3,
+ *                            en-tête WAV) — la minute facturée est MESURÉE
+ *                            (Voxtral, lui, est facturé au caractère lu).
  *
  * Le réglage d'administration (`voice_chat_enabled`, carte « Conversation
  * vocale » de la page Outils, défaut ACTIF comme la dictée) gouverne le
  * bouton du chat ET les routes qu'il appelle : le serveur reste juge.
+ *
+ * `issueFrom()` dit si la conversation peut marcher avec l'IA vocale en
+ * vigueur : elle écoute par OpenAI, quel que soit le moteur de la dictée
+ * (Dictation). Sa réponse pose la pastille rouge du bouton.
  */
 final class SpeechSynthesizer
 {
     /** Clé Settings de l'interrupteur (carte intégrée de /admin/tools). */
     public const SETTING_ENABLED = 'voice_chat_enabled';
 
-    /** Modèle de synthèse : tarif « estimé à la minute » publié par OpenAI. */
+    /** Clé Settings de la voix de lecture choisie ('' = jamais choisie). */
+    public const SETTING_ENGINE = 'voice_speech_engine';
+
+    public const ENGINE_OPENAI = 'openai';
+    public const ENGINE_MISTRAL = 'mistral';
+    public const ENGINE_LEGACY = 'openai_tts';
+
+    /**
+     * Voix de lecture — SOURCE UNIQUE (fournisseur, modèle, format rendu au
+     * navigateur, libellé de produit, arrêt annoncé). L'ordre est celui de la
+     * liste de la carte d'administration.
+     *
+     * `retirement` : même forme que le bloc du catalogue LLM
+     * (LlmCatalog::retirementFrom) — page Deprecations d'OpenAI, entrée du
+     * 2026-10-01, relue en verbatim le 2026-11-10 : `tts-1`, `tts-1-hd` et
+     * `gpt-4o-mini-tts` coupés le 6 janvier 2027, remplaçant désigné
+     * `gpt-realtime-2.1-mini` (= le moteur `openai`).
+     */
+    public const ENGINES = [
+        self::ENGINE_OPENAI => [
+            'provider' => 'openai',
+            'model'    => RealtimeSpeech::MODEL,
+            'format'   => 'wav',
+            'label'    => 'OpenAI Realtime (gpt-realtime-2.1-mini)',
+        ],
+        self::ENGINE_MISTRAL => [
+            'provider' => 'mistral',
+            'model'    => self::MISTRAL_MODEL,
+            'format'   => 'mp3',
+            'label'    => 'Mistral Voxtral TTS 3',
+        ],
+        self::ENGINE_LEGACY => [
+            'provider'   => 'openai',
+            'model'      => self::MODEL,
+            'format'     => 'mp3',
+            'label'      => 'OpenAI gpt-4o-mini-tts',
+            'retirement' => [
+                'date'        => '2027-01-06',
+                'replacement' => self::ENGINE_OPENAI,
+                'source_url'  => 'https://developers.openai.com/api/docs/deprecations',
+            ],
+        ],
+    ];
+
+    /** Type MIME de chaque format rendu. */
+    public const MIME = ['mp3' => 'audio/mpeg', 'wav' => 'audio/wav'];
+
+    /** Modèle de la voix d'origine (`openai_tts`) : tarif « estimé à la minute » publié par OpenAI. */
     public const MODEL = 'gpt-4o-mini-tts';
 
     /** Voix parmi celles de l'API (alloy, ash, ballad, coral, echo, fable, nova, onyx, sage, shimmer, verse). */
     public const VOICE = 'nova';
 
     public const ENDPOINT = 'https://api.openai.com/v1/audio/speech';
+
+    /**
+     * Voxtral TTS 3 (Mistral) : identifiant FIGÉ — aperçu public depuis le
+     * 2026-10-20 (fiche du modèle relue le 2026-11-10 : « Input $13 /M
+     * Chars », sorties mp3, wav, pcm, flac, opus, mono 24 kHz). Pas de
+     * consigne de style (« not available at launch ») : la voix est celle du
+     * préréglage, et c'est elle qui fixe la langue.
+     */
+    public const MISTRAL_MODEL = 'voxtral-mini-tts-3-0';
+
+    public const MISTRAL_ENDPOINT = 'https://api.mistral.ai/v1/audio/speech';
+
+    /**
+     * Voix préréglées Voxtral 3 par langue de l'interface (page « Voices » de
+     * la doc Mistral) : Marie (français), Sheila (anglais, États-Unis). Une
+     * voix a SA langue — le texte s'écrit dans la langue de la voix.
+     */
+    public const MISTRAL_VOICES = ['fr' => 'voice_592', 'en' => 'voice_478'];
 
     /** Plafond de l'API par requête (caractères). */
     public const MAX_INPUT_CHARS = 4096;
@@ -92,6 +172,172 @@ final class SpeechSynthesizer
     public static function isEnabled(): bool
     {
         return Settings::get(self::SETTING_ENABLED, '1') === '1';
+    }
+
+    // ===================== Voix de lecture =====================
+
+    /** Voix CHOISIE par l'administrateur, ou '' s'il n'en a jamais choisi. */
+    public static function chosenEngine(): string
+    {
+        $value = (string)Settings::get(self::SETTING_ENGINE, '');
+        return isset(self::ENGINES[$value]) ? $value : '';
+    }
+
+    /**
+     * Arrêt annoncé d'une voix (bloc `retirement` d'ENGINES), lu au jour
+     * `$today` (par défaut celui de LlmCatalog, que les tests fixent).
+     * Null quand aucun arrêt n'est annoncé.
+     *
+     * @return array{date:string, replacement:string, source_url:string, retired:bool}|null
+     */
+    public static function retirement(string $engine, ?string $today = null): ?array
+    {
+        $bloc = self::ENGINES[$engine]['retirement'] ?? null;
+        if (!is_array($bloc)) {
+            return null;
+        }
+        return LlmCatalog::retirementFrom($bloc, $today ?? LlmCatalog::today());
+    }
+
+    /**
+     * Voix EN VIGUEUR, d'après le choix, les clés présentes et le jour. Pure.
+     *
+     *  - Voxtral choisi et clé Mistral présente → Voxtral ;
+     *  - OpenAI Realtime choisi → Realtime ;
+     *  - rien de choisi, la voix d'origine choisie, ou Voxtral choisi sans
+     *    clé Mistral → la voix d'origine (`openai_tts`) tant qu'OpenAI la
+     *    sert, puis Realtime à partir du jour de son arrêt — sans écriture en
+     *    base : un choix qui n'existe plus ne casse pas la lecture ;
+     *  - sans clé OpenAI, Voxtral n'est jamais pris s'il n'a pas été choisi
+     *    (et donc essayé) : null.
+     */
+    public static function resolveEngine(string $chosen, bool $hasOpenAi, bool $hasMistral, ?string $today = null): ?string
+    {
+        if ($chosen === self::ENGINE_MISTRAL && $hasMistral) {
+            return self::ENGINE_MISTRAL;
+        }
+        if (!$hasOpenAi) {
+            return null;
+        }
+        if ($chosen === self::ENGINE_OPENAI) {
+            return self::ENGINE_OPENAI;
+        }
+        return (self::retirement(self::ENGINE_LEGACY, $today)['retired'] ?? false)
+            ? self::ENGINE_OPENAI
+            : self::ENGINE_LEGACY;
+    }
+
+    /** Voix en vigueur sur l'instance (lit le réglage et les clés). */
+    public static function engine(): ?string
+    {
+        return self::resolveEngine(
+            self::chosenEngine(),
+            !empty(ApiKey::getDecrypted('openai')),
+            !empty(ApiKey::getDecrypted('mistral'))
+        );
+    }
+
+    /** Fournisseur dont la clé fait parler une voix. */
+    public static function providerOf(string $engine): string
+    {
+        return (string)(self::ENGINES[$engine]['provider'] ?? 'openai');
+    }
+
+    /** Type MIME de l'audio d'une voix. */
+    public static function mimeOf(string $engine): string
+    {
+        return self::MIME[(string)(self::ENGINES[$engine]['format'] ?? 'mp3')] ?? 'audio/mpeg';
+    }
+
+    /** Libellé de produit d'une voix (carte d'administration) — jamais traduit. */
+    public static function engineLabel(?string $engine): string
+    {
+        return (string)(self::ENGINES[(string)$engine]['label'] ?? '');
+    }
+
+    /** Voix Voxtral de la langue de l'interface (français à défaut). Pure. */
+    public static function mistralVoiceFor(string $locale): string
+    {
+        $code = strtolower(substr(trim($locale), 0, 2));
+        return self::MISTRAL_VOICES[$code] ?? self::MISTRAL_VOICES['fr'];
+    }
+
+    /** Voxtral en vigueur sans clé OpenAI : la conversation ne peut pas démarrer. */
+    public const ISSUE_VOXTRAL_ONLY = 'voxtral_sans_openai';
+
+    /** Compte OpenAI refusé (crédit épuisé, clé refusée) : constaté, pas définitif. */
+    public const ISSUE_OPENAI_ACCOUNT = 'compte_openai';
+
+    /**
+     * La conversation vocale marchera-t-elle sur cette instance ? Lit le
+     * constat en cours sur le compte OpenAI (ProviderIncident) ; le moteur et
+     * la présence de la clé viennent de l'appelant, qui les a déjà lus.
+     *
+     * @return array{code:string, blocking:bool, title:string, message:string}|null
+     */
+    public static function conversationIssue(?string $engine, bool $hasOpenAi, bool $canFix): ?array
+    {
+        $incident = ProviderIncident::active()['openai'] ?? null;
+        return self::issueFrom($engine, $hasOpenAi, is_array($incident) ? (string)$incident['kind'] : null, $canFix);
+    }
+
+    /**
+     * Pourquoi la conversation vocale ne marchera pas — null si rien ne s'y
+     * oppose. SOURCE UNIQUE de la pastille rouge du bouton onde sonore et de
+     * la carte d'administration. Pure.
+     *
+     *  - Voxtral en vigueur et aucune clé OpenAI : `blocking`. Le micro existe,
+     *    l'onde sonore aussi, mais rien ne peut écouter ni lire : le bouton se
+     *    montre avec sa raison au lieu de disparaître sans un mot.
+     *  - Voxtral en vigueur AVEC une clé OpenAI : null. La conversation marche,
+     *    par OpenAI ; une pastille annoncerait une panne qui n'existe pas (la
+     *    carte d'administration, elle, dit où part l'audio).
+     *  - Aucune IA vocale (ni micro ni clé) : null. Aucune IA vocale n'a été
+     *    choisie, il n'y a rien à expliquer à chaque utilisateur : le bouton
+     *    reste absent, la carte d'administration et le point à régler le disent.
+     *  - Compte OpenAI refusé (`$incident` = quota | auth) : pastille, mais PAS
+     *    `blocking`. Le constat peut dater d'avant la recharge : la personne
+     *    peut essayer, et une lecture réussie l'éteint (UsageMeter).
+     *
+     * `$canFix` : la personne peut régler la cause (droit `llms.edit`) — même
+     * diagnostic, autre issue.
+     *
+     * @return array{code:string, blocking:bool, title:string, message:string}|null
+     */
+    public static function issueFrom(?string $engine, bool $hasOpenAi, ?string $incident, bool $canFix): ?array
+    {
+        if (!$hasOpenAi) {
+            if ($engine !== Dictation::ENGINE_MISTRAL) {
+                return null;
+            }
+            return [
+                'code'     => self::ISSUE_VOXTRAL_ONLY,
+                'blocking' => true,
+                'title'    => t('Conversation vocale indisponible'),
+                'message'  => $canFix
+                    ? t("La conversation vocale écoute toujours par OpenAI — Voxtral (Mistral) ne sert qu'à la dictée et à la lecture à voix haute —, et aucune clé OpenAI n'est enregistrée : elle ne peut pas démarrer. Renseignez une clé dans Modèles IA › Fournisseurs et modèles, ou masquez-la dans Capacités › Outils.")
+                    : t("La conversation vocale vous écoute toujours par OpenAI — Voxtral (Mistral) ne sert qu'à la dictée et à la lecture à voix haute —, et votre organisation n'a pas de compte OpenAI relié à MIA : elle ne peut pas démarrer. Prévenez un administrateur."),
+            ];
+        }
+
+        $message = match ($incident) {
+            'quota' => $canFix
+                ? t("La conversation vocale écoute par OpenAI, et le crédit de votre organisation y est épuisé : elle ne marchera pas tant qu'il n'est pas rechargé. Vérifiez le compte dans Modèles IA › Fournisseurs et modèles.")
+                : t("La conversation vocale vous écoute par OpenAI, et le crédit de votre organisation y est épuisé : elle ne marchera pas tant qu'il n'est pas rechargé. Prévenez un administrateur."),
+            'auth'  => $canFix
+                ? t("La conversation vocale écoute par OpenAI, et la clé enregistrée y est refusée : elle ne marchera pas tant qu'elle n'est pas remplacée. Renseignez-en une autre dans Modèles IA › Fournisseurs et modèles.")
+                : t("La conversation vocale vous écoute par OpenAI, et la clé d'accès de votre organisation y est refusée : elle ne marchera pas tant qu'elle n'est pas remplacée. Prévenez un administrateur."),
+            default => null,
+        };
+        if ($message === null) {
+            return null;
+        }
+        return [
+            'code'     => self::ISSUE_OPENAI_ACCOUNT,
+            'blocking' => false,
+            'title'    => t('Conversation vocale indisponible'),
+            'message'  => $message,
+        ];
     }
 
     // ===================== Formes pures =====================
@@ -172,6 +418,93 @@ final class SpeechSynthesizer
         $text = (string)preg_replace('/\n{2,}/u', "\n", $text);
 
         return trim($text);
+    }
+
+    /** Corps d'une carte lu à voix haute (email, description) : au-delà, « la suite est à l'écran ». */
+    public const CARD_BODY_CHARS = 900;
+
+    /**
+     * Texte LU pour une carte en attente (« lis-le », conversation vocale).
+     *
+     * Les mains occupées, on ne peut pas relire un email avant de dire
+     * « envoie » : MIA le lit — à qui il part, son objet, son texte. Pure, et
+     * bâtie sur l'APERÇU persisté de l'action (`preview_json`, ce que la carte
+     * affiche) : jamais un texte reçu du navigateur. Une carte d'approbation
+     * ordinaire se lit par son intitulé, ce qu'elle vise et son extrait.
+     *
+     * Un long message est coupé à une fin de phrase, et MIA le dit : la carte
+     * reste la référence, et l'envoi se confirme toujours à part.
+     *
+     * @param array<string,mixed> $preview aperçu d'une action en attente
+     */
+    public static function cardText(array $preview): string
+    {
+        $mail  = is_array($preview['mail'] ?? null) ? $preview['mail'] : null;
+        $parts = [];
+        $cut   = false;
+        if ($mail !== null) {
+            $to = self::spokenRecipients((string)($mail['destinataire'] ?? ''));
+            $cc = self::spokenRecipients((string)($mail['cc'] ?? ''));
+            if (!empty($mail['reponse'])) {
+                $parts[] = $to !== '' ? t('Réponse à {destinataire}.', ['destinataire' => $to]) : t('Réponse dans le fil.');
+            } elseif ($to !== '') {
+                $parts[] = t('Email pour {destinataire}.', ['destinataire' => $to]);
+            }
+            if ($cc !== '') {
+                $parts[] = t('En copie : {cc}.', ['cc' => $cc]);
+            }
+            $objet = self::speakableText((string)($mail['objet'] ?? ''));
+            if ($objet !== '') {
+                $parts[] = t('Objet : {objet}.', ['objet' => rtrim($objet, '. ')]);
+            }
+            $body = self::speakableText((string)($mail['corps'] ?? ''));
+            $cut  = !empty($mail['tronque']);
+        } else {
+            foreach (['action', 'fichier'] as $cle) {
+                $ligne = self::speakableText((string)($preview[$cle] ?? ''));
+                if ($ligne !== '') {
+                    $parts[] = rtrim($ligne, '. ') . '.';
+                }
+            }
+            $body = self::speakableText((string)($preview['apercu'] ?? ''));
+        }
+
+        if ($body !== '') {
+            $pieces = self::splitForSpeech($body, self::CARD_BODY_CHARS, self::CARD_BODY_CHARS);
+            $cut    = $cut || count($pieces) > 1;
+            $parts[] = $pieces[0];
+        }
+        if ($parts === []) {
+            return '';
+        }
+        if ($cut) {
+            $parts[] = t('La suite est affichée à l\'écran.');
+        }
+
+        return implode(' ', $parts);
+    }
+
+    /**
+     * Destinataires tels qu'on les DIT : « Jean Dupont <jean@acme.fr> » se lit
+     * « Jean Dupont » ; une adresse seule reste une adresse. Quatre au plus —
+     * une liste de diffusion récitée ne s'écoute pas.
+     */
+    public static function spokenRecipients(string $header): string
+    {
+        $noms = [];
+        foreach (preg_split('/[,;]+/', $header) ?: [] as $un) {
+            $un  = trim($un);
+            $nom = trim((string)preg_replace('/<[^>]*>/', '', $un), " \t\"'");
+            $nom = $nom !== '' ? $nom : trim($un, " \t<>\"'");
+            if ($nom !== '') {
+                $noms[] = $nom;
+            }
+        }
+        $noms  = array_values(array_unique($noms));
+        $autres = count($noms) - 4;
+
+        return implode(', ', array_slice($noms, 0, 4))
+            . ($autres > 0 ? ' ' . I18n::plural($autres, 'et {n} autre', 'et {n} autres') : '');
     }
 
     /**
@@ -474,16 +807,151 @@ final class SpeechSynthesizer
         return $seconds;
     }
 
-    // ===================== Appel OpenAI =====================
+    /**
+     * Durée d'un WAV PCM lue dans ses en-têtes (débit du bloc `fmt `, taille
+     * du bloc `data`, bornée à ce qui est réellement là). 0 si ce n'est pas
+     * un WAV lisible — jamais une durée inventée. Pure.
+     */
+    public static function wavDurationSeconds(string $bytes): float
+    {
+        $len = strlen($bytes);
+        if ($len < 12 || substr($bytes, 0, 4) !== 'RIFF' || substr($bytes, 8, 4) !== 'WAVE') {
+            return 0.0;
+        }
+        $byteRate = 0;
+        $pos = 12;
+        while ($pos + 8 <= $len) {
+            $id   = substr($bytes, $pos, 4);
+            $size = unpack('V', substr($bytes, $pos + 4, 4))[1];
+            $body = $pos + 8;
+            if ($id === 'fmt ' && $body + 12 <= $len) {
+                $byteRate = unpack('V', substr($bytes, $body + 8, 4))[1];
+            } elseif ($id === 'data') {
+                if ($byteRate <= 0) {
+                    return 0.0;
+                }
+                return min($size, $len - $body) / $byteRate;
+            }
+            $pos = $body + $size + ($size % 2);
+        }
+        return 0.0;
+    }
+
+    /** Durée de l'audio reçu selon son format (`mp3` | `wav`). Pure. */
+    public static function audioDurationSeconds(string $bytes, string $format): float
+    {
+        return $format === 'wav' ? self::wavDurationSeconds($bytes) : self::mp3DurationSeconds($bytes);
+    }
+
+    // ===================== Appel =====================
 
     /**
-     * Synthétise UNE partie (≤ MAX_INPUT_CHARS). Rend l'audio MP3, le modèle
+     * Lit UN passage avec la voix donnée (cf. ENGINES) — point d'entrée des
+     * routes de lecture. Rend l'audio, son format et son type MIME, le
+     * fournisseur et le modèle (facturation), la durée MESURÉE et le nombre
+     * de caractères lus. Lève une SpeechSynthesisException (cause présentée)
+     * ou une RuntimeException au message FR, jamais le détail brut du
+     * fournisseur.
+     *
+     * @param callable|null $transport substitut des tests, de la forme attendue par le moteur
+     * @return array{audio:string, format:string, mime:string, model:string, provider:string, seconds:float, chars:int}
+     */
+    public static function speak(string $engine, string $text, string $apiKey, string $locale, ?callable $transport = null): array
+    {
+        return match ($engine) {
+            self::ENGINE_OPENAI  => RealtimeSpeech::synthesize($text, $apiKey, $transport),
+            self::ENGINE_MISTRAL => self::synthesizeMistral($text, $apiKey, $locale, $transport),
+            self::ENGINE_LEGACY  => self::synthesize($text, $apiKey, $transport),
+            default              => throw new \RuntimeException('Voix de lecture inconnue.'),
+        };
+    }
+
+    /**
+     * Essai RÉEL d'une voix avant de la retenir (carte d'administration) :
+     * un mot lu, non compté au grand livre — comme les tests de clés de
+     * Modèles IA. Null si tout va bien, sinon la cause présentée.
+     *
+     * @return array{title:string, message:string}|null
+     */
+    public static function check(string $engine, string $apiKey, string $locale, ?callable $transport = null): ?array
+    {
+        try {
+            self::speak($engine, $locale === 'en' ? 'Hello.' : 'Bonjour.', $apiKey, $locale, $transport);
+            return null;
+        } catch (SpeechSynthesisException $e) {
+            $p = $e->payload();
+            return ['title' => (string)($p['title'] ?? ''), 'message' => (string)($p['message'] ?? $e->getMessage())];
+        } catch (\RuntimeException $e) {
+            return ['title' => '', 'message' => $e->getMessage()];
+        }
+    }
+
+    /**
+     * Voxtral TTS 3 : `POST /v1/audio/speech` de Mistral, réponse JSON dont
+     * `audio_data` porte le MP3 en base64. Facturé par Mistral au CARACTÈRE
+     * lu (rendu dans `chars`) ; la durée mesurée reste rendue.
+     *
+     * @param callable|null $transport fn(string $url, array $headers, string $body): array{status:int, body:string}
+     * @return array{audio:string, format:string, mime:string, model:string, provider:string, seconds:float, chars:int}
+     */
+    public static function synthesizeMistral(string $text, string $apiKey, string $locale, ?callable $transport = null): array
+    {
+        $text = trim($text);
+        if ($text === '') {
+            throw new \RuntimeException('Rien à lire.');
+        }
+        $body = json_encode([
+            'model'           => self::MISTRAL_MODEL,
+            'input'           => $text,
+            'voice_id'        => self::mistralVoiceFor($locale),
+            'response_format' => 'mp3',
+        ], JSON_UNESCAPED_UNICODE);
+        if ($body === false) {
+            throw new \RuntimeException('Texte impossible à encoder pour la synthèse.');
+        }
+        $headers  = ['Content-Type: application/json', 'Accept: application/json', 'Authorization: Bearer ' . $apiKey];
+        $response = $transport !== null
+            ? $transport(self::MISTRAL_ENDPOINT, $headers, $body)
+            : self::curlPost(self::MISTRAL_ENDPOINT, $headers, $body);
+
+        $status = (int)($response['status'] ?? 0);
+        $raw    = (string)($response['body'] ?? '');
+        if ($status === 0) {
+            throw new SpeechSynthesisException(LlmErrorPresenter::present(['kind' => 'network', 'provider' => 'mistral', 'status' => null]));
+        }
+        if ($status !== 200) {
+            error_log('[speech Voxtral] HTTP ' . $status . ' : ' . substr($raw, 0, 500));
+            $cause = LlmErrorPresenter::fromHttp($status, $raw, 'mistral');
+            ProviderIncident::note($cause);
+            throw new SpeechSynthesisException($cause);
+        }
+        $json  = json_decode($raw, true);
+        $audio = is_array($json) && is_string($json['audio_data'] ?? null) ? base64_decode($json['audio_data'], true) : false;
+        if (!is_string($audio) || $audio === '') {
+            error_log('[speech Voxtral] réponse sans audio : ' . substr($raw, 0, 200));
+            throw new \RuntimeException('Le service de synthèse vocale n\'a renvoyé aucun audio.');
+        }
+
+        return [
+            'audio'    => $audio,
+            'format'   => 'mp3',
+            'mime'     => self::MIME['mp3'],
+            'model'    => self::MISTRAL_MODEL,
+            'provider' => 'mistral',
+            'seconds'  => self::mp3DurationSeconds($audio),
+            'chars'    => mb_strlen($text),
+        ];
+    }
+
+    /**
+     * Voix d'origine (`gpt-4o-mini-tts`, arrêtée le 6 janvier 2027) :
+     * synthétise UNE partie (≤ MAX_INPUT_CHARS). Rend l'audio MP3, le modèle
      * et la durée mesurée. Lève une RuntimeException au message FR sans fuite
      * (le corps brut du fournisseur ne part qu'aux logs).
      *
      * @param callable|null $transport fn(string $url, array $headers, string $body): array{status:int, body:string} —
      *                                 substitut des tests ; par défaut cURL.
-     * @return array{audio:string, model:string, seconds:float, chars:int}
+     * @return array{audio:string, format:string, mime:string, model:string, provider:string, seconds:float, chars:int}
      */
     public static function synthesize(string $text, string $apiKey, ?callable $transport = null): array
     {
@@ -529,33 +997,43 @@ final class SpeechSynthesizer
         }
 
         return [
-            'audio'   => $audio,
-            'model'   => self::MODEL,
-            'seconds' => self::mp3DurationSeconds($audio),
-            'chars'   => mb_strlen($text),
+            'audio'    => $audio,
+            'format'   => 'mp3',
+            'mime'     => self::MIME['mp3'],
+            'model'    => self::MODEL,
+            'provider' => 'openai',
+            'seconds'  => self::mp3DurationSeconds($audio),
+            'chars'    => mb_strlen($text),
         ];
     }
 
     // ===================== Annonces mises en cache =====================
 
     /**
-     * Clé de cache d'une annonce : tout ce qui change la voix produite —
-     * modèle, voix, consigne de lecture, langue, texte. Pure.
+     * Clé de cache d'une annonce : tout ce qui change la voix produite — la
+     * voix de lecture (son modèle, sa voix, sa consigne), la langue, le texte.
+     * Pure.
      */
-    public static function cueCacheKey(string $text, string $locale): string
+    public static function cueCacheKey(string $engine, string $text, string $locale): string
     {
-        return sha1(implode("\n", [self::MODEL, self::VOICE, self::INSTRUCTIONS, $locale, trim($text)]));
+        $voice = match ($engine) {
+            self::ENGINE_OPENAI  => RealtimeSpeech::MODEL . "\n" . RealtimeSpeech::VOICE . "\n" . RealtimeSpeech::INSTRUCTIONS,
+            self::ENGINE_MISTRAL => self::MISTRAL_MODEL . "\n" . self::mistralVoiceFor($locale),
+            default              => self::MODEL . "\n" . self::VOICE . "\n" . self::INSTRUCTIONS,
+        };
+        return sha1(implode("\n", [$engine, $voice, $locale, trim($text)]));
     }
 
-    public static function cueCachePath(string $text, string $locale, ?string $dir = null): string
+    public static function cueCachePath(string $engine, string $text, string $locale, ?string $dir = null): string
     {
-        return rtrim($dir ?? (ROOT . self::CACHE_DIR), '/') . '/' . self::cueCacheKey($text, $locale) . '.mp3';
+        $format = (string)(self::ENGINES[$engine]['format'] ?? 'mp3');
+        return rtrim($dir ?? (ROOT . self::CACHE_DIR), '/') . '/' . self::cueCacheKey($engine, $text, $locale) . '.' . $format;
     }
 
-    /** Audio d'une annonce déjà synthétisée, ou null. Ne lève jamais. */
-    public static function readCachedCue(string $text, string $locale, ?string $dir = null): ?string
+    /** Audio d'une annonce déjà synthétisée par cette voix, ou null. Ne lève jamais. */
+    public static function readCachedCue(string $engine, string $text, string $locale, ?string $dir = null): ?string
     {
-        $path = self::cueCachePath($text, $locale, $dir);
+        $path = self::cueCachePath($engine, $text, $locale, $dir);
         if (!is_file($path)) {
             return null;
         }
@@ -566,29 +1044,34 @@ final class SpeechSynthesizer
     /**
      * Synthétise une annonce et la met en cache (écriture ATOMIQUE : fichier
      * temporaire puis `rename`, pour qu'un lecteur concurrent ne voie jamais
-     * un MP3 à moitié écrit). Rend `cached = true` quand l'audio vient du
+     * un fichier à moitié écrit). Rend `cached = true` quand l'audio vient du
      * disque — rien n'a été consommé, rien à facturer. Un cache impossible à
      * écrire (droits, disque plein) n'empêche pas l'annonce : elle est
-     * simplement resynthétisée la prochaine fois.
+     * simplement resynthétisée la prochaine fois. Changer de voix de lecture
+     * change la clé : les annonces de l'ancienne voix ne sont plus servies.
      *
-     * @return array{audio:string, model:string, seconds:float, chars:int, cached:bool}
+     * @return array{audio:string, format:string, mime:string, model:string, provider:string, seconds:float, chars:int, cached:bool}
      */
-    public static function synthesizeCached(string $text, string $apiKey, string $locale, ?callable $transport = null, ?string $dir = null): array
+    public static function synthesizeCached(string $engine, string $text, string $apiKey, string $locale, ?callable $transport = null, ?string $dir = null): array
     {
-        $hit = self::readCachedCue($text, $locale, $dir);
+        $hit = self::readCachedCue($engine, $text, $locale, $dir);
         if ($hit !== null) {
+            $format = (string)(self::ENGINES[$engine]['format'] ?? 'mp3');
             return [
-                'audio'   => $hit,
-                'model'   => self::MODEL,
-                'seconds' => self::mp3DurationSeconds($hit),
-                'chars'   => mb_strlen(trim($text)),
-                'cached'  => true,
+                'audio'    => $hit,
+                'format'   => $format,
+                'mime'     => self::mimeOf($engine),
+                'model'    => (string)(self::ENGINES[$engine]['model'] ?? ''),
+                'provider' => self::providerOf($engine),
+                'seconds'  => self::audioDurationSeconds($hit, $format),
+                'chars'    => mb_strlen(trim($text)),
+                'cached'   => true,
             ];
         }
 
-        $result = self::synthesize($text, $apiKey, $transport);
+        $result = self::speak($engine, $text, $apiKey, $locale, $transport);
 
-        $path   = self::cueCachePath($text, $locale, $dir);
+        $path   = self::cueCachePath($engine, $text, $locale, $dir);
         $folder = dirname($path);
         if (!is_dir($folder)) {
             @mkdir($folder, 0775, true);

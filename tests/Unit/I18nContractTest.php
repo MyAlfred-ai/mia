@@ -37,6 +37,8 @@ final class I18nContractTest extends TestCase
      */
     private const JS_TRADUITS = [
         'public/assets/js/chat.js',
+        'public/assets/js/memory.js',
+        'public/assets/js/memory-question.js',
         // Lot 2.
         'public/assets/js/creations.js',
         'public/assets/js/deck.js',
@@ -61,17 +63,28 @@ final class I18nContractTest extends TestCase
         'public/assets/js/workflows.js',
         // Aperçu d'une page web d'un workflow (historique, exécution) : aucun texte.
         'public/assets/js/html-preview.js',
+        // Volet « Avancement » d'une exécution dans le chat : aucun texte (HTML du serveur).
+        'public/assets/js/workflow-progress.js',
         // Palette ⌘K : aucun texte (tout vient de window.MIA_PALETTE).
         'public/assets/js/command-palette.js',
+        // Carte de réalisation d'une « Version soignée » : aucun texte (posés par la carte).
+        'public/assets/js/native-run.js',
         // Bases de connaissances : fiche (sources, documents, explorateur,
         // extraits) et schéma (libellés posés par le serveur).
         'public/assets/js/kb-form.js',
         'public/assets/js/kb-diagram.js',
+        'public/assets/js/kb-list.js',
+        'public/assets/js/kb-show.js',
+        // Fiche d'un document (volet) : extraits, gestes — page et fiche d'une base.
+        'public/assets/js/kb-doc.js',
+        'public/assets/js/kb-fiche.js',
         // Administration (lot 5) : rôles, journaux, sélecteur de période, menu.
         'public/assets/js/roles.js',
         'public/assets/js/admin-logs.js',
         'public/assets/js/period-picker.js',
         'public/assets/js/nav-signals.js',
+        // Volet de gauche : sections repliables et rangement de l'historique.
+        'public/assets/js/sidebar-sections.js',
         'public/assets/js/nav-drawer.js',
     ];
 
@@ -89,6 +102,8 @@ final class I18nContractTest extends TestCase
         'src/Controllers/ChatController.php',
         'src/Helpers/UserPreferences.php',
         'src/Models/UserMemory.php',
+        'src/Controllers/MemoryController.php',
+        'src/Memory/MemoryQuestions.php',
         'src/Connectors/ConnectorContext.php',
         'src/Connectors/ConnectorRegistry.php',
         // Cartes d'approbation (affichées à l'utilisateur avant toute écriture).
@@ -109,6 +124,17 @@ final class I18nContractTest extends TestCase
         // Refus d'un outil dont le modèle est arrêté par son fournisseur
         // (bulle d'erreur du chat, message laissé dans le fil).
         'src/Tools/ToolCatalog.php',
+        // Tables de travail vues par la personne : puce, ligne « Voir », volet,
+        // refus d'un renommage ou d'une suppression.
+        'src/Tables/WorkTableView.php',
+        'src/Controllers/WorkTableController.php',
+        // Tables permanentes (Bases de connaissances) : fiche, import, carte
+        // d'écriture de MIA (avant / après), refus affichés à la personne.
+        'src/Tables/KbTableStore.php',
+        'src/Tables/KbTableImport.php',
+        'src/Tables/KbTableWrite.php',
+        'src/Tables/KbTableView.php',
+        'src/Controllers/KbTableController.php',
         // Trace « Consultation du cerveau MyBrain » (fiches, panne) sous la bulle.
         'src/MyBrain/MyBrainContext.php',
         // Refus d'une photo de profil (format, poids, adresse injoignable) affichés sur Mon profil.
@@ -133,6 +159,12 @@ final class I18nContractTest extends TestCase
         'src/Files/FileBuildException.php',
         // Titre d'une slide découpée (« Contexte (suite) ») dans une présentation livrée.
         'src/Files/MarkdownDeck.php',
+        // Carte de réalisation d'une « Version soignée » : état, étapes, durée, téléchargement.
+        'src/Files/NativeDeckRun.php',
+        // « Version soignée » : messages et textes propres au genre de fichier
+        // (NativeDeck::label), et l'offre faite AVANT d'écrire le fichier.
+        'src/Files/NativeDeck.php',
+        'src/Files/PolishOffer.php',
         // Refus d'un modèle PowerPoint d'entreprise (Organisation → Entreprise, carte d'un fichier).
         'src/Slides/PptxTemplate.php',
         // Tâches programmées : la phrase de la règle (« Chaque lundi à 8 h 00 »),
@@ -165,9 +197,13 @@ final class I18nContractTest extends TestCase
         'src/Workflow/LoopFiles.php',
         'src/Workflow/LoopRunner.php',
         'src/Workflow/WorkflowDeliveries.php',
+        'src/Workflow/WorkflowSlack.php',
         'src/Workflow/WorkflowTriggers.php',
         'src/Workflow/WorkflowFiles.php',
         'src/Workflow/WorkflowCreations.php',
+        'src/Workflow/WorkflowProgress.php',
+        // Brique « Appeler un workflow » : points « À régler », refus de paramètres.
+        'src/Workflow/WorkflowCall.php',
         'src/Connectors/OutgoingAttachments.php',
         'src/Controllers/WorkflowHookController.php',
         'src/Models/Workflow.php',
@@ -176,8 +212,12 @@ final class I18nContractTest extends TestCase
         // Espaces → Assistants et Bases de connaissances : schémas, état d'une
         // base, racines de l'explorateur de dossiers, erreurs d'import.
         'src/Assistants/AssistantDiagram.php',
+        'src/Assistants/AssistantPages.php',
         'src/Sync/KbDiagram.php',
         'src/Sync/KbStatus.php',
+        'src/Sync/KbDocIssue.php',
+        'src/Sync/KbAdvice.php',
+        'src/Sync/KbPages.php',
         'src/Sync/GoogleDriveProvider.php',
         'src/Sync/OneDriveProvider.php',
         'src/Models/AssistantAvatar.php',
@@ -193,6 +233,8 @@ final class I18nContractTest extends TestCase
         'src/Helpers/AdminAccess.php',
         'src/Helpers/NavRegistry.php',
         'src/Helpers/AdminAttention.php',
+        // Relevé des dates d'arrêt chez l'éditeur (causes d'une panne, à l'écran).
+        'src/LLM/LlmShutdownWatch.php',
         'src/Helpers/Diagnostics.php',
         'src/Helpers/Requirements.php',
         'src/Agent/AgentTelemetry.php',
@@ -212,6 +254,8 @@ final class I18nContractTest extends TestCase
         'src/Billing/UsagePeriod.php',
         'src/Billing/UsageInsights.php',
         'src/Billing/UsageSource.php',
+        // Réglages → Usage & crédits → Historique (catalogue, journal, export).
+        'src/Billing/UsageHistory.php',
         'src/Controllers/BudgetController.php',
         'src/Logs/LogCatalog.php',
         'src/Logs/LogQuery.php',
@@ -221,6 +265,11 @@ final class I18nContractTest extends TestCase
         'src/Controllers/BackupController.php',
         'src/Controllers/PruningController.php',
         'src/Slack/SlackApp.php',
+        // Claude dans Office : refus de la passerelle (affichés par l'add-in) et écrans.
+        'src/Controllers/OfficeGatewayController.php',
+        'src/Controllers/OfficeAddinController.php',
+        'src/Office/OfficeAddin.php',
+        'src/Office/OfficeManifest.php',
         'src/Sync/KbSync.php',
         'src/Tools/ToolTriggers.php',
         'src/Models/ChatTool.php',
@@ -232,11 +281,22 @@ final class I18nContractTest extends TestCase
         // Lot 1 — le chat.
         'templates/chat/index.php',
         'templates/partials/message.php',
+        // Carte de réalisation d'une « Version soignée » (textes de NativeDeckRun::view).
+        'templates/partials/native-run-card.php',
         // Palette « Rechercher ou aller à… » (⌘K) : textes posés par le serveur.
         'templates/partials/command-palette.php',
         'templates/partials/user-account-trigger.php',
         'templates/partials/user-account-actions.php',
+        // Fenêtre « Quoi de neuf » : nouveautés majeures (MajorFeatures).
+        'templates/partials/feature-news-modal.php',
+        'templates/partials/feature-news/workflows.php',
+        'templates/partials/feature-news/claude-dans-excel.php',
         'templates/partials/sidebar-shortcuts.php',
+        // Volet repliable (piste A) : « Tout replier / Tout déplier ».
+        'templates/partials/sidebar-fold-all.php',
+        // Tables de travail : ligne « Voir » sous une réponse, volet de la conversation.
+        'templates/partials/work-table-line.php',
+        'templates/partials/work-tables-panel.php',
         'templates/partials/header-avatar-btn.php',
         'templates/partials/whats-new-modal.php',
         'templates/partials/autosave-hint.php',
@@ -245,7 +305,11 @@ final class I18nContractTest extends TestCase
         'templates/settings/ai.php',
         'templates/settings/display.php',
         'templates/settings/usage.php',
+        'templates/settings/usage-history.php',
+        'templates/settings/usage-history-rows.php',
         'templates/settings/connections.php',
+        // Carte « Claude dans Office » de Comptes connectés (jeton personnel).
+        'templates/settings/partials/office-addin-card.php',
         'templates/workflows/index.php',
         'templates/workflows/new.php',
         'templates/workflows/edit.php',
@@ -253,9 +317,11 @@ final class I18nContractTest extends TestCase
         'templates/workflows/partials/history.php',
         'templates/workflows/partials/history-runs.php',
         'templates/workflows/partials/history-journal.php',
+        // Volet « Avancement » d'une exécution, dans sa conversation.
+        'templates/workflows/partials/run-progress.php',
         'templates/settings/creations.php',
         'templates/settings/oauth-done.php',
-        'templates/settings/partials/memory-card.php',
+        'templates/settings/memory.php',
         'templates/settings/schedules.php',
         'templates/settings/schedule-form.php',
         'templates/auth/login.php',
@@ -264,9 +330,18 @@ final class I18nContractTest extends TestCase
         'templates/app/download.php',
         // Espaces → Assistants et Bases de connaissances (listes, fiches, état).
         'templates/admin/profiles/list.php',
+        'templates/admin/profiles/show.php',
         'templates/admin/profiles/edit.php',
         'templates/admin/knowledge-bases.php',
         'templates/admin/knowledge-bases/edit.php',
+        'templates/admin/knowledge-bases/show.php',
+        // Tables permanentes : création, fiche (lignes, colonnes, import), aperçu de la liste.
+        'templates/admin/knowledge-bases/table-new.php',
+        'templates/admin/knowledge-bases/partials/table-section.php',
+        'templates/admin/knowledge-bases/partials/table-side.php',
+        'templates/admin/knowledge-bases/partials/doc-detail.php',
+        'templates/admin/knowledge-bases/partials/doc-drawer.php',
+        'templates/admin/knowledge-bases/partials/show-doc-row.php',
         'templates/partials/kb-status.php',
         'templates/partials/kb-status-overview.php',
         // Administration (lot 5) : tout l'arbre templates/admin et ses partiels.
@@ -275,12 +350,14 @@ final class I18nContractTest extends TestCase
         'templates/partials/period-picker.php',
         'templates/partials/company-template-status.php',
         'templates/partials/company-word-template-status.php',
+        'templates/partials/company-template-paths.php',
         'templates/admin/agent.php',
         'templates/admin/backup.php',
         'templates/admin/budget-period.php',
         'templates/admin/budget.php',
         'templates/admin/company.php',
         'templates/admin/connectors-slack.php',
+        'templates/admin/connectors-office.php',
         'templates/admin/connectors.php',
         'templates/admin/credits.php',
         'templates/admin/diagnostics.php',
@@ -288,8 +365,7 @@ final class I18nContractTest extends TestCase
         'templates/admin/knowledge-bases-sync.php',
         'templates/admin/llms/_foot.php',
         'templates/admin/llms/_head.php',
-        'templates/admin/llms/keys.php',
-        'templates/admin/llms/models.php',
+        'templates/admin/llms/index.php',
         'templates/admin/llms/tests.php',
         'templates/admin/logs.php',
         'templates/admin/logs/entries.php',
@@ -739,7 +815,7 @@ final class I18nContractTest extends TestCase
      *
      * C'est la raison d'être du lot 3 : `capabilityGuardrails()` cite le bouton
      * « Outils » et ses entrées, `UserPreferences` reprend le titre « Votre
-     * contexte », `UserMemory` celui de « MIA pour vous ». Traduire l'écran
+     * contexte », `UserMemory` celui de « Mémoire ». Traduire l'écran
      * sans ces fragments donnerait un assistant anglais qui renvoie vers des
      * libellés français — le seul couplage que la traduction casse en silence,
      * et qu'aucun test d'affichage ne verrait.
@@ -780,7 +856,7 @@ final class I18nContractTest extends TestCase
 
         // Les deux sections de « ce que MIA sait de vous » : le nom est une
         // décision produit, il doit être identique des deux côtés.
-        foreach (['MIA pour vous' => 'src/Models/UserMemory.php',
+        foreach (['Mémoire' => 'src/Models/UserMemory.php',
                   'Votre contexte' => 'src/Helpers/UserPreferences.php'] as $titre => $fichier) {
             $this->assertStringContainsString($titre, self::lire($fichier));
             $this->assertArrayHasKey($titre, $dict, "« $titre » doit avoir une traduction unique.");

@@ -9,11 +9,13 @@ use PHPUnit\Framework\TestCase;
  *
  * La page se lit en trois sections — comment MIA répond, ce qu'elle sait de
  * vous, à l'oral — et repose sur UN formulaire VIDE auquel chaque contrôle se
- * rattache par form="aiPrefsForm" : c'est ce qui laisse la carte « MIA pour
- * vous » (AJAX, partial partagé avec Mon profil) prendre place sous « Votre
- * contexte », sans imbriquer deux formulaires. Un contrôle ajouté SANS
+ * rattache par form="aiPrefsForm" : un contrôle peut ainsi vivre dans n'importe
+ * quelle carte sans imbriquer deux formulaires. Un contrôle ajouté SANS
  * l'attribut ne serait jamais posté — ni par autosave.js, ni sans JavaScript —
  * et l'écran afficherait un réglage qui ne s'enregistre pas, sans une erreur.
+ *
+ * « Ce que MIA sait de vous » n'est plus qu'une carte de renvoi : « Votre
+ * contexte » et les souvenirs ont leur page, Réglages → Mémoire (2026-11-03).
  */
 final class AiPreferencesPageTest extends TestCase
 {
@@ -25,27 +27,32 @@ final class AiPreferencesPageTest extends TestCase
         return (string) file_get_contents($abs);
     }
 
-    public function testTroisSectionsDansLOrdreEtLaMemoireSousLeContexte(): void
+    public function testTroisSectionsDansLOrdreEtLaMemoireRenvoieASaPage(): void
     {
         $tpl = self::lire('templates/settings/ai.php');
 
         $style = strpos($tpl, 'id="style"');
-        $ctx   = strpos($tpl, 'id="contexte"');
-        $mem   = strpos($tpl, 'templates/settings/partials/memory-card.php');
+        $mem   = strpos($tpl, 'id="memoire"');
         $voix  = strpos($tpl, 'id="voix"');
-        foreach (['style' => $style, 'contexte' => $ctx, 'mémoire' => $mem, 'voix' => $voix] as $nom => $pos) {
-            $this->assertIsInt($pos, "Section ou carte absente : $nom");
+        foreach (['style' => $style, 'mémoire' => $mem, 'voix' => $voix] as $nom => $pos) {
+            $this->assertIsInt($pos, "Section absente : $nom");
         }
-        $this->assertLessThan($ctx, $style, 'Le style ouvre la page.');
-        $this->assertLessThan($mem, $ctx, 'La mémoire suit « Votre contexte »…');
-        $this->assertLessThan($voix, $mem, '… et précède la voix.');
+        $this->assertLessThan($mem, $style, 'Le style ouvre la page…');
+        $this->assertLessThan($voix, $mem, '… la carte Mémoire précède la voix.');
+
+        // La carte de renvoi mène à la page Mémoire ; ni « Votre contexte » ni
+        // la liste des souvenirs ne sont recopiés ici.
+        $this->assertStringContainsString('ai-prefs-pointer', $tpl);
+        $this->assertStringContainsString('href="/settings/memory"', $tpl);
+        $this->assertStringNotContainsString('id="contexte"', $tpl);
+        $this->assertStringNotContainsString('memory-card.php', $tpl);
 
         // La carte Voix reste conditionnelle : le handler n'écrit que les
         // champs présents dans le POST (VoiceConversationTest le garde aussi).
         $this->assertStringContainsString('<?php if (!empty($voiceEnabled)): ?>', $tpl);
 
-        // Le sommaire vise les trois sections.
-        foreach (['href="#style"', 'href="#contexte"', 'href="#voix"'] as $ancre) {
+        // Le sommaire vise les sections et la page Mémoire.
+        foreach (['href="#style"', 'href="/settings/memory"', 'href="#voix"'] as $ancre) {
             $this->assertStringContainsString($ancre, $tpl, $ancre);
         }
         // Plus de bouton « Retour au profil » : la navigation des paramètres suffit.
@@ -74,7 +81,7 @@ final class AiPreferencesPageTest extends TestCase
             $this->assertStringContainsString('form="aiPrefsForm"', $champ[0], 'Contrôle non rattaché : ' . $champ[1]);
             $noms[$champ[1]] = true;
         }
-        $this->assertSame(['ai_style', 'ai_user_context', 'voice_rate', 'voice_length'], array_keys($noms));
+        $this->assertSame(['preferred_llm', 'ai_style', 'voice_rate', 'voice_length'], array_keys($noms));
     }
 
     public function testLesCartesAffichentLesAidesTraduitesJamaisLeFragmentDePrompt(): void
@@ -101,14 +108,12 @@ final class AiPreferencesPageTest extends TestCase
 
     public function testLesAncresEtLesStylesDeLaPageExistent(): void
     {
-        // La pastille « Gérer ma mémoire » du chat pose l'utilisateur devant la carte.
-        $this->assertStringContainsString("'/settings/ai#memoryCard'", self::lire('public/assets/js/chat.js'));
-        $partial = self::lire('templates/settings/partials/memory-card.php');
-        $this->assertStringContainsString('id="memoryCard"', $partial);
-        $this->assertStringContainsString('class="card-head"', $partial, 'La carte mémoire porte la même tête que les autres cartes.');
+        // La pastille du chat mène à la page Mémoire.
+        $this->assertStringContainsString("'/settings/memory'", self::lire('public/assets/js/chat.js'));
+        $this->assertStringNotContainsString('/settings/ai#memoryCard', self::lire('public/assets/js/chat.js'));
 
         $css = self::lire('public/assets/css/main.css');
-        foreach (['.ai-prefs-section', '.ai-prefs-nav', '.ai-choice-card', '.ai-field-head', '.voice-rate-ticks', '.card-head-text'] as $classe) {
+        foreach (['.ai-prefs-section', '.ai-prefs-nav', '.ai-prefs-pointer', '.ai-choice-card', '.ai-field-head', '.voice-rate-ticks', '.card-head-text'] as $classe) {
             $this->assertStringContainsString($classe, $css, "Style manquant : $classe");
         }
         // Ancres sous le header mobile collant, cartes-radio sur deux colonnes au doigt.

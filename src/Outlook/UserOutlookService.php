@@ -43,6 +43,12 @@ class UserOutlookService extends MicrosoftUserApiService
         . 'un administrateur de l\'annuaire Microsoft doit consentir à cette permission pour l\'application.';
     /** Ajouté à toute erreur survenue APRÈS la création du brouillon, pendant l'envoi. */
     public const MSG_DRAFT_KEPT = 'Le message est resté dans vos Brouillons Outlook : rien n\'est parti.';
+    /** Le PATCH du corps a échoué APRÈS `createReply` : le brouillon existe, sans notre texte. */
+    public const MSG_REPLY_DRAFT_INCOMPLETE = 'Un brouillon de réponse incomplet (sans le texte) est resté dans vos '
+        . 'Brouillons Outlook : supprimez-le, puis réessayez.';
+    /** Aucune réponse de Graph à l'envoi : il a pu être accepté quand même. */
+    public const MSG_SEND_UNCERTAIN = 'Outlook n\'a pas répondu à la demande d\'envoi : l\'email est peut-être parti. '
+        . 'Vérifiez vos Éléments envoyés et vos Brouillons avant de le renvoyer.';
 
     protected const OAUTH_CLASS       = MicrosoftOutlookOAuth::class;
     protected const TOKEN_PROVIDER    = UserDriveToken::PROVIDER_OUTLOOK;
@@ -197,6 +203,52 @@ class UserOutlookService extends MicrosoftUserApiService
         return MailAttachments::fromGraphList((array)($data['value'] ?? []));
     }
 
+    // ------------------------------------------------------------------
+    // Déclencheur « email reçu » des workflows (WorkflowTriggers, MailPush)
+    // ------------------------------------------------------------------
+
+    /** Champs lus pour les filtres du déclencheur. */
+    private const WATCH_SELECT = 'id,subject,from,toRecipients,ccRecipients,receivedDateTime,hasAttachments';
+    // Les abonnements push (création, renouvellement, retrait) vivent dans
+    // UserOutlookPushService : ce fichier ne supprime ni ne modifie rien.
+
+    /**
+     * Messages récents de la BOÎTE DE RÉCEPTION, avec ce que demandent les
+     * filtres (expéditeur, destinataires, objet, pièce jointe, heure de
+     * réception) — en un appel. Requête vide : du plus récent au plus ancien ;
+     * sinon `$search` (classé par pertinence, Graph interdit alors le tri),
+     * toujours dans la boîte de réception : un email ENVOYÉ ne lance rien.
+     *
+     * @return list<array{id:string,de:string,a:string,cc:string,objet:string,date:string,received:?int,pieces:bool}>
+     */
+    public function watchList(string $query, int $limit = 50): array
+    {
+        $limit = max(1, min(100, $limit));
+        $url = self::MAIL_BASE . '/mailFolders/inbox/messages?$top=' . $limit . '&$select=' . rawurlencode(self::WATCH_SELECT);
+        $query = trim($query);
+        $url .= $query === ''
+            ? '&$orderby=' . rawurlencode('receivedDateTime desc')
+            : '&$search=' . rawurlencode('"' . self::sanitizeSearch($query) . '"');
+        $list = $this->apiJson('GET', $url);
+        $out = [];
+        foreach (($list['value'] ?? []) as $m) {
+            if (is_array($m) && (string)($m['id'] ?? '') !== '') {
+                $ts = strtotime((string)($m['receivedDateTime'] ?? ''));
+                $out[] = [
+                    'id'       => (string)$m['id'],
+                    'de'       => self::formatRecipient($m['from'] ?? []),
+                    'a'        => self::formatRecipients($m['toRecipients'] ?? []),
+                    'cc'       => self::formatRecipients($m['ccRecipients'] ?? []),
+                    'objet'    => (string)($m['subject'] ?? ''),
+                    'date'     => self::formatDateTime((string)($m['receivedDateTime'] ?? '')),
+                    'received' => $ts === false ? null : $ts,
+                    'pieces'   => (bool)($m['hasAttachments'] ?? false),
+                ];
+            }
+        }
+        return $out;
+    }
+
     /**
      * Recherche LONGUE (boucles de workflow) : jusqu'à `$limit` emails (100
      * au plus), mêmes résultats que search().
@@ -215,6 +267,71 @@ class UserOutlookService extends MicrosoftUserApiService
         return $out;
     }
 
+    /** Emails qu'une collecte peut rapporter (tables de travail). */
+    public const COLLECT_MAX = 1000;
+
+    /**
+     * Collecte EXHAUSTIVE (tables de travail) : tous les emails d'une
+     * recherche, page après page (100 par page), jusqu'à `$limit`
+     * (COLLECT_MAX au plus). Requête vide : la boîte de réception, du plus
+     * récent au plus ancien. Le lien de page suivante n'est suivi que s'il
+     * vise Graph (le jeton partirait avec la requête).
+     *
+     * `$progress(int $lus, ?int $estimes): bool` après chaque page ; `false`
+     * arrête la collecte (bouton Stop).
+     *
+     * @return array{messages: list<array{id:string,de:string,a:string,objet:string,recu:int,extrait:string,lu:bool,pieces:bool}>, estimation: ?int, tronque: bool, echecs: int, interrompu: bool}
+     */
+    public function collectMessages(string $query, int $limit, ?\Closure $progress = null): array
+    {
+        $limit  = max(1, min(self::COLLECT_MAX, $limit));
+        $select = 'id,subject,from,toRecipients,receivedDateTime,bodyPreview,isRead,hasAttachments';
+        $query  = trim($query);
+        $url    = $query === ''
+            ? self::MAIL_BASE . '/mailFolders/inbox/messages?$top=100&$select=' . rawurlencode($select)
+                . '&$orderby=' . rawurlencode('receivedDateTime desc')
+            : self::MAIL_BASE . '/messages?$top=100&$select=' . rawurlencode($select)
+                . '&$search=' . rawurlencode('"' . self::sanitizeSearch($query) . '"');
+
+        $out     = [];
+        $more    = false;
+        $stopped = false;
+        while ($url !== '') {
+            $data = $this->apiJson('GET', $url);
+            foreach ((array)($data['value'] ?? []) as $m) {
+                if (!is_array($m) || (string)($m['id'] ?? '') === '') {
+                    continue;
+                }
+                if (count($out) >= $limit) {
+                    $more = true;
+                    break 2;
+                }
+                $ts = strtotime((string)($m['receivedDateTime'] ?? ''));
+                $out[] = [
+                    'id'      => (string)$m['id'],
+                    'de'      => self::formatRecipient((array)($m['from'] ?? [])),
+                    'a'       => self::formatRecipients((array)($m['toRecipients'] ?? [])),
+                    'objet'   => (string)($m['subject'] ?? ''),
+                    'recu'    => $ts === false ? 0 : $ts,
+                    'extrait' => trim((string)($m['bodyPreview'] ?? '')),
+                    'lu'      => (bool)($m['isRead'] ?? false),
+                    'pieces'  => (bool)($m['hasAttachments'] ?? false),
+                ];
+            }
+            $next = (string)($data['@odata.nextLink'] ?? '');
+            $url  = str_starts_with($next, self::GRAPH_BASE . '/') ? $next : '';
+            if ($url !== '' && count($out) >= $limit) {
+                $more = true;
+                break;
+            }
+            if ($progress !== null && $progress(count($out), null) === false) {
+                $stopped = true;
+                break;
+            }
+        }
+        return ['messages' => $out, 'estimation' => null, 'tronque' => $more, 'echecs' => 0, 'interrompu' => $stopped];
+    }
+
     /**
      * Les OCTETS d'une pièce jointe (fichier joint seulement), désignée par
      * son numéro ou son nom.
@@ -229,12 +346,30 @@ class UserOutlookService extends MicrosoftUserApiService
         if ($reason !== null && $attachment['piece'] !== 'fichier') {
             throw new \RuntimeException($reason);
         }
-        $file = $this->apiJson(
-            'GET',
-            self::MAIL_BASE . '/messages/' . rawurlencode($id) . '/attachments/' . rawurlencode($attachment['ref'])
-        );
+        [$nom, $type, $bytes] = $this->attachmentBytes($id, $attachment);
+        return ['nom' => $nom, 'type' => $type, 'bytes' => $bytes];
+    }
+
+    /**
+     * Octets d'une pièce jointe : un fichier joint porte les siens
+     * (`contentBytes`) ; un email joint (« itemAttachment ») se télécharge en
+     * MIME par `/$value`, et se lit alors comme un .eml.
+     *
+     * @return array{0: string, 1: string, 2: string} nom, type, octets
+     */
+    private function attachmentBytes(string $id, array $attachment): array
+    {
+        $url = self::MAIL_BASE . '/messages/' . rawurlencode($id) . '/attachments/' . rawurlencode((string)$attachment['ref']);
+        if (($attachment['piece'] ?? '') === 'email') {
+            $nom = (string)$attachment['nom'];
+            if (!str_ends_with(strtolower($nom), '.eml')) {
+                $nom .= '.eml';
+            }
+            return [$nom, MailFile::MIME_EML, $this->apiRaw('GET', $url . '/$value')];
+        }
+        $file  = $this->apiJson('GET', $url);
         $bytes = base64_decode((string)($file['contentBytes'] ?? ''), true);
-        return ['nom' => $attachment['nom'], 'type' => $attachment['type'], 'bytes' => is_string($bytes) ? $bytes : ''];
+        return [(string)$attachment['nom'], (string)$attachment['type'], is_string($bytes) ? $bytes : ''];
     }
 
     /** Objet et expéditeur d'un message (boucle « pour chaque pièce jointe »). @return array{objet:string,de:string} */
@@ -262,12 +397,8 @@ class UserOutlookService extends MicrosoftUserApiService
             throw new \RuntimeException($reason);
         }
 
-        $file  = $this->apiJson(
-            'GET',
-            self::MAIL_BASE . '/messages/' . rawurlencode($id) . '/attachments/' . rawurlencode($attachment['ref'])
-        );
-        $bytes = base64_decode((string)($file['contentBytes'] ?? ''), true);
-        $text  = MailAttachments::extractText(is_string($bytes) ? $bytes : '', $attachment['type'], $attachment['nom']);
+        [$nom, $type, $bytes] = $this->attachmentBytes($id, $attachment);
+        $text  = MailAttachments::extractText($bytes, $type, $nom);
 
         // Objet du message : il nomme la pièce jointe dans la trace et dans la
         // mémoire de conversation. Best-effort — la lecture vaut sans lui.
@@ -393,14 +524,29 @@ class UserOutlookService extends MicrosoftUserApiService
         $patch = [
             'body' => [
                 'contentType' => 'HTML',
-                'content'     => self::mergeReplyBody(MailHtml::withInlineImages(MailHtml::toHtml($body), $images), (string)($draft['body']['content'] ?? '')),
+                // La citation rendue par Graph peut être en TEXTE (message
+                // d'origine en texte brut) : cf. quotedHtml.
+                'content'     => self::mergeReplyBody(
+                    MailHtml::withInlineImages(MailHtml::toHtml($body), $images),
+                    self::quotedHtml(is_array($draft['body'] ?? null) ? $draft['body'] : [])
+                ),
             ],
         ];
+        $replyTo = [];
         if ($toAddresses !== []) {
             $patch['toRecipients'] = array_map(
                 static fn(string $a): array => ['emailAddress' => ['address' => $a]],
                 $toAddresses
             );
+        } else {
+            // Doc Graph (createReply) : « If replyTo is specified in the original
+            // message, per RFC 2822, you should send the reply to the recipients
+            // in replyTo, and not the recipients in from. » Lecture best-effort :
+            // sans elle, la réponse garde le destinataire posé par Graph.
+            $replyTo = $this->replyToRecipients($original);
+            if ($replyTo !== []) {
+                $patch['toRecipients'] = $replyTo;
+            }
         }
         if ($ccAddresses !== []) {
             $patch['ccRecipients'] = array_map(
@@ -408,7 +554,13 @@ class UserOutlookService extends MicrosoftUserApiService
                 $ccAddresses
             );
         }
-        $final = $this->apiJson('PATCH', self::MAIL_BASE . '/messages/' . rawurlencode($draftId), $patch);
+        try {
+            $final = $this->apiJson('PATCH', self::MAIL_BASE . '/messages/' . rawurlencode($draftId), $patch);
+        } catch (\RuntimeException $e) {
+            // `createReply` a DÉJÀ créé le brouillon (sans notre texte) : le
+            // taire laisserait un « RE: » vide dans la boîte, sans explication.
+            throw new \RuntimeException($e->getMessage() . ' ' . self::MSG_REPLY_DRAFT_INCOMPLETE);
+        }
 
         error_log('[Outlook user] réponse en brouillon id=' . mb_substr($draftId, 0, 24) . '…'
             . ' fil=' . mb_substr((string)($draft['conversationId'] ?? ''), 0, 16) . '…'
@@ -416,7 +568,7 @@ class UserOutlookService extends MicrosoftUserApiService
 
         $destinataires = $toAddresses !== []
             ? implode(', ', $toAddresses)
-            : self::formatRecipients($draft['toRecipients'] ?? []);
+            : self::formatRecipients($replyTo !== [] ? $replyTo : ($draft['toRecipients'] ?? []));
 
         return [
             'id'           => $draftId,
@@ -461,6 +613,12 @@ class UserOutlookService extends MicrosoftUserApiService
             // Azure (411) — cf. ConnectorApiService::apiRaw.
             $this->apiJson('POST', self::MAIL_BASE . '/messages/' . rawurlencode($draftId) . '/send', []);
         } catch (\RuntimeException $e) {
+            // Aucune réponse de Graph (délai dépassé, coupure) : l'envoi a pu
+            // être accepté quand même. Dire « rien n'est parti » ferait
+            // renvoyer l'email une seconde fois.
+            if ($this->lastHttpStatus === 0) {
+                throw new \RuntimeException(self::MSG_SEND_UNCERTAIN);
+            }
             // Le 403 « permission » du socle nomme Mail.ReadWrite : ici c'est
             // Mail.Send qui manque, le remède doit le nommer.
             $raison = $e->getMessage() === self::MSG_SCOPE_INSUFFICIENT ? self::MSG_RECONNECT_SEND : $e->getMessage();
@@ -484,6 +642,23 @@ class UserOutlookService extends MicrosoftUserApiService
     }
 
     /**
+     * Destinataires `replyTo` du message d'origine, forme Graph ; [] s'il n'en
+     * porte pas ou si la lecture échoue (best-effort : la réponse garde alors
+     * le destinataire que `createReply` a posé).
+     *
+     * @return list<array{emailAddress: array{address: string, name?: string}}>
+     */
+    private function replyToRecipients(string $messageId): array
+    {
+        try {
+            $msg = $this->apiJson('GET', self::MAIL_BASE . '/messages/' . rawurlencode($messageId) . '?$select=replyTo');
+        } catch (\RuntimeException) {
+            return [];
+        }
+        return self::replyToFrom($msg);
+    }
+
+    /**
      * Joint des fichiers à un brouillon (une requête par fichier, ≤ 3 Mo :
      * OutgoingAttachments les a bornés). Une pièce refusée : le brouillon
      * reste, sans elle, et l'erreur le dit.
@@ -500,6 +675,41 @@ class UserOutlookService extends MicrosoftUserApiService
     }
 
     // ===================== Statiques pures (testables sans réseau) =====================
+
+    /**
+     * Corps du brouillon rendu par `createReply` (l'original cité), en HTML.
+     * Graph le rend en `text` quand le message d'origine est en texte brut
+     * (exemple de la doc createReply) : collé tel quel dans un corps HTML, ses
+     * sauts de ligne disparaîtraient et ses « < » seraient lus comme des balises.
+     */
+    public static function quotedHtml(array $body): string
+    {
+        $content = (string)($body['content'] ?? '');
+        if (trim($content) === '' || strtolower((string)($body['contentType'] ?? 'html')) === 'html') {
+            return $content;
+        }
+        return nl2br(htmlspecialchars($content, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'), false);
+    }
+
+    /**
+     * `replyTo` d'un message Graph → destinataires d'une réponse (adresses
+     * valides seulement, sans doublon). Pur.
+     *
+     * @return list<array{emailAddress: array{address: string, name?: string}}>
+     */
+    public static function replyToFrom(array $message): array
+    {
+        $out = [];
+        foreach ((array)($message['replyTo'] ?? []) as $r) {
+            $addr = is_array($r) ? trim((string)($r['emailAddress']['address'] ?? '')) : '';
+            if ($addr === '' || filter_var($addr, FILTER_VALIDATE_EMAIL) === false || isset($out[strtolower($addr)])) {
+                continue;
+            }
+            $name = trim((string)($r['emailAddress']['name'] ?? ''));
+            $out[strtolower($addr)] = ['emailAddress' => $name !== '' ? ['address' => $addr, 'name' => $name] : ['address' => $addr]];
+        }
+        return array_values($out);
+    }
 
     /**
      * Dossier Éléments envoyés, sur le domaine du compte. Le `webLink` du
@@ -582,6 +792,7 @@ class UserOutlookService extends MicrosoftUserApiService
      */
     public static function mergeReplyBody(string $ourHtml, string $draftHtml): string
     {
+        // (La citation en texte brut est passée en HTML AVANT : cf. quotedHtml.)
         $draftHtml = trim($draftHtml);
         if ($draftHtml === '') {
             return $ourHtml;

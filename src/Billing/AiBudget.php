@@ -945,7 +945,9 @@ final class AiBudget
 
     /**
      * La synchronisation AUTOMATIQUE des bases est-elle en pause ? Même règle
-     * que les demandes : c'est la seule dépense qui part sans geste humain.
+     * que les demandes : c'est l'une des deux dépenses qui partent sans geste
+     * humain. L'autre, l'apprentissage de la mémoire (MemoryLearner), s'arrête
+     * plus tôt encore : dès l'état d'alerte (MemoryLearner::budgetPaused).
      */
     public static function blocksAutomaticSync(): bool
     {

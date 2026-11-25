@@ -18,6 +18,19 @@ declare(strict_types=1);
  * `reasoning_content` de tous les tours passés doit être renvoyé (400 sinon),
  * que MIA ne conserve pas. Le plafond de sortie (`max_tokens`) vient aussi du
  * catalogue : sans lui, l'API borne à 8K en mode sans réflexion.
+ *
+ * Recherche Internet (13/11/2026, guide « Web Tools » relu le 2026-11-17) :
+ * outil SERVEUR `deepseek_web_search` déclaré dans `tools` — DeepSeek cherche
+ * lui-même, MIA n'exécute rien. Sans réflexion (le mode de MIA), le modèle
+ * décide de chercher et cite ses sources : `annotations` (`url_citation`) du
+ * dernier fragment, rendues en bloc « Sources » comme chez Claude. Recherches
+ * facturées dans `usage.server_tool_use` (`tool_search`, `tool_fetch`,
+ * `tool_image_search`, même prix). « Other tools cannot be used together with
+ * `deepseek_web_search` … yet » : jamais avec les outils de MIA — le
+ * catalogue le dit (`tools_with_web_search` faux), le contrôleur arbitre et la
+ * boucle d'outils ne déclare pas l'outil. Ni `safety_check` (exigé par
+ * DeepSeek d'un service ouvert au PUBLIC ; MIA est interne), ni
+ * `deepseek_read_url` (MIA lit les pages collées avec son propre outil).
  */
 class DeepSeekAdapter implements LLMInterface
 {
@@ -88,14 +101,26 @@ class DeepSeekAdapter implements LLMInterface
         return self::requestExtras($this->model);
     }
 
-    public function stream(array $messages, string $systemPrompt, callable $onChunk, ?float $temperature = null, bool $webSearch = false): array
+    /**
+     * Outils serveur déclarés quand la recherche Internet est demandée : la
+     * recherche seule (cf. en-tête). Pure.
+     *
+     * @return list<array{type:string}>
+     */
+    public static function webSearchTools(): array
     {
-        if ($this->apiKey === '') {
-            error_log('[DeepSeekAdapter] Aucune clé API DeepSeek configurée.');
-            $onChunk('[Clé API DeepSeek manquante. Configurez-la dans Admin → Clés API avant d\'utiliser cet assistant.]');
-            return self::emptyTokens();
-        }
+        return [['type' => 'deepseek_web_search']];
+    }
 
+    /**
+     * Corps de la demande du flux simple : messages, réglages du catalogue,
+     * température si le modèle en règle une, et l'outil de recherche si la
+     * recherche est demandée ET que le modèle sait chercher.
+     *
+     * @return array<string, mixed>
+     */
+    public function streamPayload(array $messages, string $systemPrompt, ?float $temperature, bool $webSearch): array
+    {
         $payload = [
             'model'    => $this->model,
             'stream'   => true,
@@ -106,10 +131,72 @@ class DeepSeekAdapter implements LLMInterface
         ] + self::requestExtras($this->model);
 
         // Source unique de vérité = catalogue (`temperature` du modèle). NULL
-        // (assistant « réinitialisé ») → rien envoyé.
+        // (assistant « réinitialisé ») → rien envoyé. Avec l'outil de
+        // recherche, DeepSeek l'ignore (sans erreur).
         if ($temperature !== null && LlmCatalog::supportsTemperature('deepseek', $this->model)) {
             $payload['temperature'] = $temperature;
         }
+        if ($webSearch && LlmCatalog::supportsWebSearch('deepseek', $this->model)) {
+            $payload['tools'] = self::webSearchTools();
+        }
+        return $payload;
+    }
+
+    /**
+     * Sources CITÉES par la réponse : `annotations` de type `url_citation`,
+     * adresses http(s) seulement, sans doublon, dans l'ordre. DeepSeek met
+     * l'adresse en guise de titre quand il ne le connaît pas : titre vide
+     * alors (le bloc Sources affiche l'adresse). Pure.
+     *
+     * @return list<array{url:string,title:string}>
+     */
+    public static function sourcesFrom(mixed $annotations): array
+    {
+        $sources = [];
+        $seen = [];
+        foreach (is_array($annotations) ? $annotations : [] as $a) {
+            if (!is_array($a) || ($a['type'] ?? '') !== 'url_citation' || !is_array($a['url_citation'] ?? null)) {
+                continue;
+            }
+            $url = trim((string)($a['url_citation']['url'] ?? ''));
+            if ($url === '' || preg_match('#^https?://#i', $url) !== 1 || isset($seen[$url])) {
+                continue;
+            }
+            $title = trim((string)($a['url_citation']['title'] ?? ''));
+            $sources[] = ['url' => $url, 'title' => $title === $url ? '' : $title];
+            $seen[$url] = true;
+        }
+        return $sources;
+    }
+
+    /**
+     * Recherches FACTURÉES d'une réponse : `tool_search` + `tool_fetch` +
+     * `tool_image_search` de `usage.server_tool_use` (même prix chez
+     * DeepSeek). `web_search_requests` / `web_fetch_requests` ne servent qu'à
+     * l'affichage (« not billed counts ») et sont ignorés. Pure.
+     */
+    public static function billedSearches(mixed $usage): int
+    {
+        $tools = is_array($usage) ? ($usage['server_tool_use'] ?? null) : null;
+        if (!is_array($tools)) {
+            return 0;
+        }
+        $n = 0;
+        foreach (['tool_search', 'tool_fetch', 'tool_image_search'] as $key) {
+            $n += max(0, (int)($tools[$key] ?? 0));
+        }
+        return $n;
+    }
+
+    public function stream(array $messages, string $systemPrompt, callable $onChunk, ?float $temperature = null, bool $webSearch = false): array
+    {
+        if ($this->apiKey === '') {
+            error_log('[DeepSeekAdapter] Aucune clé API DeepSeek configurée.');
+            $onChunk('[Clé API DeepSeek manquante. Configurez-la dans Admin → Clés API avant d\'utiliser cet assistant.]');
+            return self::emptyTokens();
+        }
+
+        $payload = $this->streamPayload($messages, $systemPrompt, $temperature, $webSearch);
 
         $body = LlmAdapterHelpers::encodeBody($payload);
         if ($body === false) {
@@ -154,6 +241,8 @@ class DeepSeekAdapter implements LLMInterface
         $tokensOut = 0;
         $tokensInCached    = 0;
         $tokensOutReasoning = 0;
+        $searches  = 0;     // recherches facturées (usage.server_tool_use)
+        $sources   = [];    // sources citées (annotations du dernier fragment)
         $rawBuffer = '';
         $hasText   = false; // du texte est-il parti vers l'appelant ?
         $errorSent = false; // une erreur a-t-elle déjà été émise ?
@@ -183,6 +272,23 @@ class DeepSeekAdapter implements LLMInterface
             $json = json_decode($data, true);
             if (!$json) continue;
 
+            // Usage lu AVANT l'erreur : une réponse qui échoue en route porte
+            // encore son usage, et ce qui a tourné (recherches comprises) est
+            // facturé par DeepSeek (« billed as usual »).
+            if (isset($json['usage'])) {
+                $usage = $json['usage'];
+                $tokensIn  = (int)($usage['prompt_tokens']     ?? 0);
+                $tokensOut = (int)($usage['completion_tokens'] ?? 0);
+                // DeepSeek expose prompt_cache_hit_tokens : tokens lus depuis le cache.
+                $tokensInCached     = (int)($usage['prompt_cache_hit_tokens']            ?? 0);
+                $tokensOutReasoning = (int)(
+                    $usage['completion_tokens_details']['reasoning_tokens']
+                    ?? $usage['reasoning_tokens']
+                    ?? 0
+                );
+                $searches = max($searches, self::billedSearches($usage));
+            }
+
             if (isset($json['error'])) {
                 $errMsg = LlmAdapterHelpers::errorDetail($json);
                 error_log('[DeepSeekAdapter] Erreur SSE : ' . $errMsg);
@@ -195,6 +301,12 @@ class DeepSeekAdapter implements LLMInterface
             // seul content est la réponse (la réflexion est coupée par défaut,
             // cf. requestExtras, mais un catalogue peut la rallumer).
             $content = $json['choices'][0]['delta']['content'] ?? '';
+            // Sources citées : une seule fois, dans le dernier fragment.
+            foreach (self::sourcesFrom($json['choices'][0]['delta']['annotations'] ?? null) as $src) {
+                if (!in_array($src['url'], array_column($sources, 'url'), true)) {
+                    $sources[] = $src;
+                }
+            }
             if ($content !== '') {
                 $onChunk($content);
                 $hasText = true;
@@ -204,22 +316,15 @@ class DeepSeekAdapter implements LLMInterface
             }
 
             $finish = LlmAdapterHelpers::chatFinishReason($json) ?? $finish;
-
-            if (isset($json['usage'])) {
-                $usage = $json['usage'];
-                $tokensIn  = (int)($usage['prompt_tokens']     ?? 0);
-                $tokensOut = (int)($usage['completion_tokens'] ?? 0);
-                // DeepSeek expose prompt_cache_hit_tokens : tokens lus depuis le cache.
-                $tokensInCached     = (int)($usage['prompt_cache_hit_tokens']            ?? 0);
-                $tokensOutReasoning = (int)(
-                    $usage['completion_tokens_details']['reasoning_tokens']
-                    ?? $usage['reasoning_tokens']
-                    ?? 0
-                );
-            }
         }
 
         fclose($stream);
+
+        // Sources en fin de réponse, comme chez Claude — seulement sous un
+        // texte écrit, jamais après une erreur ni un arrêt demandé.
+        if ($hasText && !$errorSent && $sources !== [] && !LlmAdapterHelpers::clientAborted()) {
+            $onChunk(LlmAdapterHelpers::sourcesMarkdown($sources));
+        }
 
         // Erreur restée en tampon, arrêt anormal du modèle (longueur, filtre…),
         // ou flux vide : une seule clôture pour tous les adaptateurs compatibles.
@@ -238,6 +343,7 @@ class DeepSeekAdapter implements LLMInterface
             'input_cached' => $tokensInCached,
             'input_cache_write' => 0,
             'output_reasoning' => $tokensOutReasoning,
+            'web_searches' => $searches,
         ] + ($stop !== null ? ['stop' => $stop] : []);
     }
 

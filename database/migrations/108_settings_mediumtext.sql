@@ -1,0 +1,11 @@
+-- Réglages plus grands que 64 Ko.
+--
+-- `settings.value` était un TEXT : 65 535 octets au plus. La configuration de
+-- Tarifs & crédits (`credits_config_json`) y range une ligne par service — cinq
+-- par modèle activé — avec la source de chaque prix. Passé une vingtaine de
+-- modèles, « Mettre à jour coûts Internet » ne pouvait plus l'enregistrer :
+-- MySQL refusait l'écriture (1406 Data too long, mode strict) et le job
+-- échouait sur « La génération n'a pas abouti. Réessayez. », sans rien
+-- enregistrer. MEDIUMTEXT (16 Mo) pour tous les réglages : la table est petite,
+-- la conversion ne coûte rien.
+ALTER TABLE settings MODIFY `value` MEDIUMTEXT DEFAULT NULL;

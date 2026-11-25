@@ -109,6 +109,10 @@ final class UsageMeterContractTest extends TestCase
         self::assertStringContainsString('UsageSource::HTML_TOOL', self::src('src/Jobs/HtmlPageJob.php'));
         self::assertStringContainsString('UsageMeter::toolUse(', self::src('src/Jobs/GammaGenerationJob.php'));
 
+        // Apprentissage de la mémoire : compté dans le job, sans conversation.
+        $learner = self::src('src/Memory/MemoryLearner.php');
+        self::assertStringContainsString("UsageMeter::llm(\$llm, is_array(\$tokens) ? \$tokens : [], UsageSource::MEMORY_LEARN, ['user_id' => \$userId]);", $learner);
+
         $admin = self::src('src/Controllers/AdminController.php');
         self::assertStringContainsString('UsageSource::PROMPT_ASSIST', $admin);
         self::assertStringContainsString('UsageSource::PRICE_REFRESH', $admin);
@@ -194,7 +198,17 @@ final class UsageMeterContractTest extends TestCase
         // pagehide. Le socle est PARTAGÉ par la dictée et la conversation vocale.
         self::assertGreaterThanOrEqual(3, substr_count($js, 'reportDictationUsage();'));
         self::assertStringContainsString('function reconnectLater(', $js);
-        self::assertSame(2, substr_count($js, 'createRealtimeTranscriber({'), 'dictée ET conversation vocale sur le même socle');
+        // Conversation vocale : socle Realtime, DEUX sessions — celle qui écoute
+        // les demandes, et celle où le micro part pendant la lecture (« stop »
+        // compris en une seconde, cf. VoiceHandsFreeTest). Chacune rapporte
+        // ses secondes par ce même socle : aucune minute écoutée n'échappe au
+        // grand livre. Dictée : le moteur choisi par l'administrateur — le
+        // même socle Realtime, ou Voxtral (facturé côté serveur sur la durée
+        // mesurée par Mistral, cf. VoxtralDictationTest).
+        self::assertSame(2, substr_count($js, 'createRealtimeTranscriber({'), 'conversation vocale sur le socle Realtime');
+        self::assertStringContainsString("purpose: 'conversation',", $js);
+        self::assertStringContainsString("purpose: 'interruption',", $js);
+        self::assertStringContainsString("engine === 'mistral' ? createVoxtralTranscriber : createRealtimeTranscriber", $js);
     }
 
     /**
@@ -208,15 +222,27 @@ final class UsageMeterContractTest extends TestCase
         $chat = self::src('src/Controllers/ChatController.php');
         self::assertStringContainsString('public function speakMessage(string $id): void', $chat);
         self::assertStringContainsString('UsageMeter::speech(', $chat);
-        self::assertStringContainsString('public static function speech(string $model, float $seconds, array $ctx = []): array', self::src('src/Billing/UsageMeter.php'));
+        self::assertStringContainsString('public static function speech(string $model, float $seconds, array $ctx = [], string $provider = \'openai\', int $chars = 0): array', self::src('src/Billing/UsageMeter.php'));
         self::assertStringContainsString('UsageSource::SPEECH', self::src('src/Billing/UsageMeter.php'));
-        self::assertStringContainsString('public static function computeSpeechCredits(string $model, float $minutes): array', self::src('src/Models/CreditService.php'));
+        self::assertStringContainsString('public static function computeSpeechCredits(string $model, float $minutes, string $provider = \'openai\', int $chars = 0): array', self::src('src/Models/CreditService.php'));
+        // Chaque voix de lecture a son tarif curé : à la minute (OpenAI), au
+        // million de caractères (Voxtral, facturé au texte).
         $llm = require ROOT . '/config/llm_catalog.php';
         self::assertArrayHasKey('default', $llm['openai']['speech_pricing_usd_per_minute']);
-        self::assertArrayHasKey(SpeechSynthesizer::MODEL, $llm['openai']['speech_pricing_usd_per_minute']);
+        foreach (SpeechSynthesizer::ENGINES as $engine => $info) {
+            $table = $info['provider'] === 'mistral'
+                ? $llm['mistral']['speech_pricing_usd_per_1m_chars']
+                : $llm['openai']['speech_pricing_usd_per_minute'];
+            self::assertArrayHasKey($info['model'], $table, "voix « $engine » sans tarif curé");
+        }
+        // `default` = le plus cher : jamais une sous-facturation muette.
+        $table = $llm['openai']['speech_pricing_usd_per_minute'];
+        self::assertSame(max($table), $table['default']);
         $admin = self::src('src/Controllers/AdminController.php');
-        self::assertStringContainsString("'catalog_key' => 'speech:openai::' . SpeechSynthesizer::MODEL,", $admin);
-        self::assertStringContainsString("str_starts_with(\$key, 'speech:openai::')", $admin);
+        self::assertStringContainsString("'catalog_key' => 'speech:openai::' . \$modelName,", $admin);
+        self::assertStringContainsString("'catalog_key' => 'speech:mistral::' . SpeechSynthesizer::MISTRAL_MODEL,", $admin);
+        self::assertStringContainsString("'unit' => CreditService::UNIT_1M_CHARACTERS,", $admin);
+        self::assertStringContainsString("preg_match('/^speech:([a-z0-9_.-]+)::(.+)\$/i', \$key, \$sm)", $admin);
     }
 
     public function testLesCataloguesPortentLesTarifsCuresDeRepli(): void

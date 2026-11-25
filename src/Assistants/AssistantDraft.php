@@ -192,6 +192,9 @@ final class AssistantDraft
                 'docs'        => (int)($kb['doc_count'] ?? 0),
                 'active'      => (int)($kb['is_active'] ?? 1) === 1,
                 'live'        => KnowledgeBase::isRemote($kb),
+                // Table permanente : des lignes à lire, pas des documents.
+                'table'       => KnowledgeBase::isTable($kb),
+                'rows'        => (int)($kb['table_rows'] ?? 0),
             ];
         }
         $tools = [];
@@ -757,6 +760,8 @@ final class AssistantDraft
         $config = is_array($config) ? $config : [];
         $config['size']         = '1024x1024';
         $config['aspect_ratio'] = '1:1';
+        // Une orientation réglée sur l'outil (ImageOptions) primerait sur la taille.
+        $config['format']       = 'square';
         $tool['config_json'] = (string)json_encode($config, JSON_UNESCAPED_UNICODE);
         return $tool;
     }

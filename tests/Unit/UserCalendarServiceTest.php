@@ -153,7 +153,8 @@ final class UserCalendarServiceTest extends TestCase
         $this->assertSame('Créer un évènement Google Agenda', $p['action']);
         $this->assertStringContainsString('Réunion budget', $p['fichier']);
         $this->assertStringContainsString('Salle A', $p['fichier']);
-        $this->assertStringContainsString('SANS envoi d\'invitation', implode(' ', $p['impacts']));
+        // Par défaut, Google Agenda envoie l'invitation : la carte le dit et nomme l'invité.
+        $this->assertStringContainsString('enverra AUSSITÔT une invitation par email, en votre nom, à : alice@example.com', implode(' ', $p['impacts']));
         $this->assertSame('Ordre du jour : budget T3.', $p['apercu']);
         $this->assertSame('/assets/img/google-calendar.svg', $p['icone']);
     }

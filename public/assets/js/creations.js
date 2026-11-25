@@ -266,6 +266,16 @@ pre { max-width: 100%; overflow: auto; }
             location.href = '/chat/' + card.dataset.convId;
             return;
         }
+        // Version soignée : un fichier Office n'a pas d'aperçu ici — la carte
+        // l'ouvre là où il se lit (gamma.app) ou le télécharge.
+        if (card.dataset.type === 'polished_file') {
+            if (card.dataset.openUrl) {
+                window.open(card.dataset.openUrl, '_blank', 'noopener');
+            } else if (card.dataset.url) {
+                saveDirect(card.dataset.url, card.dataset.filename);
+            }
+            return;
+        }
         openViewer(card);
     }
 
@@ -573,6 +583,14 @@ pre { max-width: 100%; overflow: auto; }
 
         if (kind === 'direct') {
             saveDirect(btn.dataset.url, btn.dataset.filename);
+            return;
+        }
+        // Export Gamma : servi par Gamma (autre origine), l'attribut download
+        // n'y vaut rien — un nouvel onglet le télécharge.
+        if (kind === 'external') {
+            if (/^https:\/\//.test(btn.dataset.url || '')) {
+                window.open(btn.dataset.url, '_blank', 'noopener');
+            }
             return;
         }
         if (kind === 'deck') {

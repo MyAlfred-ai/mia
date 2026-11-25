@@ -17,6 +17,11 @@ declare(strict_types=1);
  * carte à modifier — sont relus ICI, dans le dossier de l'exécution, qui doit
  * appartenir à la personne : jamais un chemin reçu.
  *
+ * Une ÉTAPE peut aussi remettre une création (`output.form` image, page,
+ * carte) : son tour de conversation rédige la demande (avec son assistant et
+ * ses sources), puis le moteur enfile ce même job avec cette demande — la
+ * brique est alors vue comme une création par `forStep()`.
+ *
  * Pièces remises (workflow_artifacts.content_json) :
  *   image → { url, mime, width, height, prompt, revised_prompt, msg_id, tool }
  *   page  → { html, title, illustrated, msg_id, tool }
@@ -80,7 +85,7 @@ final class WorkflowCreations
      * Outils de création ouverts à la personne — même périmètre que le menu
      * « + » (groupes actifs, administrateur) —, grisés avec leur raison.
      *
-     * @return array<int, array{id: int, name: string, type: string, kind: string, reason: ?string, can_edit: bool}>
+     * @return array<int, array{id: int, name: string, type: string, kind: string, reason: ?string, can_edit: bool, image_caps: ?array}>
      */
     public static function toolsFor(array $user): array
     {
@@ -96,6 +101,8 @@ final class WorkflowCreations
                         'kind'     => $kind,
                         'reason'   => ScheduledTask::toolUnavailableReason($tool),
                         'can_edit' => $kind === 'image' && ImageGenerator::supportsImageEdit($tool),
+                        // Fond, format du fichier, orientation que l'outil accepte.
+                        'image_caps' => $kind === 'image' ? ImageOptions::capabilitiesOf($tool) : null,
                     ];
                 }
             }
@@ -131,6 +138,44 @@ final class WorkflowCreations
     // ==================================================================
     // Demande (moteur)
     // ==================================================================
+
+    /**
+     * Une étape qui remet une création, vue comme une brique Création : sa
+     * demande est celle que le tour de l'étape vient de rédiger (`$brief`),
+     * son outil et ses réglages ceux de sa pièce. Elle ne lit, pour l'outil,
+     * que les pièces qui servent de point de départ — images à reprendre,
+     * page ou carte de même nature à modifier : le reste du dossier est déjà
+     * dans la demande rédigée.
+     */
+    public static function forStep(array $def, array $step, string $brief): array
+    {
+        $o = $step['output'];
+        $kind = (string)$o['form'];
+        $pieces = WorkflowSpec::pieces($def);
+        $reads = [];
+        foreach (WorkflowSpec::readsOf($def, $step) as $k) {
+            $form = (string)($pieces[$k]['form'] ?? '');
+            // Une image (créée, ou fichier image reçu : request() le reconnaît)
+            // pour une image ; une image à insérer pour une page ; la page ou
+            // la carte à modifier.
+            if ($form === $kind || ($form === 'image' && $kind !== 'map') || ($form === 'file' && $kind === 'image')) {
+                $reads[] = $k;
+            }
+        }
+        return [
+            'key'         => $step['key'],
+            'type'        => WorkflowSpec::TYPE_CREATE,
+            'title'       => $step['title'],
+            'kind'        => $kind,
+            'tool_id'     => $o['tool_id'] ?? null,
+            'instruction' => $brief,
+            'reads'       => $reads,
+            'options'     => (array)($o['options'] ?? []),
+            'review'      => !empty($step['review']),
+            'output'      => $o,
+            'on_error'    => $step['on_error'] ?? ['retries' => 0, 'then' => WorkflowSpec::ON_ERROR_STOP],
+        ];
+    }
 
     /**
      * Ce avec quoi la brique part, d'après le dossier qu'elle voit :
@@ -182,6 +227,9 @@ final class WorkflowCreations
             $format = (string)($node['options']['format'] ?? '');
             if ($format !== '') {
                 $prompt .= "\n\nFormat attendu : " . ['square' => 'carré', 'landscape' => 'paysage (plus large que haut)', 'portrait' => 'portrait (plus haut que large)'][$format] . '.';
+            }
+            if (($node['options']['background'] ?? '') === 'transparent') {
+                $prompt .= "\n\nFond transparent : le sujet seul, détouré, sans décor ni fond coloré.";
             }
             return ['prompt' => $prompt, 'context' => self::imageContext($pieces, $artifacts, $reads, $sources), 'sources' => $sources, 'base' => null];
         }

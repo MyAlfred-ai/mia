@@ -71,4 +71,75 @@ final class LlmRetirementPipelineTest extends DatabaseTestCase
         $this->assertArrayNotHasKey('llm_arret_annonce', $constats);
         $this->assertArrayHasKey('llm_defaut_a_confirmer', $constats);
     }
+
+    /**
+     * Le défaut corrigé : un modèle activé avant d'être retiré du catalogue de
+     * MIA (o4-mini) restait dans le chat après sa coupure, et un modèle de
+     * référence de clé saisi en texte libre (gpt-5-nano) restait servi. Leur
+     * arrêt est désormais connu (`retired_models`), sans écriture en base.
+     */
+    public function testUnModeleHorsCatalogueQuitteLeChatASaDate(): void
+    {
+        ApiKey::save('openai', 'sk-test-factice', 'gpt-5-nano');
+        $this->activer('o4-mini', 'o4-mini');
+        $this->activer('gpt-5-2025-08-07', 'GPT-5 (figé)');
+        $this->activer('gpt-6-luna', 'GPT-6 Luna');
+
+        LlmCatalog::setToday('2026-10-22');
+        $dispo = LLMFactory::available();
+        $this->assertArrayHasKey('openai::o4-mini', $dispo);
+        $this->assertArrayHasKey('openai::gpt-5-2025-08-07', $dispo);
+        $this->assertSame('gpt-5-nano', ApiKey::getModel('openai'));
+        $constats = array_column(AdminAttention::current(), null, 'id');
+        $this->assertStringContainsString('o4-mini (le 23/10/2026, remplaçant : GPT-5.6 Terra)', $constats['llm_arret_annonce']['text']);
+        $this->assertStringContainsString('GPT-5 (figé) (le 11/12/2026, remplaçant : GPT-5.6 Sol)', $constats['llm_arret_annonce']['text']);
+
+        LlmCatalog::setToday('2026-11-12');
+        AdminAttention::forget();
+        $dispo = LLMFactory::available();
+        $this->assertArrayNotHasKey('openai::o4-mini', $dispo);
+        $this->assertArrayHasKey('openai::gpt-5-2025-08-07', $dispo, 'encore servi jusqu\'au 11/12/2026');
+        $this->assertSame('gpt-5-nano', ApiKey::getModel('openai'));
+
+        LlmCatalog::setToday('2026-12-11');
+        AdminAttention::forget();
+        $dispo = LLMFactory::available();
+        $this->assertSame(['openai::gpt-6-luna'], array_keys($dispo));
+        $this->assertNull(ApiKey::getModel('openai'), 'le modèle de la clé n\'est plus servi');
+        $this->assertSame(3, (int)$this->db()->query("SELECT COUNT(*) FROM llm_models")->fetchColumn(), 'rien n\'est écrit en base');
+        $constats = array_column(AdminAttention::current(), null, 'id');
+        $this->assertStringContainsString('o4-mini', $constats['llm_modeles_arretes']['text']);
+        $this->assertStringContainsString('GPT-5 (figé)', $constats['llm_modeles_arretes']['text']);
+    }
+
+    /**
+     * Autres éditeurs : DeepSeek V3 resté activé avec son modèle de clé,
+     * Mistral Medium 3.1 activé à côté de Mistral Large 4.
+     */
+    public function testUnAncienModeleDUnAutreEditeurQuitteLeChat(): void
+    {
+        ApiKey::save('deepseek', 'sk-test-factice', 'deepseek-chat');
+        ApiKey::save('mistral', 'sk-test-factice', 'mistral-medium-2508');
+        LlmModel::save(['provider' => 'deepseek', 'model' => 'deepseek-chat', 'display_name' => 'DeepSeek V3', 'is_active' => 1]);
+        LlmModel::save(['provider' => 'mistral', 'model' => 'mistral-medium-2508', 'display_name' => 'Mistral Medium 3.1', 'is_active' => 1]);
+        LlmModel::save(['provider' => 'mistral', 'model' => 'mistral-large-4-0', 'display_name' => 'Mistral Large 4', 'is_active' => 1]);
+
+        LlmCatalog::setToday('2026-07-23');
+        $dispo = LLMFactory::available();
+        $this->assertArrayHasKey('deepseek::deepseek-chat', $dispo);
+        $this->assertArrayHasKey('mistral::mistral-medium-2508', $dispo);
+        $this->assertSame('deepseek-chat', ApiKey::getModel('deepseek'));
+
+        LlmCatalog::setToday('2026-11-12');
+        AdminAttention::forget();
+        $dispo = LLMFactory::available();
+        $this->assertArrayNotHasKey('deepseek::deepseek-chat', $dispo);
+        $this->assertArrayNotHasKey('mistral::mistral-medium-2508', $dispo);
+        $this->assertArrayHasKey('mistral::mistral-large-4-0', $dispo);
+        $this->assertNull(ApiKey::getModel('deepseek'), 'le défaut du catalogue (V4.1 Flash) prend la relève');
+        $this->assertNull(ApiKey::getModel('mistral'));
+        $constats = array_column(AdminAttention::current(), null, 'id');
+        $this->assertStringContainsString('DeepSeek V3', $constats['llm_modeles_arretes']['text']);
+        $this->assertStringContainsString('Mistral Medium 3.1', $constats['llm_modeles_arretes']['text']);
+    }
 }

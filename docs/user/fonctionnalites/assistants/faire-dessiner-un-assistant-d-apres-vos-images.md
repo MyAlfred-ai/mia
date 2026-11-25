@@ -24,7 +24,7 @@ partir d'une description. Ce qu'est un assistant : [Les assistants](index.md).
 ## Étapes
 
 1. Ouvrez la fiche de l'assistant.
-2. **Comportement → Capacités — génération d'image** : cochez l'outil image.
+2. Section **Capacités**, **Génération d'image** : cochez l'outil image.
 3. Déposez vos images à l'un de ces deux endroits :
    - **Connaissances → Documents de référence** : quelques images propres à cet assistant. La
      **première** déposée devient son point de départ quand rien d'autre n'est demandé ;

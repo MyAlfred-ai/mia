@@ -48,12 +48,14 @@ comptes reliés, pas lesquels.
 indirectement, par les modèles qu'ils autorisent : presque tous savent se servir des connecteurs,
 mais pas Perplexity, ni le LLM local tant que vous ne l'avez pas déclaré capable.
 
-**Garde-fous.** MIA n'envoie jamais d'email et ne supprime jamais de fichier ; seul Google Tasks
-permet de supprimer — une tâche —, et chaque utilisateur peut l'interdire. Microsoft To Do, lui, ne
-supprime jamais : une tâche faite est marquée terminée. Slack et Microsoft Teams publient un message
-qui part aussitôt — mais jamais sans l'accord de la personne. Toute écriture passe par
-une approbation de l'utilisateur, et la carte nomme les mails, documents ou messages que MIA avait
-lus avant de la préparer.
+**Garde-fous.** MIA n'envoie un email que sur le bouton **Envoyer** de sa carte de relecture, après
+confirmation de la personne ; elle ne supprime jamais un fichier, un email ni un évènement. Seul
+Google Tasks permet de supprimer — une tâche —, et chaque utilisateur peut l'interdire. Microsoft To
+Do, lui, ne supprime jamais : une tâche faite est marquée terminée. Slack et Microsoft Teams publient
+un message qui part aussitôt, et une réunion Outlook avec invités leur envoie l'invitation dès
+l'approbation — mais jamais sans l'accord de la personne. Toute écriture passe par une approbation de
+l'utilisateur, et la carte nomme les mails, documents ou messages que MIA avait lus avant de la
+préparer.
 
 **Allumés à la main, ou par MIA.** Chaque utilisateur allume ses connecteurs dans le menu **+**, ou
 laisse MIA les activer elle-même au besoin (**Laisser MIA choisir**, proposé par défaut, désactivable
@@ -69,11 +71,18 @@ l'interrupteur **Recherche Internet** : la masquer coupe aussi la lecture de pag
 pages publiques : adresses de réseau interne, intranet et services du serveur sont refusés, y compris
 après une redirection.
 
-**Une exception à connaître : Slack.** C'est le seul connecteur dont l'écriture est immédiatement
-visible — un message approuvé part dans le canal et tout le monde le voit, là où Gmail et Outlook
-s'arrêtent au brouillon. MIA ne peut ensuite ni le modifier ni le supprimer, et ne voit jamais un
-canal privé dont la personne n'est pas membre. Si ce périmètre ne convient pas, laissez le
-connecteur **Masqué**.
+**Les écritures visibles par d'autres.** Un message **Slack** ou **Teams** approuvé part dans le canal
+et tout le monde le voit ; MIA ne peut ensuite ni le modifier ni le supprimer, et ne voit jamais un
+canal privé dont la personne n'est pas membre. Un email part quand la personne clique **Envoyer**
+puis confirme ; sinon il reste un brouillon. Une réunion du **calendrier Outlook** avec invités leur
+envoie l'invitation dès l'approbation, et chaque modification les en informe : Microsoft ne permet
+pas de créer une réunion sans prévenir ses invités. Si l'un de ces périmètres ne convient pas,
+laissez le connecteur **Masqué**.
+
+**Tâches programmées et workflows « sans validation ».** Une réunion avec invités n'y est créée ou
+modifiée seule que si la tâche ou l'étape a aussi le droit d'**envoyer les emails** ; sinon, elle
+attend l'accord de la personne dans une carte. Le filtre de destinataires d'un workflow vaut aussi
+pour les invités.
 
 **Le coût.** Les appels à Google et Microsoft ne coûtent rien ; les recherches Internet sont facturées
 à l'unité, sur les lignes « Recherche web » de **Tarifs & crédits**.
@@ -86,6 +95,7 @@ connecteur **Masqué**.
 | Inscriptions d'applications, autorisations Microsoft Graph, consentement | Microsoft Entra ID, puis Organisation → Authentification | Outlook, Calendrier Outlook, Microsoft To Do, OneDrive, SharePoint, et la connexion par Microsoft | [Autoriser MIA dans Microsoft Entra ID](autoriser-mia-dans-microsoft-entra-id.md) |
 | Projet, API, scopes, audience, commandes des API | Console Google Cloud, console d'administration Google, puis Organisation → Authentification | Google Drive, Gmail, Google Agenda, Google Tasks, les clés API des bases, et la connexion par Google | [Autoriser MIA dans Google Workspace](autoriser-mia-dans-google-workspace.md) |
 | Application Slack, autorisations utilisateur, URL de retour | api.slack.com, puis Connecteurs → Configurer l'application Slack | Le connecteur Slack | [Configurer l'application Slack](configurer-l-application-slack.md) |
+| Passerelle, connexion Microsoft ou jetons personnels, manifeste | Capacités → Connecteurs → Claude dans Office, Microsoft Entra ID, centre d'administration Microsoft 365 | L'add-in Claude d'Excel, Word et PowerPoint passe par MIA, sans compte Claude par personne | [Brancher Claude dans Office sur MIA](claude-dans-office.md) |
 | Application OneDrive, application SharePoint, clés API | Capacités → Sources synchronisées | La synchronisation des bases | [Configurer les sources synchronisées](../bases-de-connaissances/configurer-les-sources-synchronisees.md) |
 
 ## Exemples de configuration

@@ -8,6 +8,7 @@
     <link rel="icon" href="<?= htmlspecialchars(Settings::get('logo_url', '/assets/img/logo.png')) ?>">
     <title><?= te('Usage —') ?> <?= htmlspecialchars(Settings::get('app_name', 'MIA')) ?></title>
     <link rel="stylesheet" href="/assets/css/main.css?v=<?= (int)(@filemtime(ROOT . '/public/assets/css/main.css') ?: 1) ?>">
+    <link rel="stylesheet" href="/assets/css/usage-history.css?v=<?= (int)(@filemtime(ROOT . '/public/assets/css/usage-history.css') ?: 1) ?>">
     <?php require ROOT . '/templates/partials/theme-vars.php'; ?>
 </head>
 <body class="admin-page">
@@ -16,14 +17,36 @@
 
 <!-- Contenu -->
 <div class="admin-content">
-    <div style="max-width:900px">
+    <?php require ROOT . '/templates/partials/admin-topbar.php'; ?>
+    <?php $usageView = $usageView ?? 'month'; ?>
+    <div class="pu-page<?= $usageView === 'history' ? ' is-history' : '' ?>">
         <?php // Même nom que l'entrée du menu (« Usage ») : un seul nom pour une page. ?>
-        <h1 style="margin-bottom:6px"><?= te('Usage & crédits') ?></h1>
-        <p style="color:var(--text-muted);font-size:14px;margin-bottom:28px">
+        <header class="page-head">
+        <div class="page-head-text">
+            <h1 style="margin-bottom:6px"><?= te('Usage & crédits') ?></h1>
+            <p class="page-head-sub">
+            <?php if ($usageView === 'history'): ?>
+            <?= te('Toutes vos opérations, mois après mois : filtrez, recherchez, exportez.') ?>
+            <?php else: ?>
             <?= te('Consommation du mois de {mois}', ['mois' => Format::monthLabel(date('Y-m'))]) ?>
+            <?php if (empty($quotaStatus['demo'])): // Démo : l'enveloppe ne se réinitialise pas. ?>
             · <?= te('Réinitialisation le {date}', ['date' => Format::dateFr(date('Y-m-d', strtotime($resetDate)))]) ?>
             (<?= htmlspecialchars(I18n::plural((int)$daysUntilReset, 'dans {n} jour', 'dans {n} jours')) ?>)
+            <?php endif; ?>
+            <?php endif; ?>
         </p>
+        </div>
+        </header>
+
+        <?php // Deux onglets, une page : le mois en cours (solde, prévision) et l'historique (toutes les périodes). ?>
+        <nav class="admin-tabs pu-tabs" aria-label="<?= te('Usage & crédits') ?>">
+            <a href="/settings/usage" class="admin-tab<?= $usageView === 'month' ? ' active' : '' ?>"<?= $usageView === 'month' ? ' aria-current="page"' : '' ?>><?= te('Ce mois-ci') ?></a>
+            <a href="/settings/usage?vue=<?= htmlspecialchars(UserSettingsController::USAGE_HISTORY_VIEW) ?>" class="admin-tab<?= $usageView === 'history' ? ' active' : '' ?>"<?= $usageView === 'history' ? ' aria-current="page"' : '' ?>><?= te('Historique') ?></a>
+        </nav>
+
+        <?php if ($usageView === 'history'): ?>
+            <?php require ROOT . '/templates/settings/usage-history.php'; ?>
+        <?php else: ?>
 
         <?php
         /**
@@ -93,6 +116,7 @@
         };
         $catIcons = [
             UsageSource::CAT_CHAT        => '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
+            UsageSource::CAT_OFFICE      => '<rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="9" x2="9" y2="21"/>',
             UsageSource::CAT_CHAT_ASSIST => '<path d="M12 3l1.8 4.6L18 9l-4.2 1.4L12 15l-1.8-4.6L6 9l4.2-1.4z"/><path d="M19 15l.8 2 2 .8-2 .8-.8 2-.8-2-2-.8 2-.8z"/>',
             UsageSource::CAT_WEB_SEARCH  => '<circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>',
             UsageSource::CAT_CREATION    => '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/>',
@@ -107,6 +131,34 @@
         ?>
 
         <!-- ================= Solde et prévision ================= -->
+        <?php if (!empty($quotaStatus['demo'])): ?>
+        <?php
+        // Compte de démo : une enveloppe sans renouvellement — ni prévision
+        // mensuelle, ni date de fin. Juste ce qui reste (DemoAccount).
+        $demoRemaining = (int)($quotaStatus['remaining'] ?? 0);
+        $demoMax       = (int)($quotaStatus['quota_max'] ?? 0);
+        $demoUsed      = (int)($quotaStatus['used'] ?? 0);
+        $demoPct       = (int)($quotaStatus['percent'] ?? 0);
+        $demoEnded     = ($quotaStatus['reason'] ?? null) === CreditQuota::REASON_QUOTA;
+        $demoEmail     = DemoAccount::contactEmail();
+        ?>
+        <section class="card pu-hero" aria-labelledby="puBalance">
+            <div class="pu-hero-top">
+                <span class="pu-pill <?= $demoEnded ? 'is-danger' : 'is-muted' ?>"><?= $demoEnded ? te('Démo terminée') : te('Compte de démonstration') ?></span>
+            </div>
+            <p class="pu-balance" id="puBalance"><?= Format::credits($demoRemaining) ?> <span><?= te('crédits de démo restants sur {max}', ['max' => Format::credits($demoMax)]) ?></span></p>
+            <div class="pu-gauge <?= $demoEnded ? 'is-danger' : 'is-ok' ?>" role="img"
+                 aria-label="<?= te('{pct} % de vos crédits de démo utilisés', ['pct' => $demoPct]) ?>">
+                <span class="pu-gauge-fill" style="width:<?= max($demoPct, $demoUsed > 0 ? 1 : 0) ?>%"></span>
+            </div>
+            <?php if ($demoEnded): ?>
+                <p class="pu-note"><strong><?= htmlspecialchars(DemoAccount::endedTitle()) ?></strong> — <?= htmlspecialchars(DemoAccount::endedMessageForInstance()) ?></p>
+                <?php if ($demoEmail !== ''): ?>
+                    <p style="margin:12px 0 0"><a class="btn-primary demo-ended-mail" href="<?= htmlspecialchars(DemoAccount::mailtoHref($demoEmail)) ?>"><?= te('Écrire à {email}', ['email' => $demoEmail]) ?></a></p>
+                <?php endif; ?>
+            <?php endif; ?>
+        </section>
+        <?php else: ?>
         <section class="card pu-hero" aria-labelledby="puBalance">
             <div class="pu-hero-top">
                 <span class="pu-pill <?= $pillClass ?>"><?= htmlspecialchars($pillText) ?></span>
@@ -149,6 +201,7 @@
                 </p>
             <?php endif; ?>
         </section>
+        <?php endif; ?>
 
         <!-- ================= Camemberts d'utilisation ================= -->
         <?php
@@ -184,6 +237,22 @@
                                 <span><?= htmlspecialchars($s['label']) ?><?php if (!empty($s['exempt'])): ?> <em><?= te('hors quota') ?></em><?php endif; ?></span>
                                 <b><?= htmlspecialchars($sharePct((float)$s['share'])) ?></b>
                             </li>
+                            <?php // « Autres » dit ce qu'il regroupe : une petite consommation reste lisible. ?>
+                            <?php if (!empty($s['members'])):
+                                $members = array_slice($s['members'], 0, PersonalUsage::RING_MEMBERS_SHOWN);
+                                $hidden  = count($s['members']) - count($members); ?>
+                                <?php foreach ($members as $m): ?>
+                                    <li class="pu-legend-member">
+                                        <i style="background:<?= htmlspecialchars((string)($m['color'] ?? '')) ?>"></i>
+                                        <span><?= htmlspecialchars((string)$m['label']) ?><?php if (!empty($m['exempt'])): ?> <em><?= te('hors quota') ?></em><?php endif; ?></span>
+                                        <?php // Ses crédits plutôt que sa part : dans « Autres », chacune pèse moins de quelques %. ?>
+                                        <b title="<?= htmlspecialchars($sharePct((float)$m['share'])) ?>"><?= te('{n} crédits', ['n' => Format::credits((int)round((float)$m['value']))]) ?></b>
+                                    </li>
+                                <?php endforeach; ?>
+                                <?php if ($hidden > 0): ?>
+                                    <li class="pu-legend-member is-more"><span></span><span><?= htmlspecialchars(I18n::plural($hidden, 'et {n} autre', 'et {n} autres')) ?></span></li>
+                                <?php endif; ?>
+                            <?php endif; ?>
                         <?php endforeach; ?>
                     </ul>
                 <?php endif; ?>
@@ -215,6 +284,7 @@
                         'image'  => static fn(int $n): string => t('une image ≈ {n}', ['n' => Format::credits($n)]),
                         'search' => static fn(int $n): string => t('une recherche Internet ≈ {n}', ['n' => Format::credits($n)]),
                         'minute' => static fn(int $n): string => t('une minute de voix ≈ {n}', ['n' => Format::credits($n)]),
+                        'office' => static fn(int $n): string => t('une demande dans Office ≈ {n}', ['n' => Format::credits($n)]),
                     ];
                     $units = [];
                     foreach ($unitCosts as $k => $n) {
@@ -237,7 +307,7 @@
             </div>
             <?php if (!empty($top10)): ?>
                 <div class="table-wrap">
-                    <table class="pu-top">
+                    <table class="pu-top table-stack">
                         <thead>
                             <tr>
                                 <th><?= te('Opération') ?></th>
@@ -290,7 +360,57 @@
             <?php else: ?>
                 <p class="pu-muted"><?= te('Aucune opération facturée ce mois.') ?></p>
             <?php endif; ?>
+            <p class="pu-more-link"><a href="/settings/usage?vue=<?= htmlspecialchars(UserSettingsController::USAGE_HISTORY_VIEW) ?>&amp;preset=current_month"><?= te('Toutes les opérations du mois, et des précédents, dans l’historique →') ?></a></p>
         </section>
+
+        <!-- ================= Workflows ================= -->
+        <?php if ($workflowRows !== []): ?>
+        <section class="card pu-card" aria-labelledby="puWorkflowsTitle">
+            <div class="card-head">
+                <span class="card-ic"><?= $svg(Workflow::ICON_PATHS, 20) ?></span>
+                <div class="card-head-text">
+                    <h3 id="puWorkflowsTitle"><?= te('Vos workflows ce mois-ci') ?></h3>
+                    <p><?= $quotaCredits > 0
+                        ? te('{n} crédits, soit {part} % de vos crédits du mois. Ils sont déjà comptés ci-dessus, surtout dans « Conversations ».', [
+                            'n' => Format::credits((int)$workflowCredits),
+                            'part' => (int)round($workflowCredits / $quotaCredits * 100),
+                        ])
+                        : te('{n} crédits. Ils sont déjà comptés ci-dessus, surtout dans « Conversations ».', ['n' => Format::credits((int)$workflowCredits)]) ?></p>
+                </div>
+            </div>
+            <div class="table-wrap">
+                <table class="pu-top table-stack">
+                    <thead>
+                        <tr>
+                            <th><?= te('Workflow') ?></th>
+                            <th class="is-num"><?= te('Exécutions') ?></th>
+                            <th class="is-num"><?= te('Crédits') ?></th>
+                            <th class="is-num" title="<?= te('Crédits par exécution, en moyenne') ?>"><?= te('Par exécution') ?></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php foreach ($workflowRows as $w): ?>
+                            <tr>
+                                <td>
+                                    <span class="pu-op">
+                                        <i class="pu-wf-dot"<?= $w['color'] !== '' ? ' style="background:' . htmlspecialchars($w['color']) . '"' : '' ?>></i>
+                                        <?php if ($workflowLinks && $w['owner_id'] === $userId): ?>
+                                            <a href="/workflows?vue=historique&amp;workflow=<?= (int)$w['workflow_id'] ?>" title="<?= te('Voir ses exécutions') ?>"><?= htmlspecialchars($w['name']) ?></a>
+                                        <?php else: ?>
+                                            <span><?= htmlspecialchars($w['name']) ?></span>
+                                        <?php endif; ?>
+                                    </span>
+                                </td>
+                                <td class="is-num pu-muted"><?= Format::credits((int)$w['runs']) ?></td>
+                                <td class="is-num"><strong><?= Format::credits((int)$w['credits']) ?></strong></td>
+                                <td class="is-num pu-muted"><?= Format::credits((int)round((int)$w['credits'] / max(1, (int)$w['runs']))) ?></td>
+                            </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+        <?php endif; ?>
 
         <!-- ================= Conseils ================= -->
         <?php if ($tips !== []): ?>
@@ -362,8 +482,14 @@
         </details>
         <?php endif; ?>
 
-    </div><!-- /max-width -->
+        <?php endif; // vue « Ce mois-ci » ?>
+    </div><!-- /pu-page -->
 </div><!-- /admin-content -->
+
+<?php if ($usageView === 'history'): ?>
+<script src="/assets/js/period-picker.js?v=<?= (int)(@filemtime(ROOT . '/public/assets/js/period-picker.js') ?: 1) ?>"></script>
+<script src="/assets/js/usage-history.js?v=<?= (int)(@filemtime(ROOT . '/public/assets/js/usage-history.js') ?: 1) ?>"></script>
+<?php endif; ?>
 
 </body>
 </html>

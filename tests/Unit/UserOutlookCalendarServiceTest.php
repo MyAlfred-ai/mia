@@ -19,7 +19,7 @@ use PHPUnit\Framework\TestCase;
  *  - `Calendars.Read` est un PRÉFIXE de `Calendars.ReadWrite` ET de
  *    `Calendars.ReadBasic`, qui ne rend que des créneaux occupé/libre ;
  *  - aucun équivalent de `sendUpdates=none` : ajouter un participant l'INVITE,
- *    donc le connecteur refuse d'en ajouter.
+ *    donc la carte d'approbation nomme chaque invité.
  */
 final class UserOutlookCalendarServiceTest extends TestCase
 {
@@ -280,7 +280,7 @@ final class UserOutlookCalendarServiceTest extends TestCase
             $this->assertSame('2026-08-17T09:00:00', $payload['start']['dateTime']);
             $this->assertSame('Europe/Paris', $payload['start']['timeZone']);
             $this->assertSame('2026-08-17T10:30:00', $payload['end']['dateTime']);
-            $this->assertArrayNotHasKey('isAllDay', $payload);
+            $this->assertFalse($payload['isAllDay']);
             $this->assertSame('Salle 3', $payload['location']['displayName']);
             // Texte brut : jamais de HTML fabriqué depuis le texte du modèle.
             $this->assertSame('Text', $payload['body']['contentType']);
@@ -341,23 +341,340 @@ final class UserOutlookCalendarServiceTest extends TestCase
         }
     }
 
+    // ===================== Invités, réunion Teams, modalités =====================
+
     /**
-     * LE piège n° 4 : Graph n'a AUCUN équivalent de `sendUpdates=none`. Un
-     * évènement créé avec des participants les invite. Ignorer la demande en
-     * silence laisserait croire des invités conviés : on refuse, en l'expliquant.
+     * LE piège n° 4 : Graph n'a AUCUN équivalent de `sendUpdates=none` — un
+     * évènement créé avec des invités leur envoie l'invitation. Les invités
+     * sont donc acceptés (c'est la demande), et c'est la CARTE qui prévient.
      */
-    public function testAjouterDesParticipantsEstRefuseAvecExplication(): void
+    public function testLesInvitesPartentDansLaFormeDeGraph(): void
     {
-        foreach ([['invites' => 'alice@ex.fr'], ['participants' => ['alice@ex.fr']]] as $args) {
+        $payload = UserOutlookCalendarService::buildEventPayload([
+            'titre'              => 'Comité',
+            'debut'              => '2026-08-17 09:00',
+            'invites'            => 'Alice Martin <alice@ex.fr>; bob@ex.fr, ALICE@ex.fr',
+            'invites_optionnels' => ['carla@ex.fr', 'bob@ex.fr', 'moi@ex.fr'],
+        ], 'Moi@ex.fr');
+
+        $this->assertSame([
+            ['emailAddress' => ['address' => 'alice@ex.fr'], 'type' => 'required'],
+            ['emailAddress' => ['address' => 'bob@ex.fr'], 'type' => 'required'],
+            // Cité deux fois : obligatoire l'emporte ; l'organisateur ne s'invite pas.
+            ['emailAddress' => ['address' => 'carla@ex.fr'], 'type' => 'optional'],
+        ], $payload['attendees']);
+
+        // L'ancien nom du paramètre reste lu : l'ignorer laisserait croire des invités conviés.
+        $ancien = UserOutlookCalendarService::buildEventPayload([
+            'titre' => 'Comité', 'debut' => '2026-08-17 09:00', 'participants' => ['alice@ex.fr'],
+        ]);
+        $this->assertSame('alice@ex.fr', $ancien['attendees'][0]['emailAddress']['address']);
+    }
+
+    public function testUneAdresseDInviteInvalideEstRefuseeAvantLaCarte(): void
+    {
+        foreach (['Paul', 'paul@', 'alice@ex.fr, Paul Durand'] as $invites) {
             try {
-                UserOutlookCalendarService::buildEventPayload(
-                    $args + ['titre' => 'Réunion', 'debut' => '2026-08-17 09:00']
-                );
-                $this->fail('Participants acceptés à tort.');
+                UserOutlookCalendarService::buildEventPayload([
+                    'titre' => 'Réunion', 'debut' => '2026-08-17 09:00', 'invites' => $invites,
+                ]);
+                $this->fail('Adresse acceptée à tort : ' . $invites);
             } catch (\RuntimeException $e) {
-                $this->assertStringContainsString('invitation', $e->getMessage());
+                $this->assertStringContainsString('Adresse d\'invité invalide', $e->getMessage());
             }
         }
+        $trop = implode(',', array_map(static fn(int $i): string => "p$i@ex.fr", range(1, UserOutlookCalendarService::MAX_ATTENDEES + 1)));
+        $this->expectException(\RuntimeException::class);
+        UserOutlookCalendarService::buildEventPayload(['titre' => 'X', 'debut' => '2026-08-17 09:00', 'invites' => $trop]);
+    }
+
+    public function testReunionTeamsRappelEtReglages(): void
+    {
+        $payload = UserOutlookCalendarService::buildEventPayload([
+            'titre' => 'Point', 'debut' => '2026-08-17 09:00',
+            'visio' => 'true', 'rappel_minutes' => 30,
+            'disponibilite' => 'Provisoire', 'importance' => 'haute', 'confidentialite' => 'privée',
+        ]);
+        // Valeurs de la doc Graph (ressource event).
+        $this->assertTrue($payload['isOnlineMeeting']);
+        $this->assertSame('teamsForBusiness', $payload['onlineMeetingProvider']);
+        $this->assertTrue($payload['isReminderOn']);
+        $this->assertSame(30, $payload['reminderMinutesBeforeStart']);
+        $this->assertSame('tentative', $payload['showAs']);
+        $this->assertSame('high', $payload['importance']);
+        $this->assertSame('private', $payload['sensitivity']);
+
+        $this->assertSame(['isReminderOn' => false], UserOutlookCalendarService::optionsPayload(['rappel_minutes' => -1]));
+        // Rien demandé = rien envoyé (un PATCH ne doit porter que ce qui change).
+        $this->assertSame([], UserOutlookCalendarService::optionsPayload(['visio' => false, 'disponibilite' => '']));
+
+        $this->expectException(\RuntimeException::class);
+        UserOutlookCalendarService::optionsPayload(['disponibilite' => 'en vacances']);
+    }
+
+    public function testRecurrenceDansLaFormeDeGraph(): void
+    {
+        self::dansFuseau('Europe/Paris', function (): void {
+            // 2026-08-17 est un lundi.
+            $hebdo = UserOutlookCalendarService::buildEventPayload([
+                'titre' => 'Point', 'debut' => '2026-08-17 09:00',
+                'recurrence' => 'hebdomadaire', 'recurrence_jours' => 'lundi, Jeudi',
+                'recurrence_intervalle' => 2, 'recurrence_fin' => '2026-12-31',
+            ])['recurrence'];
+            // `weekly` exige daysOfWeek ET firstDayOfWeek (ressource recurrencePattern).
+            $this->assertSame(
+                ['type' => 'weekly', 'interval' => 2, 'daysOfWeek' => ['monday', 'thursday'], 'firstDayOfWeek' => 'monday'],
+                $hebdo['pattern']
+            );
+            // startDate = date du début de l'évènement (ressource recurrenceRange).
+            $this->assertSame(['type' => 'endDate', 'startDate' => '2026-08-17', 'endDate' => '2026-12-31'], $hebdo['range']);
+
+            $base = ['titre' => 'Point', 'debut' => '2026-08-17 09:00'];
+            $this->assertSame(
+                ['pattern' => ['type' => 'daily', 'interval' => 1], 'range' => ['type' => 'numbered', 'startDate' => '2026-08-17', 'numberOfOccurrences' => 5]],
+                UserOutlookCalendarService::buildEventPayload($base + ['recurrence' => 'quotidienne', 'recurrence_occurrences' => 5])['recurrence']
+            );
+            $this->assertSame(
+                ['type' => 'absoluteMonthly', 'interval' => 1, 'dayOfMonth' => 17],
+                UserOutlookCalendarService::buildEventPayload($base + ['recurrence' => 'mensuelle'])['recurrence']['pattern']
+            );
+            $annuelle = UserOutlookCalendarService::buildEventPayload($base + ['recurrence' => 'annuelle'])['recurrence'];
+            $this->assertSame(['type' => 'absoluteYearly', 'interval' => 1, 'dayOfMonth' => 17, 'month' => 8], $annuelle['pattern']);
+            $this->assertSame(['type' => 'noEnd', 'startDate' => '2026-08-17'], $annuelle['range']);
+            $ouvres = UserOutlookCalendarService::buildEventPayload($base + ['recurrence' => 'jours_ouvres'])['recurrence']['pattern'];
+            $this->assertSame(['monday', 'tuesday', 'wednesday', 'thursday', 'friday'], $ouvres['daysOfWeek']);
+
+            $this->assertArrayNotHasKey('recurrence', UserOutlookCalendarService::buildEventPayload($base + ['recurrence' => '']));
+
+            foreach ([
+                ['recurrence' => 'hebdomadaire', 'recurrence_jours' => 'mardi'],   // le début (lundi) n'est pas un jour de la série
+                ['recurrence' => 'quotidienne', 'recurrence_fin' => '2026-08-01'], // fin avant le début
+                ['recurrence' => 'tous les trois jours ouvrés'],                   // inconnue
+                ['recurrence' => 'hebdomadaire', 'recurrence_jours' => 'lundi, jeudredi'],
+            ] as $args) {
+                try {
+                    UserOutlookCalendarService::buildEventPayload($base + $args);
+                    $this->fail('Récurrence acceptée à tort : ' . json_encode($args));
+                } catch (\RuntimeException) {
+                    $this->addToAssertionCount(1);
+                }
+            }
+        });
+    }
+
+    /**
+     * Doc Graph (dateTimeTimeZone) : seuls les noms Windows et une liste
+     * FERMÉE de noms IANA sont garantis en écriture. Un fuseau de navigateur
+     * hors liste est remplacé par un fuseau de la liste qui a les mêmes heures.
+     */
+    public function testLeFuseauEcritEstUnFuseauQueGraphDocumente(): void
+    {
+        $quand = new \DateTimeImmutable('2026-08-17 09:00', new \DateTimeZone('Europe/Brussels'));
+        $this->assertSame('Europe/Paris', UserOutlookCalendarService::graphWriteZone('Europe/Paris', $quand));
+        $this->assertSame('UTC', UserOutlookCalendarService::graphWriteZone('UTC', $quand));
+
+        $zone = UserOutlookCalendarService::graphWriteZone('Europe/Brussels', $quand);
+        $this->assertNotSame('Europe/Brussels', $zone);
+        $this->assertNotSame('', $zone);
+        // Mêmes heures : l'heure locale envoyée désigne le même instant.
+        $this->assertSame(
+            $quand->getTimestamp(),
+            (new \DateTimeImmutable('2026-08-17 09:00', new \DateTimeZone($zone)))->getTimestamp()
+        );
+        $this->assertSame(
+            (new \DateTimeImmutable('2026-12-17 09:00', new \DateTimeZone('Europe/Brussels')))->getTimestamp(),
+            (new \DateTimeImmutable('2026-12-17 09:00', new \DateTimeZone($zone)))->getTimestamp()
+        );
+
+        $payload = UserOutlookCalendarService::buildEventPayload([
+            'titre' => 'Point', 'debut' => '2026-08-17 09:00', 'fuseau' => 'Europe/Brussels',
+        ]);
+        $this->assertSame('2026-08-17T09:00:00', $payload['start']['dateTime']);
+        $this->assertSame($zone, $payload['start']['timeZone']);
+
+        // Aucun équivalent documenté : l'instant part en UTC (toujours accepté).
+        $this->assertSame('', UserOutlookCalendarService::graphWriteZone('Pas/UnFuseau', $quand));
+        $kiev = new \DateTimeImmutable('2026-08-17 09:00', new \DateTimeZone('Asia/Kathmandu'));
+        $this->assertSame('Asia/Kathmandu', UserOutlookCalendarService::graphWriteZone('Asia/Kathmandu', $kiev));
+    }
+
+    // ===================== Modification =====================
+
+    /** Évènement tel que Graph le rend (bornes en UTC, sans décalage). */
+    private static function evenement(array $plus = []): array
+    {
+        return $plus + [
+            'id'          => 'AAMkAGI2TG93AAA=evenement00001',
+            'subject'     => 'Comité budget',
+            'start'       => ['dateTime' => '2026-08-17T07:00:00.0000000', 'timeZone' => 'UTC'],
+            'end'         => ['dateTime' => '2026-08-17T08:30:00.0000000', 'timeZone' => 'UTC'],
+            'isAllDay'    => false,
+            'isOrganizer' => true,
+            'attendees'   => [
+                ['type' => 'required', 'emailAddress' => ['address' => 'Alice@ex.fr', 'name' => 'Alice Martin'], 'status' => ['response' => 'accepted']],
+                ['type' => 'optional', 'emailAddress' => ['address' => 'bob@ex.fr', 'name' => 'Bob']],
+            ],
+        ];
+    }
+
+    public function testUneModificationNEnvoieQueCeQuiChange(): void
+    {
+        $plan = UserOutlookCalendarService::buildUpdatePayload(
+            ['evenement' => 'x', 'titre' => 'Comité budget 2027', 'fuseau' => 'Europe/Paris', 'visio' => false, 'lieu' => ''],
+            self::evenement()
+        );
+        $this->assertSame(['subject' => 'Comité budget 2027'], $plan['payload']);
+        // Des invités, et le titre change : Outlook leur écrit.
+        $this->assertTrue($plan['previent']);
+
+        // Réglage personnel : personne n'est prévenu.
+        $perso = UserOutlookCalendarService::buildUpdatePayload(['rappel_minutes' => 10, 'disponibilite' => 'libre'], self::evenement());
+        $this->assertSame(['isReminderOn' => true, 'reminderMinutesBeforeStart' => 10, 'showAs' => 'free'], $perso['payload']);
+        $this->assertFalse($perso['previent']);
+
+        $this->expectException(\RuntimeException::class);
+        UserOutlookCalendarService::buildUpdatePayload(['evenement' => 'x'], self::evenement());
+    }
+
+    public function testDeplacerGardeLaDureeEtLHeure(): void
+    {
+        // 07:00 → 08:30 UTC = 09:00 → 10:30 à Paris (été).
+        $args = ['fuseau' => 'Europe/Paris'];
+
+        $debut = UserOutlookCalendarService::buildUpdatePayload($args + ['debut' => '2026-08-18 14:00'], self::evenement())['payload'];
+        $this->assertFalse($debut['isAllDay']);
+        $this->assertSame(['dateTime' => '2026-08-18T14:00:00', 'timeZone' => 'Europe/Paris'], $debut['start']);
+        $this->assertSame('2026-08-18T15:30:00', $debut['end']['dateTime'], 'La durée (1 h 30) est gardée.');
+
+        // Une date seule déplace le JOUR, l'heure reste.
+        $jour = UserOutlookCalendarService::buildUpdatePayload($args + ['debut' => '2026-08-20'], self::evenement())['payload'];
+        $this->assertSame('2026-08-20T09:00:00', $jour['start']['dateTime']);
+        $this->assertSame('2026-08-20T10:30:00', $jour['end']['dateTime']);
+
+        // La fin seule garde le début.
+        $fin = UserOutlookCalendarService::buildUpdatePayload($args + ['fin' => '2026-08-17 12:00'], self::evenement())['payload'];
+        $this->assertSame('2026-08-17T09:00:00', $fin['start']['dateTime']);
+        $this->assertSame('2026-08-17T12:00:00', $fin['end']['dateTime']);
+
+        // Passage en journée entière : minuit, fin exclusive.
+        $jourEntier = UserOutlookCalendarService::buildUpdatePayload($args + ['journee_entiere' => true], self::evenement())['payload'];
+        $this->assertTrue($jourEntier['isAllDay']);
+        $this->assertSame('2026-08-17T00:00:00', $jourEntier['start']['dateTime']);
+        $this->assertSame('2026-08-18T00:00:00', $jourEntier['end']['dateTime']);
+
+        // Journée entière de deux jours déplacée : deux jours gardés.
+        $conges = self::evenement([
+            'isAllDay' => true,
+            'start'    => ['dateTime' => '2026-08-17T00:00:00.0000000', 'timeZone' => 'UTC'],
+            'end'      => ['dateTime' => '2026-08-19T00:00:00.0000000', 'timeZone' => 'UTC'],
+            'attendees' => [],
+        ]);
+        $deplace = UserOutlookCalendarService::buildUpdatePayload(['debut' => '2026-09-01', 'fuseau' => 'America/New_York'], $conges)['payload'];
+        $this->assertTrue($deplace['isAllDay']);
+        $this->assertSame('2026-09-01T00:00:00', $deplace['start']['dateTime']);
+        $this->assertSame('2026-09-03T00:00:00', $deplace['end']['dateTime']);
+
+        try {
+            UserOutlookCalendarService::buildUpdatePayload($args + ['fin' => '2026-08-17 08:00'], self::evenement());
+            $this->fail('Fin avant le début acceptée.');
+        } catch (\RuntimeException) {
+            $this->addToAssertionCount(1);
+        }
+    }
+
+    /**
+     * Piège n° 5 : `attendees` est la liste ENTIÈRE. Envoyer les seuls
+     * nouveaux retirerait les autres de la réunion.
+     */
+    public function testLesInvitesSontRecomposesSurLaListeActuelle(): void
+    {
+        $plan = UserOutlookCalendarService::buildUpdatePayload([
+            'ajouter_invites' => 'carla@ex.fr, alice@ex.fr, bob@ex.fr',
+            'retirer_invites' => '',
+        ], self::evenement());
+
+        $this->assertSame([
+            // Nom et adresse d'origine conservés ; déjà obligatoire : inchangée.
+            ['emailAddress' => ['address' => 'Alice@ex.fr', 'name' => 'Alice Martin'], 'type' => 'required'],
+            // Facultatif → obligatoire.
+            ['emailAddress' => ['address' => 'bob@ex.fr', 'name' => 'Bob'], 'type' => 'required'],
+            ['emailAddress' => ['address' => 'carla@ex.fr'], 'type' => 'required'],
+        ], $plan['payload']['attendees']);
+        $this->assertSame(['carla@ex.fr'], $plan['ajoutes']);
+        $this->assertTrue($plan['previent']);
+
+        $retrait = UserOutlookCalendarService::buildUpdatePayload(['retirer_invites' => 'ALICE@ex.fr'], self::evenement());
+        $this->assertCount(1, $retrait['payload']['attendees']);
+        $this->assertSame(['Alice@ex.fr'], $retrait['retires']);
+        $this->assertSame(['bob@ex.fr'], $retrait['invites']);
+
+        // Déjà invité au même titre : rien à envoyer.
+        try {
+            UserOutlookCalendarService::buildUpdatePayload(['ajouter_invites' => 'alice@ex.fr'], self::evenement());
+            $this->fail('Une modification sans effet a été acceptée.');
+        } catch (\RuntimeException $e) {
+            $this->assertStringContainsString('Aucune modification', $e->getMessage());
+        }
+        $this->expectException(\RuntimeException::class);
+        UserOutlookCalendarService::buildUpdatePayload(['retirer_invites' => 'zoe@ex.fr'], self::evenement());
+    }
+
+    public function testCeQuUneModificationRefuse(): void
+    {
+        $cas = [
+            // Qui n'organise pas ne touche ni au contenu ni aux invités.
+            [['titre' => 'Autre'], self::evenement(['isOrganizer' => false, 'organizer' => ['emailAddress' => ['name' => 'Zoé', 'address' => 'zoe@ex.fr']]]), 'organisateur'],
+            [['ajouter_invites' => 'c@ex.fr'], self::evenement(['isOrganizer' => false]), 'organisateur'],
+            // Piège n° 6 : le corps d'une réunion en ligne porte son lien.
+            [['description' => 'Nouvel ordre du jour'], self::evenement(['isOnlineMeeting' => true]), 'lien de connexion'],
+            [['titre' => 'X'], self::evenement(['isCancelled' => true]), 'annulé'],
+        ];
+        foreach ($cas as [$args, $evenement, $mot]) {
+            try {
+                UserOutlookCalendarService::buildUpdatePayload($args, $evenement);
+                $this->fail('Accepté à tort : ' . json_encode($args));
+            } catch (\RuntimeException $e) {
+                $this->assertStringContainsString($mot, $e->getMessage());
+            }
+        }
+        // … mais il règle son rappel et sa disponibilité.
+        $perso = UserOutlookCalendarService::buildUpdatePayload(['rappel_minutes' => 5], self::evenement(['isOrganizer' => false]));
+        $this->assertSame(['isReminderOn' => true, 'reminderMinutesBeforeStart' => 5], $perso['payload']);
+        $this->assertFalse($perso['previent']);
+    }
+
+    /** Une journée entière se lit par sa DATE : la convertir la ferait reculer d'un jour à l'ouest. */
+    public function testUneJourneeEntiereNeReculePasAlOuestDeGreenwich(): void
+    {
+        $start = ['dateTime' => '2026-08-17T00:00:00.0000000', 'timeZone' => 'UTC'];
+        $end   = ['dateTime' => '2026-08-18T00:00:00.0000000', 'timeZone' => 'UTC'];
+        $this->assertSame('lundi 17/08/2026 (journée entière)', UserOutlookCalendarService::formatEventBoundary($start, true, 'America/New_York'));
+        $this->assertSame('lundi 17/08/2026 (journée entière)', UserOutlookCalendarService::formatEventEnd($end, true, 'America/New_York'));
+    }
+
+    /** Tâche sans validation : inviter, c'est écrire à quelqu'un. */
+    public function testUneActionQuiPrevientDesInvitesEstReconnue(): void
+    {
+        $creer    = UserOutlookCalendarService::TOOL_CREATE;
+        $modifier = UserOutlookCalendarService::TOOL_UPDATE;
+        $this->assertTrue(UserOutlookCalendarService::notifiesAttendees($creer, ['invites' => 'a@ex.fr']));
+        $this->assertTrue(UserOutlookCalendarService::notifiesAttendees($creer, ['invites_optionnels' => 'a@ex.fr']));
+        $this->assertFalse(UserOutlookCalendarService::notifiesAttendees($creer, ['titre' => 'Seul']));
+        $this->assertTrue(UserOutlookCalendarService::notifiesAttendees($modifier, ['previent_invites' => true]));
+        $this->assertFalse(UserOutlookCalendarService::notifiesAttendees($modifier, ['titre' => 'X']));
+        $this->assertFalse(UserOutlookCalendarService::notifiesAttendees('creer_tache', ['invites' => 'a@ex.fr']));
+
+        $chat = self::lire('src/Controllers/ChatController.php');
+        $this->assertMatchesRegularExpression(
+            '/!\$autoSendMail && \(UserOutlookCalendarService::notifiesAttendees\(\$tool, \$args\)\s*\|\| UserCalendarService::notifiesAttendees\(\$tool, \$args\)\)/',
+            $chat,
+            'Une tâche sans droit d\'envoi inviterait des gens sans validation (Outlook comme Google).'
+        );
+        // Posé par le serveur après lecture de l'évènement, jamais lu du modèle.
+        $this->assertStringContainsString(
+            "\$args['previent_invites'] = \$ctx['previent'];",
+            self::lire('src/Agent/Tools/OutlookCalendarTools.php')
+        );
     }
 
     // ===================== Carte d'approbation =====================
@@ -381,35 +698,91 @@ final class UserOutlookCalendarServiceTest extends TestCase
         $this->assertSame(281, mb_strlen((string)$apercu['apercu']));
     }
 
+    public function testLaCarteNommeLesInvitesAQuiOutlookEcrira(): void
+    {
+        $apercu = UserOutlookCalendarService::actionPreview(UserOutlookCalendarService::TOOL_CREATE, [
+            'titre' => 'Comité', 'debut' => '2026-08-17 09:00', 'visio' => true,
+            'invites' => 'alice@ex.fr', 'invites_optionnels' => 'bob@ex.fr',
+            'recurrence' => 'hebdomadaire', 'recurrence_fin' => '2026-12-31',
+        ]);
+        $impacts = implode(' ', $apercu['impacts']);
+        $this->assertStringContainsString('alice@ex.fr, bob@ex.fr', $impacts);
+        $this->assertStringContainsString('invitation', $impacts);
+        $this->assertStringNotContainsString('AUCUNE invitation', $impacts);
+        $this->assertStringContainsString('Teams', $impacts);
+        $this->assertStringContainsString('chaque semaine', $impacts);
+
+        $modif = UserOutlookCalendarService::actionPreview(
+            UserOutlookCalendarService::TOOL_UPDATE,
+            ['evenement' => 'AAMk', 'debut' => '2026-08-18 14:00', 'fuseau' => 'Europe/Paris'],
+            ['titre' => 'Comité budget', 'quand' => 'lundi 17/08/2026 09:00', 'lien' => 'https://outlook.office365.com/owa/?itemid=x',
+             'serie' => 'occurrence', 'previent' => true, 'invites' => ['alice@ex.fr'], 'ajoutes' => ['carla@ex.fr'], 'retires' => []]
+        );
+        $this->assertSame('Modifier un évènement du calendrier Outlook', $modif['action']);
+        // La carte NOMME la réunion : jamais un identifiant.
+        $this->assertStringContainsString('Comité budget', $modif['fichier']);
+        $this->assertStringNotContainsString('AAMk', $modif['fichier']);
+        $this->assertSame('https://outlook.office365.com/owa/?itemid=x', $modif['url']);
+        $lignes = implode(' ', $modif['impacts']);
+        $this->assertStringContainsString('2026-08-18 14:00', $lignes);
+        $this->assertStringContainsString('carla@ex.fr', $lignes);
+        $this->assertStringContainsString('occurrence', $lignes);
+        $this->assertStringContainsString('par email', $lignes);
+
+        $perso = UserOutlookCalendarService::actionPreview(
+            UserOutlookCalendarService::TOOL_UPDATE,
+            ['rappel_minutes' => 10],
+            ['titre' => 'Comité', 'previent' => false, 'invites' => ['alice@ex.fr']]
+        );
+        $this->assertStringContainsString('ne seront pas prévenus', implode(' ', $perso['impacts']));
+    }
+
     // ===================== Invariant : aucune écriture destructrice =====================
 
     /**
-     * `Calendars.ReadWrite` ouvre côté API la modification et la suppression
-     * d'évènements. La promesse « MIA ne fait que consulter et créer » ne tient
-     * que si AUCUN code ne les appelle : c'est ce que garde ce test, pas la
-     * consigne du system prompt.
+     * `Calendars.ReadWrite` ouvre côté API la suppression et l'annulation
+     * d'évènements. La promesse « MIA crée et modifie, sous approbation, et ne
+     * supprime rien » ne tient que si AUCUN code ne les appelle : c'est ce que
+     * garde ce test, pas la consigne du system prompt.
      */
-    public function testAucuneModificationNiSuppressionDansLeConnecteur(): void
+    public function testAucuneSuppressionNiAnnulationDansLeConnecteur(): void
     {
         // Le CODE seul : les commentaires expliquent justement pourquoi ces
         // verbes sont absents.
         $service = self::codeSansCommentaires('src/Outlook/UserOutlookCalendarService.php');
 
         $this->assertStringNotContainsString("'DELETE'", $service);
-        $this->assertStringNotContainsString("'PATCH'", $service);
         $this->assertStringNotContainsString("'PUT'", $service);
         $this->assertStringNotContainsString('sendMail', $service);
+        foreach (['/cancel', '/decline', '/accept', '/forward', 'permanentDelete'] as $action) {
+            $this->assertStringNotContainsString($action, $service);
+        }
 
-        // Et surtout : la charge utile de création ne porte JAMAIS de
-        // participants — c'est leur présence, et non un `sendUpdates`, qui
-        // déclenche l'envoi des invitations chez Graph. (Les lire reste
-        // légitime : `readEvent` les affiche.)
+        // UN seul PATCH, sur l'évènement que `fetchForUpdate` vient de relire
+        // (identifiant validé, liste des invités recomposée sur son état réel).
+        preg_match_all("/apiJson\(\s*'PATCH'\s*,\s*([^,]+),/", $service, $patchs);
+        $this->assertCount(1, $patchs[1]);
+        $this->assertStringContainsString("'/events/' . rawurlencode(\$id)", $patchs[1][0]);
+        $this->assertStringContainsString('$current = $this->fetchForUpdate(', $service);
+
+        // Sans invité demandé, la charge utile n'en porte aucun — c'est leur
+        // présence, et non un `sendUpdates`, qui déclenche les invitations.
         $payload = UserOutlookCalendarService::buildEventPayload([
             'titre' => 'Réunion',
             'debut' => '2026-08-17 09:00',
         ]);
         $this->assertArrayNotHasKey('attendees', $payload);
         $this->assertArrayNotHasKey('isOnlineMeeting', $payload);
+        $this->assertArrayNotHasKey('recurrence', $payload);
+
+        // Les deux écritures passent par la file d'approbation, et l'exécution
+        // re-vérifie les gardes.
+        $outils = self::lire('src/Agent/Tools/OutlookCalendarTools.php');
+        $this->assertStringContainsString('$queueConnectorWrite(UserOutlookCalendarService::TOOL_CREATE', $outils);
+        $this->assertStringContainsString('$queueConnectorWrite(UserOutlookCalendarService::TOOL_UPDATE', $outils);
+        $chat = self::lire('src/Controllers/ChatController.php');
+        $this->assertStringContainsString('$msCalendar->updateEvent($action[\'args\'])', $chat);
+        $this->assertStringContainsString("'modifier_evenement_agenda_outlook' =>", $chat);
 
         // Scopes : le minimum pour créer, jamais Calendars.ReadBasic (agenda
         // illisible) ni MailboxSettings (élargissement sans usage).

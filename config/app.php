@@ -70,5 +70,23 @@ define('UPLOAD_ALLOWED_TYPES', [
     'text/markdown',
     'application/vnd.openxmlformats-officedocument.wordprocessingml.document', // .docx
     'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',       // .xlsx
+    'application/msword',                                                      // .doc (Word 97-2003)
+    'application/vnd.ms-excel',                                                // .xls (Excel 97-2003)
+    'application/vnd.ms-powerpoint',                                           // .ppt (PowerPoint 97-2003)
+    'message/rfc822',                                                          // .eml (email)
+    'application/vnd.ms-outlook',                                              // .msg (email Outlook)
+    'application/zip',                                                         // .zip (contenu lu)
+    'application/vnd.openxmlformats-officedocument.presentationml.presentation', // .pptx
+    'application/vnd.oasis.opendocument.text',                                 // .odt
+    'application/vnd.oasis.opendocument.spreadsheet',                          // .ods
+    'application/vnd.oasis.opendocument.presentation',                         // .odp
+    'application/epub+zip',                                                    // .epub
+    'text/html',                                                               // .html
+    'application/rtf', 'text/rtf',                                             // .rtf
     'image/jpeg', 'image/png', 'image/gif', 'image/webp',
 ]);
+// Tout fichier dont le CONTENU est du texte (code, données, journaux, LaTeX,
+// iCalendar…) arrive en text/plain, quelle que soit son extension :
+// FileExtractor::detectMime le reconnaît. La liste ci-dessus est celle des
+// bases de connaissances (KnowledgeBaseDocument::ALLOWED_MIMES), gardée
+// identique par test.

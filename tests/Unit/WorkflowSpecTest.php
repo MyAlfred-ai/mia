@@ -207,6 +207,40 @@ final class WorkflowSpecTest extends TestCase
         $this->assertCount(2, $issues);
     }
 
+    /**
+     * « L'étape peut agir, mais aucun outil n'est relié » ne vise qu'une
+     * étape vraiment seule : un assistant apporte ses bases, documents et
+     * outils, Internet nourrit la pièce qu'elle rédige.
+     */
+    public function testUneEtapeQuiAgitSansRienNEstSignaleeQueSansAssistantNiSource(): void
+    {
+        $step = static fn(array $over): array => WorkflowSpec::normalize([
+            'nodes' => [array_merge(['key' => 's', 'type' => 'step', 'title' => 'Rédiger', 'instruction' => 'Rédige la note.',
+                'write' => 'approve', 'output' => ['key' => 'note', 'name' => 'Note', 'form' => 'text']], $over)],
+        ]);
+        $ctx = ['profiles' => [7 => ['id' => 7, 'name' => 'Rédacteur', 'default_llm' => '']], 'llms' => [], 'sources' => [], 'tools' => [], 'auto' => true];
+        $writeIssues = static fn(array $def): array => array_values(array_filter(
+            WorkflowSpec::issues($def, $ctx),
+            static fn(array $i): bool => $i['node'] === 's' && $i['target'] === 'write'
+        ));
+
+        $alone = $step([]);
+        $this->assertTrue(WorkflowSpec::writesWithNothing($alone['nodes'][0]));
+        $this->assertCount(1, $writeIssues($alone), 'Sans rien du tout, l’avertissement reste.');
+
+        $withAssistant = $step(['profile_id' => 7]);
+        $this->assertSame(7, $withAssistant['nodes'][0]['profile_id']);
+        $this->assertFalse(WorkflowSpec::writesWithNothing($withAssistant['nodes'][0]));
+        $this->assertSame([], $writeIssues($withAssistant), 'Un assistant apporte ses propres sources.');
+
+        $withWeb = $step(['sources' => ['web']]);
+        $this->assertFalse(WorkflowSpec::writesWithNothing($withWeb['nodes'][0]));
+        $this->assertSame([], $writeIssues($withWeb), 'Internet nourrit la pièce rédigée.');
+
+        $readOnly = $step(['write' => 'none']);
+        $this->assertFalse(WorkflowSpec::writesWithNothing($readOnly['nodes'][0]));
+    }
+
     public function testSlug(): void
     {
         $this->assertSame('memoire_technique', WorkflowSpec::slug('Mémoire technique'));

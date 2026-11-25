@@ -66,7 +66,7 @@ final class WorkflowCreationTest extends TestCase
         $vis = WorkflowSpec::node($def, 'vis');
         $this->assertSame('image', $vis['kind']);
         $this->assertSame(5, $vis['tool_id']);
-        $this->assertSame(['format' => 'landscape'], $vis['options']);
+        $this->assertSame(['format' => 'landscape', 'background' => '', 'output_format' => ''], $vis['options']);
         $this->assertTrue($vis['review']);
         $this->assertSame(['key' => 'visuel', 'name' => 'Visuel', 'form' => 'image'], $vis['output'], 'La pièce a la forme de ce qui est créé.');
         $this->assertSame(['style' => 'aquarelle'], WorkflowSpec::node($def, 'pg')['options']);
@@ -408,7 +408,7 @@ final class WorkflowCreationTest extends TestCase
         $this->assertStringContainsString('JobQueue::enqueue(WorkflowCreations::jobType((string)$node[\'kind\'])', $engine);
         $this->assertStringContainsString('WorkflowCreations::resolveTool($user, $node)', $engine, 'Outil revérifié au moment T.');
         $this->assertStringContainsString('WorkflowCreations::contentFromResult((string)$node[\'kind\']', $engine);
-        $this->assertStringContainsString("in_array(\$step['type'], WorkflowSpec::PRODUCING_TYPES, true)", $engine, 'Relecture d’une création.');
+        $this->assertStringContainsString('if ($step === null || !WorkflowSpec::producesPiece($step)) {', $engine, 'Relecture d’une création.');
         $this->assertStringContainsString('WorkflowCreations::deliverable($p, $a[\'content\'], $download)', $engine, 'Le livrable montre ce qui a été créé.');
         $this->assertStringContainsString('return Message::withoutRepeatedImages($items);', self::src('src/Controllers/UserSettingsController.php'), 'L’image reprise par le livrable n’a qu’une carte dans la galerie.');
         $this->assertSame('image', WorkflowCreations::jobType('image'));
@@ -419,7 +419,7 @@ final class WorkflowCreationTest extends TestCase
         $imagine = substr($chat, (int)strpos($chat, 'public function runImagine('), 9000);
         $this->assertStringContainsString('WorkflowCreations::sourceImages($workflow, $userId)', $imagine, 'Images de départ relues dans le dossier.');
         $this->assertStringContainsString("\$this->prepareImageRequest(\$conv, [], \$prompt, \$images !== [], [], null, (string)(\$workflow['context'] ?? ''))", $imagine, 'Contexte : les pièces, pas la conversation.');
-        $this->assertStringContainsString('ImageGenerator::orientedTool($tool', $imagine);
+        $this->assertStringContainsString('$tool = ImageOptions::applyTo($tool, $workflow !== null', $imagine, 'Format, fond et fichier de la brique par-dessus l’outil.');
         $this->assertStringContainsString("'visual_prompt' => \$visualPrompt", $imagine);
         $this->assertStringContainsString('public function runMap(array $payload, int $userId, int $convId, ?array $tool = null): array', $chat);
         $this->assertStringContainsString("\$this->runMap(['prompt' => \$prompt], (int)\$user['id'], \$convId, \$tool)", $chat, 'La route du chat et le job, une seule implémentation.');

@@ -11,12 +11,15 @@
  *   @var array       $catalog    icônes, teintes, libellés
  *
  *   @var array<int, array> $coverProfiles  assistants montrés au pied des vignettes
+ *   @var array<int, array{runs: int, live: int}> $deletionFacts  ce que dit la confirmation de suppression
  *
  * Chaque vignette (« la couverture », WorkflowCover) porte une couverture à la
  * couleur du workflow où son déroulé est tracé en ligne de métro, puis
  * « Quand » et « Résultat ». Toute la vignette ouvre le workflow : le nom
- * porte un lien étiré ; Lancer, la pastille d'état et la pause passent
- * au-dessus (.wf-over). Les modèles prennent la même couverture, avec les
+ * porte un lien étiré ; Lancer, la pastille d'état, la pause et la
+ * corbeille passent au-dessus (.wf-over). La corbeille ouvre la fenêtre de
+ * confirmation (workflows.js, `data-wf-delete`) : rien n'est supprimé sans
+ * elle. Les modèles prennent la même couverture, avec les
  * briques qu'ils mettent en avant ; « Utiliser ce modèle » est leur seul geste
  * (il crée un workflow : pas de lien étiré). L'historique des exécutions —
  * la liste des lancements et le journal de chacun — a son propre gabarit
@@ -29,11 +32,12 @@ $histJsVersion  = @filemtime(ROOT . '/public/assets/js/workflow-history.js') ?: 
 $previewJsVersion = @filemtime(ROOT . '/public/assets/js/html-preview.js') ?: 1;
 $icons = $catalog['icons'];
 // Droits du rôle sur ses workflows (Personnes → Rôles) : créer, modifier,
-// lancer. Le serveur refuse de toute façon ce qu'un bouton absent ne propose pas.
+// lancer, supprimer. Le serveur refuse de toute façon ce qu'un bouton absent ne propose pas.
 $wfUser   = Session::currentUser();
 $wfCanNew = Workflow::allows($wfUser, 'create');
 $wfCanEdit = Workflow::allows($wfUser, 'edit');
 $wfCanRun = Workflow::allows($wfUser, 'use');
+$wfCanDelete = Workflow::allows($wfUser, 'delete');
 $countLine = static function (array $c): string {
     $parts = [I18n::plural($c['steps'], '{n} étape', '{n} étapes')];
     if ($c['conditions'] > 0) {
@@ -168,7 +172,7 @@ $tab = static fn(string $v, string $label, int $n = 0, string $short = ''): stri
                     <div class="wf-cc-foot">
                         <span class="wf-cc-avas" title="<?= htmlspecialchars($team === [] ? 'MIA' : implode(', ', array_column($team, 'name'))) ?>">
                             <?php if ($team === []): ?>
-                                <span class="wf-ava mia"><?= $icons['mia'] ?></span>
+                                <span class="wf-ava mia is-logo"><img class="wf-mia-logo" src="<?= htmlspecialchars(WorkflowCatalog::miaLogo()) ?>" alt=""></span>
                             <?php endif; ?>
                             <?php foreach (array_slice($team, 0, WorkflowCover::MAX_AVATARS) as $p): ?>
                                 <span class="wf-ava" style="--av:<?= htmlspecialchars($p['color'] !== '' ? $p['color'] : Workflow::DEFAULT_COLOR) ?>"><?php if ($p['avatar'] !== ''): ?><img src="<?= htmlspecialchars($p['avatar']) ?>" alt="" loading="lazy"><?php else: ?><?= htmlspecialchars(mb_strtoupper(mb_substr($p['name'], 0, 1))) ?><?php endif; ?></span>
@@ -188,6 +192,15 @@ $tab = static fn(string $v, string $label, int $n = 0, string $short = ''): stri
                                 <?php else: ?>
                                     <button type="submit" class="wf-btn sm"><?= te('Réactiver') ?></button>
                                 <?php endif; ?>
+                            </form>
+                            <?php endif; ?>
+                            <?php if ($wfCanDelete): $facts = $deletionFacts[(int)$w['id']] ?? ['runs' => 0, 'live' => 0]; ?>
+                            <?php /* Supprimer : la fenêtre de confirmation (workflows.js) pose `confirm`, sans lequel le serveur refuse. */ ?>
+                            <form method="post" action="/workflows/<?= (int)$w['id'] ?>/delete" class="wf-over" data-wf-delete
+                                  data-name="<?= htmlspecialchars($w['name']) ?>" data-runs="<?= (int)$facts['runs'] ?>" data-live="<?= (int)$facts['live'] ?>"
+                                  data-pausable="<?= $w['published'] !== null && $w['is_active'] && $wfCanEdit ? '1' : '0' ?>">
+                                <input type="hidden" name="csrf_token" value="<?= htmlspecialchars(Csrf::token()) ?>">
+                                <button type="submit" class="wf-btn sm ghost icon wf-del" title="<?= te('Supprimer') ?>" aria-label="<?= te('Supprimer « {nom} »', ['nom' => $w['name']]) ?>"><?= $icons['trash'] ?></button>
                             </form>
                             <?php endif; ?>
                         </span>

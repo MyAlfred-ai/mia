@@ -94,7 +94,7 @@ $hex = static fn ($v, string $fallback): string => is_string($v) && preg_match('
                 </div>
 
                 <p class="company-template-usage">
-                    <?= te("Les présentations PowerPoint que MIA livre dans la conversation utilisent ce modèle : ses mises en page, ses polices, ses couleurs, ses arrière-plans et les éléments de son masque. La « Version soignée » réalisée par un modèle s'en sert comme référence du style maison ; « Version soignée › Par Gamma » garde le thème choisi dans Gamma.") ?>
+                    <?= te("Les présentations PowerPoint que MIA livre dans la conversation utilisent ce modèle : ses mises en page, ses polices, ses couleurs, ses arrière-plans et les éléments de son masque — sauf si la personne le décoche sur la carte du fichier. « Version soignée › Par Gamma » garde le thème choisi dans Gamma.") ?>
                 </p>
 
                 <?php if ($colors !== [] || $fonts !== []): ?>
@@ -121,10 +121,12 @@ $hex = static fn ($v, string $fallback): string => is_string($v) && preg_match('
             </div>
         </div>
 
+        <?php $pathsKind = 'pptx'; require __DIR__ . '/company-template-paths.php'; ?>
+
         <?php if ($roles !== []): ?>
             <div class="company-template-map">
                 <h4><?= te('Comment MIA remplit votre modèle') ?></h4>
-                <p class="brand-hint"><?= te('Chaque slide que MIA écrit prend la mise en page correspondante de votre modèle. Ce tableau se met à jour à chaque dépôt.') ?></p>
+                <p class="brand-hint"><?= te('Version rapide : chaque slide que MIA écrit prend la mise en page correspondante de votre modèle. Ce tableau se met à jour à chaque dépôt.') ?></p>
                 <div class="ctm-table" role="table" aria-label="<?= te('Correspondance entre les slides de MIA et les mises en page du modèle') ?>">
                     <div class="ctm-row ctm-head" role="row">
                         <span role="columnheader"><?= te('Ce que MIA écrit') ?></span>
@@ -179,6 +181,22 @@ $hex = static fn ($v, string $fallback): string => is_string($v) && preg_match('
                 </div>
             </div>
             <p class="brand-hint"><?= te("Le PDF d'une présentation garde la mise en page de MIA, aux couleurs de votre modèle.") ?></p>
+            <div class="company-template-split">
+                <div>
+                    <h4><?= te('Version soignée : ce que reçoit le modèle IA, dans l’ordre') ?></h4>
+                    <ul class="ctm-pills">
+                        <li><?= te('1. Votre modèle, tel quel') ?></li><li><?= te('2. Le logo') ?></li>
+                        <li><?= te('3. Les fichiers joints') ?></li><li><?= te('4. La demande et le contenu') ?></li>
+                    </ul>
+                </div>
+                <div>
+                    <h4><?= te('Ce qu’il en fait') ?></h4>
+                    <ul class="ctm-pills">
+                        <li><?= te('Reprend vos mises en page') ?></li><li><?= te('Retire les slides d’exemple') ?></li>
+                        <li><?= te('Vérifie le rendu') ?></li>
+                    </ul>
+                </div>
+            </div>
         <?php endif; ?>
     <?php endif; ?>
 </div>

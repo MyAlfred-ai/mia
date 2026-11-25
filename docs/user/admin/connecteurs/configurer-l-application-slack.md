@@ -53,6 +53,9 @@ qu'elle voit déjà.
 | `channels:history`, `groups:history`, `im:history`, `mpim:history` | Lire un canal, dérouler un fil | MIA ne voit que les extraits de la recherche |
 | `users:read` | Écrire le nom des personnes, pas leur identifiant | Les messages rapportés citent des identifiants |
 | `chat:write` | Publier un message, après approbation de l'utilisateur | Lecture seule : l'utilisateur publie lui-même |
+| `im:write` | Écrire à une personne (message direct) | MIA ne publie que dans des canaux |
+| `files:write` | Joindre des fichiers au message d'une brique Slack de workflow | Le message ne peut pas partir avec ses fichiers |
+| `users:read.email` | Retrouver la personne à qui écrire par son adresse email (celle d'une Fiche) | Une personne se désigne par son nom ou son pseudo |
 
 `channels` désigne les canaux publics, `groups` les canaux privés, `im` les messages directs, `mpim`
 les messages de groupe. Chaque personne accorde ces autorisations en reliant son compte ; l'assistant
@@ -60,8 +63,13 @@ ne reçoit que les outils correspondant à ce qu'elle a **réellement** accordé
 pour chaque ligne, le nom de l'outil donné au modèle.
 
 **Ne sont jamais demandées** : `chat:write.public` (publier dans un canal dont on n'est pas membre),
-`im:write` (ouvrir un message direct), `users:read.email` (les adresses des collègues), et tout droit
+`mpim:write` (ouvrir une conversation de groupe), `files:read` (lire les fichiers), et tout droit
 d'administration.
+
+**Ajoutées avec la brique Slack des workflows** : `im:write`, `files:write` et `users:read.email`.
+Une application créée avant doit les recevoir — ajoutez-les dans **OAuth & Permissions → User Token
+Scopes**, ou recréez-la depuis le manifeste de l'écran — puis chaque utilisateur relie à nouveau son
+Slack pour les accorder. D'ici là, sa connexion reste valable pour tout le reste.
 
 **À savoir sur `chat:write`** : c'est le seul droit qui permette de publier, et il couvre aussi —
 côté API — la modification et la suppression des messages de la personne. MIA n'expose aucun outil de

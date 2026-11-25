@@ -35,7 +35,7 @@ final class AnthropicRelayTest extends TestCase
 
     public function testLesReglagesDesModelesSontAuCatalogue(): void
     {
-        foreach (['claude-fable-5-1', 'claude-fable-5'] as $fable) {
+        foreach (['claude-fable-5-2', 'claude-fable-5-1', 'claude-fable-5'] as $fable) {
             // Le plafond qu'il déclarait (32 000) est désormais en dessous du
             // défaut de l'adapter : il le suit, comme tous les modèles Claude.
             $this->assertNull(LlmCatalog::maxOutputTokens('anthropic', $fable), $fable);
@@ -220,6 +220,74 @@ final class AnthropicRelayTest extends TestCase
         $this->assertSame(['input', 'output', 'input_cached', 'input_cache_write', 'output_reasoning', 'web_searches'], array_keys($t));
     }
 
+    public function testFable52EtHaiku55PartentAvecLeursReglages(): void
+    {
+        // Fable 5.2 : repli serveur sur refus (bêta dans l'en-tête), jamais de
+        // température, notes d'avancement entre deux outils.
+        $fable = $this->adapter('claude-fable-5-2');
+        $p = $this->payloadFor($fable, 'claude-fable-5-2', 0.7);
+        $this->assertSame('default', $p['fallbacks']);
+        $this->assertArrayNotHasKey('temperature', $p);
+        $this->assertStringContainsString(AnthropicAdapter::REFUSAL_FALLBACK_BETA, implode("\n", $this->headersFor($fable, $p)));
+
+        $agent = new ReflectionProperty(AnthropicAdapter::class, 'agentOptions');
+        $features = new ReflectionMethod(AnthropicAdapter::class, 'withAgentFeatures');
+        $agent->setValue($fable, ['on_progress' => static fn() => null, 'effort' => 'high']);
+        $f = $features->invoke($fable, $p, 'claude-fable-5-2');
+        $this->assertSame(['type' => 'adaptive', 'display' => 'updates'], $f['thinking']);
+        $this->assertArrayNotHasKey('output_config', $f, 'Effort `high` = son défaut : rien à envoyer.');
+
+        // Haiku 5.5 : AUCUN repli serveur (le paramètre serait refusé), pas de
+        // notes d'avancement ; effort relevé à `high` sur un tour à connecteurs.
+        $haiku = $this->adapter('claude-haiku-5-5');
+        $h = $this->payloadFor($haiku, 'claude-haiku-5-5', 0.7);
+        $this->assertArrayNotHasKey('fallbacks', $h);
+        $this->assertArrayNotHasKey('temperature', $h);
+        $this->assertStringNotContainsString(AnthropicAdapter::REFUSAL_FALLBACK_BETA, implode("\n", $this->headersFor($haiku, $h)));
+        $agent->setValue($haiku, ['on_progress' => static fn() => null, 'effort' => 'high']);
+        $h = $features->invoke($haiku, $h, 'claude-haiku-5-5');
+        $this->assertArrayNotHasKey('thinking', $h);
+        $this->assertSame('high', $h['output_config']['effort']);
+    }
+
+    public function testChaqueRequeteEstRapporteePourLePalierContexteLong(): void
+    {
+        // Claude Haiku 5.5 paie ×5 une REQUÊTE de plus de 100 000 jetons
+        // d'entrée, jugée seule : la boucle d'outils doit rapporter ses allers
+        // un par un, sinon trois allers de 40 000 jetons franchiraient le seuil
+        // ensemble (120 000) sans qu'aucun ne l'ait franchi.
+        $adapter = $this->adapter('claude-haiku-5-5');
+        $add = new ReflectionMethod(AnthropicAdapter::class, 'addUsage');
+        $fin = new ReflectionMethod(AnthropicAdapter::class, 'finalizeTokens');
+
+        $byModel = [];
+        foreach ([40000, 40000, 40000] as $input) {
+            $add->invokeArgs(null, [&$byModel, 'claude-haiku-5-5', ['input' => $input, 'output' => 500, 'input_cached' => 30000, 'input_cache_write' => 0]]);
+        }
+        $t = $fin->invoke($adapter, $byModel, 0, 'claude-haiku-5-5', null);
+        $this->assertSame(120000, $t['input']);
+        $this->assertCount(3, $t['rounds']);
+        $this->assertSame([], CreditService::longContextPart('anthropic::claude-haiku-5-5', $t), 'Aucune requête n\'a dépassé 100 000 jetons.');
+
+        // Un aller au-delà du seuil : lui seul passe au palier long.
+        $add->invokeArgs(null, [&$byModel, 'claude-haiku-5-5', ['input' => 150000, 'output' => 800, 'input_cached' => 100000, 'input_cache_write' => 2000]]);
+        $t = $fin->invoke($adapter, $byModel, 0, 'claude-haiku-5-5', null);
+        $long = CreditService::longContextPart('anthropic::claude-haiku-5-5', $t);
+        $this->assertSame(150000, $long['input']);
+        $this->assertSame(800, $long['output']);
+        $this->assertSame(100000, $long['input_cached']);
+
+        // Une seule requête : pas de `rounds`, le cumul EST la requête.
+        $seul = [];
+        $add->invokeArgs(null, [&$seul, 'claude-haiku-5-5', ['input' => 120000, 'output' => 10, 'input_cached' => 0, 'input_cache_write' => 0]]);
+        $t = $fin->invoke($adapter, $seul, 0, 'claude-haiku-5-5', null);
+        $this->assertArrayNotHasKey('rounds', $t);
+        $this->assertSame(120000, CreditService::longContextPart('anthropic::claude-haiku-5-5', $t)['input']);
+
+        // Les autres Claude n'ont pas de palier : rien n'est compté à part.
+        $this->assertSame([], CreditService::longContextPart('anthropic::claude-opus-5-5', ['input' => 900000, 'output' => 1]));
+    }
+
     // ---------- Trace du message ----------
 
     public function testLaTraceNommeLesDeuxModeles(): void
@@ -291,10 +359,17 @@ final class AnthropicRelayTest extends TestCase
 
     public function testLesDeuxBouclesLisentLeFluxParTranches(): void
     {
+        // Lecture surveillée PARTAGÉE (LlmAdapterHelpers::readSseLine) :
+        // Anthropic et Gemini (Gemini 4 Argon raisonne aussi longtemps).
         $src = (string)file_get_contents(ROOT . '/src/LLM/AnthropicAdapter.php');
         $this->assertSame(2, substr_count($src, 'stream_set_timeout($stream, self::SILENCE_TICK_SEC);'));
-        $this->assertSame(2, substr_count($src, 'self::readSseLine($stream, $pending, $stalled, $stopped)'));
-        $this->assertStringContainsString('LlmAdapterHelpers::keepAlive()', $src);
+        $this->assertSame(2, substr_count($src, 'LlmAdapterHelpers::readSseLine($stream, $pending, $stalled, $stopped)'));
+        $gemini = (string)file_get_contents(ROOT . '/src/LLM/GeminiAdapter.php');
+        $this->assertSame(2, substr_count($gemini, 'stream_set_timeout($stream, LlmAdapterHelpers::SILENCE_TICK_SEC);'));
+        $this->assertSame(2, substr_count($gemini, 'LlmAdapterHelpers::readSseLine($stream, $pending, $stalled, $stopped)'));
+        $this->assertStringNotContainsString('fgets($stream)', $gemini, 'Plus aucune lecture sans battement chez Gemini.');
+        $helpers = (string)file_get_contents(ROOT . '/src/LLM/LlmAdapterHelpers.php');
+        $this->assertStringContainsString('self::keepAlive()', $helpers);
         $this->assertStringNotContainsString("'max_tokens'  => 4096", $src, 'Le plafond se lit au catalogue.');
         $this->assertGreaterThanOrEqual(600, AnthropicAdapter::SILENCE_MAX_SEC, 'Un raisonnement de plusieurs minutes est normal sur Fable.');
     }

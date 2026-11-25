@@ -77,21 +77,24 @@ final class UserSlackServiceTest extends TestCase
 
     /**
      * Le consentement demande des scopes UTILISATEUR, et seulement ceux dont
-     * MIA se sert. `users:read.email` élargirait l'accès sans usage ;
-     * `chat:write.public` permettrait de publier dans un canal dont
-     * l'utilisateur n'est pas membre, ce que le connecteur ne fait jamais.
+     * MIA se sert. `im:write`, `files:write` et `users:read.email` servent la
+     * brique Slack des workflows (écrire à une personne, joindre des fichiers,
+     * retrouver une personne par son adresse) ; `chat:write.public`
+     * permettrait de publier dans un canal dont l'utilisateur n'est pas
+     * membre, `mpim:write` d'ouvrir une conversation de groupe, `files:read`
+     * de lire tous ses fichiers — ce que le connecteur ne fait jamais.
      */
     public function testLesScopesDemandesSontCeuxQuOnUtilise(): void
     {
         $scopes = SlackMessagesOAuth::SCOPES;
 
-        foreach (['search:read', 'channels:read', 'channels:history', 'users:read', 'chat:write'] as $attendu) {
+        foreach (['search:read', 'channels:read', 'channels:history', 'users:read', 'chat:write',
+                  'im:write', 'files:write', 'users:read.email'] as $attendu) {
             $this->assertContains($attendu, $scopes);
         }
-        $this->assertNotContains('users:read.email', $scopes);
         $this->assertNotContains('chat:write.public', $scopes);
-        $this->assertNotContains('im:write', $scopes, 'MIA n\'ouvre jamais de message direct.');
-        $this->assertNotContains('files:write', $scopes);
+        $this->assertNotContains('mpim:write', $scopes, 'MIA n\'ouvre jamais de conversation de groupe.');
+        $this->assertNotContains('files:read', $scopes);
         $this->assertNotContains('admin', $scopes);
     }
 
@@ -396,11 +399,11 @@ final class UserSlackServiceTest extends TestCase
         // Et c'est bien `assertPostArgs` que la publication appelle.
         $src = self::codeSansCommentaires('src/Slack/UserSlackService.php');
         $this->assertMatchesRegularExpression(
-            '/function postMessage\(array \$args\).*?self::assertPostArgs\(\$args\)/s',
+            '/function postMessage\(array \$args[^)]*\).*?self::assertPostArgs\(\$args, \$files !== \[\]\)/s',
             $src
         );
         $this->assertDoesNotMatchRegularExpression(
-            '/function postMessage\(array \$args\).*?self::normalizePostArgs\(/s',
+            '/function postMessage\(array \$args[^)]*\)[^{]*\{(?:(?!function ).)*?self::normalizePostArgs\(/s',
             $src
         );
     }
@@ -722,10 +725,10 @@ final class UserSlackServiceTest extends TestCase
     {
         $src = self::codeSansCommentaires('src/Agent/Tools/SlackTools.php');
         $this->assertStringContainsString(
-            'return self::definitionsFor($slack->canList(), $slack->canSearch(), $slack->canRead(), $slack->canPost());',
+            'return self::definitionsFor($slack->canList(), $slack->canSearch(), $slack->canRead(), $slack->canPost(), $slack->canDirect());',
             $src
         );
-        $this->assertStringContainsString('return self::guidanceFor($slack->canPost());', $src);
+        $this->assertStringContainsString('return self::guidanceFor($slack->canPost(), $slack->canDirect());', $src);
 
         $avec = SlackTools::guidanceFor(true);
         $sans = SlackTools::guidanceFor(false);

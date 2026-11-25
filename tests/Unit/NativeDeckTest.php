@@ -76,7 +76,7 @@ final class NativeDeckTest extends TestCase
         foreach (array_keys(LlmCatalog::models('anthropic')) as $model) {
             $this->assertTrue(NativeDeck::supports('anthropic::' . $model), "Claude $model");
         }
-        foreach (['gpt-6.1-sol', 'gpt-6-luna', 'gpt-6-astra', 'gpt-5.6', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'] as $model) {
+        foreach (['gpt-6.2-astra', 'gpt-6.2-sol', 'gpt-6.1-sol', 'gpt-6-luna', 'gpt-6-astra', 'gpt-5.6', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'] as $model) {
             $this->assertTrue(NativeDeck::supports('openai::' . $model), $model);
         }
         foreach (['gemini', 'mistral', 'deepseek', 'moonshot', 'zai', 'perplexity'] as $provider) {
@@ -266,6 +266,58 @@ final class NativeDeckTest extends TestCase
         NativeDeck::make('openai::gpt-6.1-sol', '# T', 'T', 't.pptx', null, 'sk');
     }
 
+    /** Documents PDF et Word : même chemin que les présentations, avec leurs règles et leurs textes. */
+    public function testDocumentsPdfEtWord(): void
+    {
+        CompanyProfile::overrideWordTemplate(sys_get_temp_dir() . '/aucun-modele-word-' . bin2hex(random_bytes(4)) . '.docx');
+        try {
+            $this->assertSame('pdf', NativeDeck::normalizeKind('pdf'));
+            $this->assertTrue(NativeDeck::isDocument('docx'));
+            $this->assertFalse(NativeDeck::isDocument('xlsx'));
+            $this->assertSame('document.pdf', NativeDeck::filename('', 'pdf'));
+            $this->assertSame('Contrat.docx', NativeDeck::filename('Contrat.rtf', 'docx'));
+            $this->assertSame('Document prêt', NativeDeck::label('pdf', 'ready'));
+            $this->assertSame('pdf', NativeDeck::tone('pdf'));
+            $this->assertSame('doc', NativeDeck::tone('docx'));
+            $this->assertSame('pdf', NativeDeckStore::extensionOf('rapport.pdf'));
+            $this->assertSame('application/pdf', NativeDeckStore::TYPES['pdf']);
+
+            $this->assertTrue(NativeDeck::looksLike("%PDF-1.7\n…", 'pdf'));
+            $this->assertFalse(NativeDeck::looksLike(self::PPTX, 'pdf'));
+            $this->assertFalse(NativeDeck::looksLike(self::PPTX, 'docx'), 'Une présentation n’est pas un document Word.');
+            $this->assertTrue(NativeDeck::looksLike("PK\x03\x04…word/document.xml…", 'docx'));
+
+            $this->assertSame('pdf', NativeDeck::anthropicPayload('claude-opus-5', 'x', null, [], null, 'pdf')['container']['skills'][0]['skill_id']);
+            $this->assertSame('docx', NativeDeck::anthropicPayload('claude-opus-5', 'x', null, [], null, 'docx')['container']['skills'][0]['skill_id']);
+
+            $pdf = NativeDeck::prompt('# Rapport', 'Rapport', ['kind' => 'pdf', 'filename' => 'rapport.pdf', 'provider' => 'openai',
+                'accent' => '#0055a4', 'footer' => 'Acme SA — confidentiel', 'logo' => 'logo-entreprise.png']);
+            foreach (['document PDF (pages A4)', 'DejaVu Sans', 'VÉRIFIE le rendu', 'en-tête répété', '#0055a4',
+                'Acme SA — confidentiel', 'logo-entreprise.png', '/mnt/data', 'rapport.pdf'] as $attendu) {
+                $this->assertStringContainsString($attendu, $pdf);
+            }
+            $word = NativeDeck::prompt('# Contrat', 'Contrat', ['kind' => 'docx', 'filename' => 'contrat.docx', 'provider' => 'anthropic', 'template' => true]);
+            $this->assertStringContainsString(NativeDeck::WORD_TEMPLATE_NAME, $word);
+            $this->assertStringContainsString('styles de titre de Word', $word);
+            $this->assertStringNotContainsString('Pied de page de chaque page', $word, 'Le modèle Word porte déjà son pied de page.');
+
+            $this->assertNull(NativeDeck::companySummary('pdf'), 'Ni modèle ni logo : rien à montrer.');
+
+            $this->transport([
+                ['POST', '#/v1/responses$#', 200, json_encode(['status' => 'completed', 'output' => [['type' => 'message', 'content' => [['annotations' => [
+                    ['type' => 'container_file_citation', 'container_id' => 'c1', 'file_id' => 'f1', 'filename' => 'rapport.pdf'],
+                ]]]]], 'usage' => ['input_tokens' => 5, 'output_tokens' => 7]])],
+                ['GET', '#/containers/c1/files/f1/content$#', 200, "%PDF-1.7\nfin"],
+            ]);
+            $made = NativeDeck::make('openai::gpt-6.1-sol', "# Rapport\n\nTexte.", 'Rapport', 'rapport.pdf', null, 'sk', ['kind' => 'pdf']);
+            $this->assertSame('rapport.pdf', $made['filename']);
+            $this->assertStringStartsWith('%PDF-', $made['bytes']);
+            $this->assertStringContainsString('document PDF', (string)json_decode((string)$this->calls[0]['body'], true)['input']);
+        } finally {
+            CompanyProfile::overrideWordTemplate(null);
+        }
+    }
+
     public function testUnModeleIncapableEstRefuseAvantToutAppel(): void
     {
         $this->transport([]);
@@ -330,6 +382,178 @@ final class NativeDeckTest extends TestCase
         $this->assertStringContainsString('RÉFÉRENCE et ta base', $prompt);
         $this->assertStringContainsString('2 slides d\'exemple', $prompt);
         $this->assertStringContainsString('ne garde AUCUNE slide d\'exemple', $prompt);
+    }
+
+    /** Fichiers envoyés et consigne d'une réalisation Claude, sans fichier produit (seules les entrées comptent). */
+    private function sentFor(string $name, array $context): array
+    {
+        $sent   = [];
+        $prompt = '';
+        NativeDeck::overrideTransport(function (string $method, string $url, array $headers, $body) use (&$sent, &$prompt): array {
+            if ($method === 'POST' && str_ends_with($url, '/files')) {
+                $sent[$body['file']->getPostFilename()] = (string)file_get_contents($body['file']->getFilename());
+
+                return ['status' => 200, 'body' => json_encode(['id' => 'file_' . count($sent)])];
+            }
+            if ($method === 'POST') {
+                $prompt = (string)json_decode((string)$body, true)['messages'][0]['content'][0]['text'];
+
+                return ['status' => 200, 'body' => json_encode(['stop_reason' => 'end_turn', 'content' => [], 'usage' => []])];
+            }
+
+            return ['status' => 200, 'body' => '{}'];
+        });
+        try {
+            NativeDeck::make('anthropic::claude-opus-5', "# Rapport\n\nTexte.", 'Rapport', $name, null, 'k', $context);
+        } catch (NativeDeckException) {
+            // Aucun fichier produit dans ce scénario.
+        }
+
+        return [$sent, $prompt];
+    }
+
+    /**
+     * Version soignée d'un document Word : le modèle Word de l'entreprise part
+     * TEL QUEL (un .dotx devenu document), EN PREMIER, et la consigne le fait
+     * ouvrir avant les fichiers joints. Décoché, il ne part pas.
+     */
+    public function testLeModeleWordPartTelQuelEtEnPremier(): void
+    {
+        require_once ROOT . '/tests/Support/DocxTemplateFixture.php';
+        $tpl = sys_get_temp_dir() . '/mia-word-' . bin2hex(random_bytes(4)) . '.docx';
+        DocxTemplateFixture::template($tpl, ['dotx' => true]);
+        CompanyProfile::overrideWordTemplate($tpl);
+        $joint = [['name' => 'chiffres.csv', 'mime' => 'text/csv', 'bytes' => "a;b\n1;2", 'label' => 'tableau CSV']];
+        try {
+            [$sent, $prompt] = $this->sentFor('rapport.docx', ['kind' => 'docx', 'files' => $joint]);
+            $this->assertSame([NativeDeck::WORD_TEMPLATE_NAME, 'chiffres.csv'], array_keys($sent), 'Le modèle d’abord, les fichiers ensuite.');
+            $path = sys_get_temp_dir() . '/mia-sent-' . bin2hex(random_bytes(4)) . '.docx';
+            file_put_contents($path, $sent[NativeDeck::WORD_TEMPLATE_NAME]);
+            $zip = new ZipArchive();
+            $this->assertTrue($zip->open($path) === true);
+            $types = (string)$zip->getFromName('[Content_Types].xml');
+            $zip->close();
+            @unlink($path);
+            $this->assertStringContainsString('wordprocessingml.document.main+xml', $types);
+            $this->assertStringNotContainsString('template.main+xml', $types);
+            $this->assertStringContainsString('Méthode, dans cet ordre', $prompt);
+            $this->assertLessThan(strpos($prompt, '2. Ouvre ensuite les fichiers joints'), strpos($prompt, '1. Ouvre d\'abord le modèle'));
+            $this->assertStringContainsString('Retire tout son contenu d\'exemple', $prompt);
+
+            [$sans, $promptSans] = $this->sentFor('rapport.docx', ['kind' => 'docx', 'files' => $joint, 'template' => false]);
+            $this->assertSame(['chiffres.csv'], array_keys($sans), 'Modèle décoché : il ne part pas.');
+            $this->assertStringNotContainsString(NativeDeck::WORD_TEMPLATE_NAME, $promptSans);
+        } finally {
+            CompanyProfile::overrideWordTemplate(null);
+            @unlink($tpl);
+        }
+    }
+
+    /** Le logo et le modèle PowerPoint se décochent chacun de leur côté. */
+    public function testLeModeleEtLeLogoSeDecochentSeparement(): void
+    {
+        require_once ROOT . '/tests/Support/PptxTemplateFixture.php';
+        $tpl = sys_get_temp_dir() . '/mia-tpl-' . bin2hex(random_bytes(4)) . '.pptx';
+        PptxTemplateFixture::build($tpl, ['examples' => 1]);
+        CompanyProfile::overrideTemplate($tpl);
+        try {
+            [$tous] = $this->sentFor('plan.pptx', ['kind' => 'pptx']);
+            $this->assertArrayHasKey(NativeDeck::TEMPLATE_NAME, $tous);
+            [$aucun, $prompt] = $this->sentFor('plan.pptx', ['kind' => 'pptx', 'template' => false, 'logo' => false]);
+            $this->assertSame([], $aucun);
+            $this->assertStringContainsString('Aucun modèle d\'entreprise', $prompt);
+            $this->assertNotNull(CompanyProfile::templatePath(), 'Le choix ne vaut que le temps de la réalisation.');
+        } finally {
+            CompanyProfile::overrideTemplate(null);
+            @unlink($tpl);
+        }
+    }
+
+    /** CompanyProfile::withReferences : ce qui est décoché n'existe plus pour les fabricants, puis revient. */
+    public function testLeChoixDeLaPersonneMasqueModeleEtLogoLeTempsDeLAppel(): void
+    {
+        require_once ROOT . '/tests/Support/PptxTemplateFixture.php';
+        $tpl = sys_get_temp_dir() . '/mia-tpl-' . bin2hex(random_bytes(4)) . '.pptx';
+        PptxTemplateFixture::build($tpl);
+        CompanyProfile::overrideTemplate($tpl);
+        try {
+            $this->assertNull(CompanyProfile::withReferences(false, true, static fn () => CompanyProfile::templatePath()));
+            $this->assertSame($tpl, CompanyProfile::withReferences(true, false, static fn () => CompanyProfile::templatePath()));
+            $this->assertSame('', CompanyProfile::withReferences(true, false, static fn () => CompanyProfile::logoUrl()));
+            try {
+                CompanyProfile::withReferences(false, false, static function (): void {
+                    throw new RuntimeException('panne');
+                });
+            } catch (RuntimeException) {
+            }
+            $this->assertSame($tpl, CompanyProfile::templatePath(), 'Remis en place même après une erreur.');
+            $refs = CompanyProfile::withReferences(false, false, static fn () => CompanyProfile::availableReferences());
+            $this->assertTrue($refs['pptx'], 'Ce qui EXISTE se lit sans tenir compte du choix en cours.');
+            $this->assertSame('Acme', $refs['name']);
+        } finally {
+            CompanyProfile::overrideTemplate(null);
+            @unlink($tpl);
+        }
+    }
+
+    /** Câblage du choix : carte, question d'avance, fenêtre, envoi du message, fabrication. */
+    public function testLeChoixEstCableDeLaCarteALaFabrication(): void
+    {
+        $src  = static fn (string $f): string => (string)file_get_contents(ROOT . '/' . $f);
+        $file = $src('src/Controllers/FileController.php');
+        $this->assertStringContainsString("CompanyProfile::withReferences(\n                self::flag('company_template'),\n                self::flag('company_logo'),", $file);
+        $chat = $src('src/Controllers/ChatController.php');
+        $this->assertStringContainsString("'company_template' => (string)(\$_POST['company_template'] ?? '1') !== '0',", $chat);
+        $this->assertStringContainsString("'template' => \$template,", $chat);
+        $job = $src('src/Jobs/NativeDeckJob.php');
+        $this->assertStringContainsString("'logo'     => (\$payload['logo'] ?? true) !== false,", $job);
+        $js = $src('public/assets/js/generated-files.js');
+        $this->assertStringContainsString("body.append('company_template', refs.template ? '1' : '0');", $js);
+        $this->assertStringContainsString("company_logo: request.logo === false ? '0' : '1',", $js);
+        $this->assertStringContainsString("(closed ? refsHtml(refsKind(file), '') : '')", $js);
+        $this->assertStringContainsString('data-polish-ref=', $js);
+        $chatJs = $src('public/assets/js/chat.js');
+        $this->assertStringContainsString("fd.append('company_template', companyRefs.template ? '1' : '0');", $chatJs);
+        $this->assertStringContainsString('window.MiaFiles?.offerRefs?.(card, msg.dataset.polishOffer, state);', $chatJs);
+        $this->assertStringContainsString('window.FILE_COMPANY = <?= json_encode(CompanyProfile::availableReferences()', $src('templates/chat/index.php'));
+        $this->assertStringContainsString("data-polish-offer=", $src('templates/partials/message.php'));
+        foreach (['company-template-status.php', 'company-word-template-status.php'] as $partial) {
+            $this->assertStringContainsString("require __DIR__ . '/company-template-paths.php';", $src('templates/partials/' . $partial), $partial);
+        }
+    }
+
+    /** Partie pure du navigateur : quelles cases pour quelle carte. */
+    public function testLesCasesProposeesSuiventCeQuiExiste(): void
+    {
+        $node = self::node();
+        if ($node === null) {
+            $this->markTestSkipped('node indisponible.');
+        }
+        $script = "'use strict';\n"
+            . 'globalThis.FILE_FORMATS = ' . json_encode(FileFormats::clientCatalog()) . ";\n"
+            . "globalThis.t = (s, v) => s.replace(/\\{(\\w+)\\}/g, (m, k) => (v && k in v ? v[k] : m));\nglobalThis.tn = (n, a, b) => (n > 1 ? b : a);\n"
+            . (string)file_get_contents(ROOT . '/public/assets/js/generated-files.js') . "\n"
+            . "const F = globalThis.MiaFiles, tout = { name: 'Acme', pptx: true, docx: true, logo: true };\n"
+            . "const k = (n, l) => F.refsKind(F.describe(n, l));\n"
+            . "console.log(JSON.stringify({\n"
+            . "  kinds: [k('plan.pptx', 'markdown'), k('note.docx', 'markdown'), k('a.rtf', 'markdown'), k('r.pdf', 'markdown'), k('b.xlsx', 'csv'), k('x.doc', 'markdown')],\n"
+            . "  pptx: F.refsFor('pptx', tout).map(r => r.ref + ':' + r.label),\n"
+            . "  pdf: F.refsFor('pdf', tout).map(r => r.ref),\n"
+            . "  sansLogo: F.refsFor('docx', { name: '', docx: true, logo: false }).map(r => r.label),\n"
+            . "  rien: F.refsFor('pptx', null).length + F.refsFor('', tout).length,\n"
+            . "}));\n";
+        $fichier = tempnam(sys_get_temp_dir(), 'mia-refs-js-');
+        file_put_contents($fichier, $script);
+        try {
+            $out = json_decode((string)shell_exec(escapeshellarg($node) . ' ' . escapeshellarg($fichier) . ' 2>&1'), true);
+        } finally {
+            @unlink($fichier);
+        }
+        $this->assertSame(['pptx', 'docx', 'docx', 'pdf', '', ''], $out['kinds'] ?? null);
+        $this->assertSame(['template:Modèle PowerPoint de Acme', 'logo:Logo de Acme'], $out['pptx']);
+        $this->assertSame(['logo'], $out['pdf'], 'Un PDF n’a pas de modèle : seulement le logo.');
+        $this->assertSame(['Modèle Word de votre entreprise'], $out['sansLogo']);
+        $this->assertSame(0, $out['rien']);
     }
 
     /** PptxTemplate::reference : le modèle tel quel, seul son type principal change. */
@@ -581,7 +805,12 @@ final class NativeDeckTest extends TestCase
             ['plan.pptx', '', 'pptx'],
             ['plan.key', 'markdown', 'pptx'],
             ['plan.pptx', 'text', ''],
-            ['rapport.docx', 'markdown', ''],
+            ['rapport.docx', 'markdown', 'docx'],
+            ['rapport.docx', 'text', 'docx'],
+            ['courrier.rtf', 'markdown', 'docx'],
+            ['rapport.pdf', 'markdown', 'pdf'],
+            ['rapport.pdf', '', 'pdf'],
+            ['rapport.doc', 'markdown', ''],
             ['notes.md', 'markdown', ''],
             ['budget.xlsx', 'csv', 'xlsx'],
             ['budget.xlsx', '', 'xlsx'],
@@ -661,7 +890,7 @@ final class NativeDeckTest extends TestCase
         foreach (['anthropic::claude-fable-5-1', 'anthropic::claude-fable-5', 'openai::gpt-6-astra'] as $slug) {
             $this->assertTrue(NativeDeck::isPremium($slug), $slug);
         }
-        foreach (['anthropic::claude-opus-5', 'anthropic::claude-opus-5-5', 'anthropic::claude-sonnet-5-5', 'openai::gpt-5.6', 'openai::gpt-6-luna', 'openai::gpt-6.1-sol', 'anthropic'] as $slug) {
+        foreach (['anthropic::claude-opus-5', 'anthropic::claude-opus-5-5', 'anthropic::claude-sonnet-5-5', 'openai::gpt-5.6', 'openai::gpt-6-luna', 'openai::gpt-6.1-sol', 'openai::gpt-6.2-sol', 'openai::gpt-6.2-astra', 'anthropic'] as $slug) {
             $this->assertFalse(NativeDeck::isPremium($slug), $slug);
         }
         $this->assertSame('Anthropic', NativeDeck::providerLabel('anthropic::claude-opus-5'));
@@ -813,7 +1042,7 @@ final class NativeDeckTest extends TestCase
         // Un classeur : rangé en .xlsx, servi comme tel, purgé pareil.
         $sheet = NativeDeckStore::save('PK-xlsx', 'ventes.xlsx', 7, 42, 'openai::gpt-6.1-sol');
         $this->assertFileExists($this->dir . '/' . $sheet . '.xlsx');
-        $this->assertSame(['path' => $this->dir . '/' . $sheet . '.xlsx', 'name' => 'ventes.xlsx', 'mime' => NativeDeckStore::TYPES['xlsx']],
+        $this->assertSame(['path' => $this->dir . '/' . $sheet . '.xlsx', 'name' => 'ventes.xlsx', 'mime' => NativeDeckStore::TYPES['xlsx'], 'days_left' => 30],
             NativeDeckStore::find($sheet, 7, 42));
         touch($this->dir . '/' . $sheet . '.xlsx', $old);
         $this->assertSame(1, NativeDeckStore::purgeExpired());
@@ -868,18 +1097,18 @@ final class NativeDeckTest extends TestCase
         $this->assertStringContainsString("'/native-deck/plan'", $js);
 
         // Ce que la personne a fourni part avec la carte.
-        $this->assertStringContainsString("'kind'   => \$kind,", $chat);
-        $this->assertStringContainsString("'before' => \$before,", $chat);
+        $this->assertStringContainsString("'kind'     => \$kind,", $chat);
+        $this->assertStringContainsString("'before'   => \$before,", $chat);
         $this->assertStringContainsString("(int)(\$_POST['message_id'] ?? 0)", $chat);
         $this->assertStringContainsString('NativeDeck::kindFor($origin, $language)', $chat);
         $this->assertStringContainsString("header('Content-Type: ' . \$file['mime']);", $chat, 'Un classeur est servi comme un classeur.');
         $job = $src('src/Jobs/NativeDeckJob.php');
         $this->assertStringContainsString('NativeDeck::contextFrom(Message::forConversation($convId), $before)', $job);
         $this->assertStringContainsString('NativeDeck::attachmentFiles(NativeDeck::withoutExcluded(', $job, 'Une pièce jointe décochée ne part pas.');
-        foreach (["'exclude' => \$exclude,", "'company' => \$company,", "'note'    => \$note,"] as $cle) {
+        foreach (["'exclude'  => \$exclude,", "'template' => \$template,", "'logo'     => \$logo,", "'note'     => \$note,", "'language' => (string)(\$o['language'] ?? ''),"] as $cle) {
             $this->assertStringContainsString($cle, $chat, "Le lancement transmet $cle au job.");
         }
-        $this->assertStringContainsString("'company' => (\$payload['company'] ?? true) !== false,", $job);
+        $this->assertStringContainsString("'template' => (\$payload['template'] ?? true) !== false,", $job);
         $this->assertStringContainsString("message_id: request.messageId || ''", $js);
         $this->assertStringContainsString('+ polishButtonHtml(file)', $js);
         $this->assertStringContainsString("holder.getAttribute('data-message-id')", $js);

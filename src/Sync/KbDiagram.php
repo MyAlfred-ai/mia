@@ -41,6 +41,9 @@ final class KbDiagram
     /** Teinte d'une base : celle des bases dans le schéma d'un assistant. */
     public const HUE = '#3b82f6';
 
+    /** Teinte d'une table permanente : l'ambre des tables de la liste. */
+    public const TABLE_HUE = '#d97706';
+
     /**
      * Sources d'une base. `drive` … `gcalendar` sont les fournisseurs
      * synchronisés (KbSync::PROVIDERS) ; `mybrain` n'est pas une
@@ -104,6 +107,11 @@ final class KbDiagram
         'doc'      => '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/>',
         'pulse'    => '<path d="M22 12h-4l-3 9L9 3l-3 9H2"/>',
         'lock'     => '<rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>',
+        // Table permanente : la grille des cartes de la liste ; lignes, colonnes, lecture.
+        'table'    => '<rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M3 10h18M3 15h18M9.5 10v10"/>',
+        'rows'     => '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 10h18M3 15h18"/>',
+        'cols'     => '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M9 5v14M15 5v14"/>',
+        'eye'      => '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
         // États (pastille d'état de la base) : ceux du panneau d'état.
         'state_ok'    => '<circle cx="12" cy="12" r="9"/><path d="m8.5 12 2.5 2.5 4.5-5"/>',
         'state_busy'  => '<path d="M21 12a9 9 0 1 1-9-9c2.5 0 4.9 1 6.7 2.7L21 8"/><path d="M21 3v5h-5"/>',
@@ -168,6 +176,7 @@ final class KbDiagram
             'interval'   => max(1, $intervalMin),
             'qdrant_up'  => $qdrantUp,
             'hue'        => self::HUE,
+            'table_hue'  => self::TABLE_HUE,
             // Nombres et tri dans la langue de la page : « 1 234 » / « 1,234 ».
             'locale'     => I18n::locale() === 'en' ? 'en-US' : 'fr-FR',
             'max_items'  => self::MAX_ITEMS,
@@ -245,11 +254,33 @@ final class KbDiagram
             'org'               => t('Partagé'),
             'global'            => t('Global'),
             'assistant_off'     => t('Assistant inactif'),
-            'sharing'           => t('Partage'),
-            'private'           => t('Privée'),
-            'shared'            => t('Partagée'),
+            'sharing'           => t('Qui la voit'),
+            // Les trois niveaux de visibilité, les mots de la liste et de la fiche.
+            'private'           => t('Commune'),
+            'only_me'           => t('Privée'),
+            'only_me_note'      => t('Personne d’autre ne la voit, pas même un administrateur'),
+            'shared'            => t('Commune'),
+            'public'            => t('Publique'),
+            'public_everyone'   => t('Toute l’organisation'),
+            'public_note'       => t('La voit et la coche dans le chat'),
             'everyone'          => t('Tout le monde'),
             'everyone_note'     => t('Base de l’assistant d’aide de MIA'),
+            // Table permanente : ses lignes au lieu des documents.
+            'table'             => t('Table'),
+            'table_untitled'    => t('Nouvelle table'),
+            'table_content'     => t('Ses lignes'),
+            'table_content_empty' => t('Rien pour l’instant : importez un fichier ou donnez ses colonnes.'),
+            'table_read'        => t('Lecture par MIA'),
+            'table_read_title'  => t('Ligne à ligne, en direct'),
+            'table_read_sub'    => t('Ni découpée ni vectorisée'),
+            'table_read_note'   => t('Comptes, sommes et croisements exacts'),
+            'table_write'       => t('Écrit après votre accord'),
+            'table_readonly'    => t('Lecture seule'),
+            'rows_none'         => t('Aucune ligne'),
+            'rows_one'          => t('1 ligne'),
+            'rows_many'         => t('{n} lignes'),
+            'cols_one'          => t('1 colonne'),
+            'cols_many'         => t('{n} colonnes'),
             'you'               => t('Vous'),
             'owner'             => t('Propriétaire'),
             'creator_unknown'   => t('Créateur supprimé'),
@@ -305,6 +336,14 @@ final class KbDiagram
             'trait_usage'   => $trait('pulse'),
             'trait_system'  => $trait('lock'),
             'trait_shared'  => $trait('person'),
+            'trait_private' => $trait('lock'),
+            'trait_common'  => $trait('group'),
+            'trait_public'  => $trait('globe'),
+            'trait_rows'    => $trait('rows'),
+            'trait_cols'    => $trait('cols'),
+            'table'         => $svg(self::PATHS['table'], 15),
+            'table_glyph'   => $svg(self::PATHS['table'], 20),
+            'eye'           => $svg(self::PATHS['eye'], 15),
             'state_ok'      => $trait('state_ok'),
             'state_busy'    => $trait('state_busy'),
             'state_warn'    => $trait('state_warn'),
@@ -359,8 +398,9 @@ final class KbDiagram
      * @param array{users?: array<int,int>, groups?: array<int,int>}|null $shares    KnowledgeBase::sharesFor (propriétaire seulement)
      * @param array{users?: list<int>, groups?: list<int>}|null           $defaultOn KnowledgeBase::defaultOnFor (base en direct)
      * @param array{users?: list<int>, groups?: list<int>}|null           $canFeed   KnowledgeBase::feedersFor (base en direct)
+     * @param bool                                                         $private   « Uniquement pour moi » (KnowledgeBase::isPrivate)
      */
-    public static function access(array $kb, bool $owned, bool $youCreated, ?array $shares, ?array $defaultOn, ?array $canFeed): array
+    public static function access(array $kb, bool $owned, bool $youCreated, ?array $shares, ?array $defaultOn, ?array $canFeed, bool $private = false, bool $public = false): array
     {
         $flags = static function (array $map, ?array $default, ?array $feed, string $side): array {
             $out = [];
@@ -374,9 +414,12 @@ final class KbDiagram
             }
             return $out;
         };
-        $shares = $owned ? ($shares ?? ['users' => [], 'groups' => []]) : ['users' => [], 'groups' => []];
+        // Privée ou publique : aucun partage à montrer, quoi qu'il reste.
+        $shares = $owned && !$private && !$public ? ($shares ?? ['users' => [], 'groups' => []]) : ['users' => [], 'groups' => []];
         return [
             'owned'      => $owned,
+            'private'    => $private,
+            'public'     => $public && !$private,
             'shared'     => (int)($kb['is_shared'] ?? 0) === 1,
             'can_manage' => $owned || (int)($kb['share_can_manage'] ?? 0) === 1,
             'you'        => $youCreated,
@@ -396,8 +439,28 @@ final class KbDiagram
      * @param array<string, mixed>       $access     self::access()
      * @param array<string, mixed>|null  $status     KbStatus::summarize (null : pas d'état à montrer)
      */
-    public static function spec(array $kb, array $docs, array $profileIds, array $access, ?array $status, string $syncOwnerName = ''): array
+    public static function spec(array $kb, array $docs, array $profileIds, array $access, ?array $status, string $syncOwnerName = '', ?array $table = null): array
     {
+        // Table permanente : ses lignes, ses colonnes, son origine (la fiche
+        // de KbTableStore, quand l'appelant l'a lue).
+        $tableSpec = null;
+        if (KnowledgeBase::isTable($kb)) {
+            $columns = [];
+            foreach ((array)($table['columns'] ?? []) as $column) {
+                $label = trim((string)($column['label'] ?? ''));
+                if ($label !== '') {
+                    $columns[] = $label;
+                }
+            }
+            $tableSpec = [
+                'rows'      => (int)($table['rows'] ?? $kb['table_rows'] ?? 0),
+                'columns'   => $columns,
+                'cols'      => $columns !== [] ? count($columns) : (int)($kb['table_columns'] ?? 0),
+                'origin'    => $table !== null ? KbTableImport::originLabel((array)($table['origin'] ?? [])) : '',
+                'mia_write' => !empty($table['mia_write'] ?? $kb['table_mia_write'] ?? false),
+            ];
+        }
+
         $live     = KnowledgeBase::isRemote($kb);
         $provider = (string)($kb['sync_provider'] ?? '');
         $linked   = (string)($kb['sync_folder_ref'] ?? '') !== '';
@@ -440,6 +503,8 @@ final class KbDiagram
             ] : null,
             'assistant_ids' => array_values(array_unique(array_map('intval', $profileIds))),
             'access'        => $access,
+            'visibility'    => KnowledgeBase::visibility($kb),
+            'table'         => $tableSpec,
         ];
     }
 }

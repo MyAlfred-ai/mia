@@ -78,16 +78,26 @@ $classes = [
     '/src/Billing/UsageMeter.php',
     // Conversation vocale : formes pures (texte lisible, découpage, durée MP3) et réglage.
     '/src/Helpers/SpeechSynthesisException.php',
+    '/src/Helpers/WebSocketClient.php',
+    '/src/Helpers/RealtimeSpeech.php',
     '/src/Helpers/SpeechSynthesizer.php',
+    // Dictée vocale : moteur (OpenAI Realtime ou Voxtral).
+    '/src/Helpers/Dictation.php',
     // Réglages de voix par utilisateur (vitesse de lecture, longueur des réponses).
     '/src/Helpers/VoicePreferences.php',
     // Réglages d'affichage par utilisateur (thème, taille d'affichage).
     '/src/Helpers/DisplayPreferences.php',
+    // Sections repliées du volet, par compte.
+    '/src/Helpers/SidebarPreferences.php',
+    // Modèle préféré de l'utilisateur (nouvelles conversations).
+    '/src/Helpers/LlmPreference.php',
     // Budget IA mensuel (lu par CreditQuota).
     '/src/Billing/UsagePeriod.php',
     '/src/Billing/AiBudget.php',
+    '/src/Billing/DemoAccount.php',
     '/src/Billing/UsageInsights.php',
     '/src/Billing/PersonalUsage.php',
+    '/src/Billing/UsageHistory.php',
     '/src/Billing/CreditEstimate.php',
     // Catalogue d'embeddings : CreditService y lit les tarifs curés (aucune dépendance vendor/).
     '/src/RAG/EmbeddingService.php',
@@ -113,20 +123,29 @@ $classes = [
     '/src/Workflow/LoopSources.php',
     '/src/Workflow/LoopFiles.php',
     '/src/Workflow/LoopRunner.php',
+    '/src/Workflow/WorkflowEventFiles.php',
     '/src/Models/Workflow.php',
     '/src/Models/WorkflowRun.php',
     '/src/Workflow/WorkflowPrompt.php',
+    '/src/Workflow/WorkflowChat.php',
     '/src/Workflow/WorkflowAi.php',
     '/src/Workflow/WorkflowNotifier.php',
     '/src/Workflow/WorkflowFiles.php',
     '/src/Workflow/WorkflowDeliveries.php',
+    '/src/Workflow/WorkflowSlack.php',
     '/src/Workflow/WorkflowCreations.php',
     '/src/Workflow/WorkflowTriggers.php',
+    '/src/Workflow/WorkflowCall.php',
+    '/src/Workflow/WorkflowTables.php',
+    '/src/Models/MailPushSubscription.php',
+    '/src/Workflow/MailPush.php',
+    '/src/Workflow/WorkflowPreflightException.php',
     '/src/Workflow/WorkflowEngine.php',
     '/src/Workflow/WorkflowCatalog.php',
     '/src/Workflow/WorkflowCover.php',
     '/src/Workflow/WorkflowFit.php',
     '/src/Workflow/WorkflowJournal.php',
+    '/src/Workflow/WorkflowProgress.php',
     '/src/Workflow/WorkflowContentView.php',
     '/src/Workflow/WorkflowInserts.php',
     '/src/Workflow/WorkflowTemplates.php',
@@ -138,6 +157,14 @@ $classes = [
     '/src/Helpers/CompanyProfile.php',
     '/src/Helpers/CompanyVocabulary.php',
     '/src/Models/UserMemory.php',
+    '/src/Memory/MemoryCapture.php',
+    '/src/Memory/MemoryQuestions.php',
+    '/src/Memory/MemoryLearner.php',
+    '/src/Memory/MemorySignals.php',
+    '/src/Helpers/LegacyOffice.php',
+    '/src/Helpers/MailFile.php',
+    '/src/Helpers/ImageConvert.php',
+    '/src/Helpers/ArchiveReader.php',
     '/src/Helpers/FileExtractor.php',
     '/src/Helpers/WebPageReader.php',
     // Photo de profil : fichier choisi ou adresse collée (téléchargée par WebPageReader).
@@ -151,6 +178,8 @@ $classes = [
     '/src/Helpers/NavShell.php',
     '/src/Helpers/AdminAccess.php',
     '/src/Helpers/NavRegistry.php',
+    '/src/Helpers/SidebarSpaces.php',
+    '/src/Helpers/AdminBreadcrumb.php',
     // Administrateurs à prévenir (encadré d'erreur du chat).
     '/src/Helpers/AdminContacts.php',
     '/src/Helpers/RouteThumbnail.php',
@@ -162,6 +191,7 @@ $classes = [
     '/src/Helpers/ReferenceImages.php',
     '/src/Maintenance/PruningService.php',
     '/src/LLM/LlmCatalog.php',
+    '/src/LLM/LlmShutdownWatch.php',
     // Adapters LLM : chargés pour les tests de contrat (signatures, échelle de
     // dégradation de la recherche web). Aucun n'appelle vendor/.
     '/src/LLM/LLMInterface.php',
@@ -169,6 +199,10 @@ $classes = [
     '/src/LLM/LlmErrorPresenter.php',
     // Incidents de compte chez un fournisseur (crédit épuisé, clé refusée).
     '/src/LLM/ProviderIncident.php',
+    '/src/Office/OfficeAddin.php',
+    '/src/Office/OfficeAddinToken.php',
+    '/src/Office/OfficeGateway.php',
+    '/src/Office/OfficeManifest.php',
     '/src/LLM/ToolUseUnsupportedTrait.php',
     '/src/LLM/ChatCompletionsToolLoopTrait.php',
     '/src/LLM/LlmAdapterHelpers.php',
@@ -196,11 +230,15 @@ $classes = [
     // des codes AADSTS plutôt que de la recopier.
     '/src/Auth/Sso/GoogleSsoProvider.php',
     '/src/Auth/Sso/MicrosoftSsoProvider.php',
+    '/src/Auth/EntraJwt.php',
     '/src/Sync/GoogleCalendarProvider.php',
     '/src/Sync/OneDriveProvider.php',
     '/src/Sync/KbSync.php',
     '/src/Sync/KbStatus.php',
+    '/src/Sync/KbDocIssue.php',
+    '/src/Sync/KbAdvice.php',
     '/src/Sync/KbDiagram.php',
+    '/src/Sync/KbPages.php',
     '/src/MyBrain/MyBrainException.php',
     '/src/MyBrain/MyBrainClient.php',
     '/src/MyBrain/MyBrainContext.php',
@@ -244,6 +282,7 @@ $classes = [
     '/src/Models/UserConnectorPrefs.php',
     '/src/Tasks/UserTasksService.php',
     '/src/Outlook/UserOutlookService.php',
+    '/src/Outlook/UserOutlookPushService.php',
     // Après UserOutlookService et UserCalendarService : statiques pures partagées.
     '/src/Outlook/UserOutlookCalendarService.php',
     // Microsoft To Do : après le calendrier Outlook (statiques partagées).
@@ -304,15 +343,38 @@ $classes = [
     '/src/Agent/Tools/ScheduleTools.php',
     '/src/Agent/Tools/AssistantTools.php',
     '/src/Agent/Tools/WorkflowTools.php',
+    '/src/Agent/Tools/WorkflowPieceTools.php',
     '/src/Agent/Tools/ConversationTools.php',
     '/src/Agent/Tools/IntentTools.php',
+    // Tables de travail : l'interface du magasin avant son implémentation.
+    '/src/Tables/WorkTableOps.php',
+    '/src/Tables/WorkTableRows.php',
+    '/src/Tables/ArrayTableRows.php',
+    '/src/Tables/WorkTableRecipe.php',
+    '/src/Tables/WorkTableStore.php',
+    '/src/Tables/SqlWorkTableStore.php',
+    '/src/Tables/WorkTableCollector.php',
+    '/src/Tables/WorkTableExport.php',
+    '/src/Tables/WorkTableView.php',
+    '/src/Tables/KbTableStore.php',
+    '/src/Tables/KbTableHistory.php',
+    '/src/Tables/KbTableImport.php',
+    '/src/Tables/KbTableWrite.php',
+    '/src/Tables/KbTableView.php',
+    '/src/Tables/KbTablePrompt.php',
+    '/src/Tables/WorkTableEnricher.php',
+    '/src/Tables/WorkTableActions.php',
+    '/src/Agent/Tools/WorkTableTools.php',
     '/src/Changelog/Nouveautes.php',
+    '/src/Changelog/MajorFeatures.php',
     // Catalogue des outils : CreditService y lit les tarifs publics image/vidéo.
     '/src/Tools/ToolCatalog.php',
+    '/src/Tools/ImageOptions.php',
     '/src/Tools/ToolTriggers.php',
     '/src/Tools/ToolPrompts.php',
     '/src/Assistants/PromptStarters.php',
     '/src/Assistants/AssistantDiagram.php',
+    '/src/Assistants/AssistantPages.php',
     '/src/Assistants/AssistantDraft.php',
     '/src/Jobs/JobQueue.php',
     '/src/Helpers/ImageBytes.php',
@@ -363,6 +425,8 @@ $classes = [
     '/src/Files/FileFactory.php',
     '/src/Files/NativeDeck.php',
     '/src/Files/NativeDeckStore.php',
+    '/src/Files/NativeDeckRun.php',
+    '/src/Files/PolishOffer.php',
 ];
 foreach ($classes as $relative) {
     require ROOT . $relative;
@@ -375,6 +439,14 @@ foreach ($classes as $relative) {
 // rendent la table explicitement (ProviderIncident::useSettingsStore()).
 ProviderIncident::useMemoryStore();
 
+// Les dates d'arrêt relevées chez l'éditeur aussi : vides, en mémoire. Sans
+// cela, LlmCatalog::retirement() lirait la table `settings` dans des tests
+// unitaires sans base, et une date restée dans la base de test changerait le
+// catalogue de tous les autres tests. Les tests de persistance rendent la
+// table (LlmShutdownWatch::useSettingsStore()).
+LlmShutdownWatch::useMemoryStore();
+
 require ROOT . '/tests/Support/DatabaseTestCase.php';
 require ROOT . '/tests/Support/RagFixtures.php';
 require ROOT . '/tests/Support/AgentSource.php';
+require ROOT . '/tests/Support/MemoryWorkTableStore.php';

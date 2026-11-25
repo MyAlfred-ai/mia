@@ -494,6 +494,7 @@ final class VoiceCommandsTest extends TestCase
             'plus court'  => [self::mail(), 'preset', 'plus_court'], 'shorter' => [self::mail(), 'preset', 'plus_court'],
             'plus formel' => [self::mail(), 'preset', 'plus_formel'],
             'abandonner'  => [self::mail(), 'discard'],             'discard' => [self::mail(), 'discard'],
+            'lis-le'      => [self::mail(), 'read'],
         ];
 
         $textes = [];
@@ -558,6 +559,119 @@ final class VoiceCommandsTest extends TestCase
     }
 
     // ------------------------------------------------------------------
+    // 4 bis. Entendre une carte, allumer un connecteur
+    // ------------------------------------------------------------------
+
+    public function testLisLeFaitEntendreLaCarteSansJamaisLaDecider(): void
+    {
+        // Email : dans la relecture comme devant la confirmation d'envoi.
+        foreach (['preview', 'send-confirm'] as $mode) {
+            $r = self::cartes(['Lis-le', 'lis-moi le mail', 'Tu peux me le lire ?', 'Lis le message à voix haute', 'read it', 'read it out loud'], self::mail($mode));
+            foreach ($r as $phrase => $rendu) {
+                $this->assertSame(['act' => 'read'], $rendu, "« $phrase » ($mode) doit faire lire l'email");
+            }
+        }
+        // Carte d'approbation : son intitulé peut être nommé.
+        $r = self::cartes(['lis-le', 'lis la carte', 'lis-moi l\'évènement'], self::APPROBATION);
+        foreach ($r as $phrase => $rendu) {
+            $this->assertSame(['act' => 'read'], $rendu, "« $phrase » doit faire lire la carte");
+        }
+
+        // « Relis » n'est PAS « lis » : pour un email c'est la correction, et
+        // devant la confirmation un retour à la relecture.
+        $this->assertSame(['act' => 'preset', 'preset' => 'corriger'], self::cartes(['relis-le'], self::mail())['relis-le']);
+        $this->assertSame(['act' => 'back'], self::cartes(['relis'], self::mail('send-confirm'))['relis']);
+        // Panneau d'amélioration ouvert : ce qui est dit est une consigne.
+        $this->assertSame('instruct', self::cartes(['lis-le'], self::mail('improve'))['lis-le']['act'] ?? null);
+        // Lire ET agir dans la même phrase : rien n'est deviné, la phrase part à l'assistant.
+        $r = self::cartes(['Lis-le et envoie-le', 'Lis le dernier mail de Paul', 'Lis-moi mes rendez-vous'], self::mail());
+        foreach ($r as $phrase => $rendu) {
+            $this->assertNull($rendu, "« $phrase » n'est pas un ordre pour la carte");
+        }
+    }
+
+    public function testUnConnecteurSAllumeEtSEteintALaVoix(): void
+    {
+        $attendus = [
+            'Active Gmail'                    => ['on' => true,  'all' => false, 'targets' => [['gmail']]],
+            'active mes mails'                => ['on' => true,  'all' => false, 'targets' => [['gmail', 'outlook']]],
+            'Coupe l\'agenda'                 => ['on' => false, 'all' => false, 'targets' => [['calendar', 'mscalendar']]],
+            'allume mes mails et mon drive'   => ['on' => true,  'all' => false, 'targets' => [['gmail', 'outlook'], ['drive']]],
+            'Active Outlook'                  => ['on' => true,  'all' => false, 'targets' => [['outlook']]],
+            'active l\'agenda Outlook'        => ['on' => true,  'all' => false, 'targets' => [['mscalendar']]],
+            'Peux-tu utiliser mon agenda ?'   => ['on' => true,  'all' => false, 'targets' => [['calendar', 'mscalendar']]],
+            'Désactive tous mes connecteurs'  => ['on' => false, 'all' => true,  'targets' => []],
+            'coupe internet'                  => ['on' => false, 'all' => false, 'targets' => [['web']]],
+            'turn on Google Calendar'         => ['on' => true,  'all' => false, 'targets' => [['calendar']]],
+            'switch off Slack'                => ['on' => false, 'all' => false, 'targets' => [['slack']]],
+            'enable Microsoft To Do'          => ['on' => true,  'all' => false, 'targets' => [['mstodo']]],
+        ];
+        $appels = array_map(static fn(string $p): array => ['fn' => 'connector', 'text' => $p], array_keys($attendus));
+        foreach (self::js($appels) as $i => $rendu) {
+            $phrase = array_keys($attendus)[$i];
+            $this->assertSame($attendus[$phrase], $rendu, "« $phrase »");
+        }
+
+        // Une DEMANDE qui nomme un service n'est pas un ordre : elle part à l'assistant.
+        $demandes = [
+            'Utilise mes mails pour retrouver l\'adresse de Paul',
+            'Active Gmail et coupe Slack',          // deux ordres contraires : rien n'est deviné
+            'Qu\'y a-t-il dans mon agenda demain ?',
+            'Mes mails ?',
+            'coupe',                                 // un ordre d'arrêt, pas un connecteur
+            'Active la réunion de demain',
+            'Envoie un mail à Paul',
+            'I want to do it',
+        ];
+        $appels = array_map(static fn(string $p): array => ['fn' => 'connector', 'text' => $p], $demandes);
+        foreach (self::js($appels) as $i => $rendu) {
+            $this->assertNull($rendu, "« {$demandes[$i]} » n'est pas un ordre de connecteur");
+        }
+    }
+
+    /**
+     * Le modèle, connecteur éteint, dit de dire « active » suivi du NOM du
+     * service (ConnectorRegistry::dormantConnectorsNote, variante vocale) — le
+     * nom de la ligne du menu « + ». Chacun de ces noms doit donc s'entendre,
+     * dans les deux langues, et désigner le BON connecteur.
+     */
+    public function testChaqueConnecteurSeDitParLeNomQueLeModeleDonne(): void
+    {
+        $appels = [];
+        $cles   = [];
+        foreach (['fr' => 'active ', 'en' => 'turn on '] as $langue => $verbe) {
+            I18n::use($langue);
+            try {
+                foreach (ConnectorRegistry::keys() as $cle) {
+                    $nom = ConnectorRegistry::chatLabel($cle);
+                    $this->assertNotSame('', $nom, "« $cle » n'a pas de ligne au menu « + »");
+                    $appels[] = ['fn' => 'connector', 'text' => $verbe . $nom];
+                    $cles[]   = [$cle, $verbe . $nom];
+                }
+            } finally {
+                I18n::use('fr');
+            }
+        }
+        $this->assertGreaterThanOrEqual(20, count($appels));
+        foreach (self::js($appels) as $i => $rendu) {
+            [$cle, $phrase] = $cles[$i];
+            $this->assertIsArray($rendu, "« $phrase » n'est pas reconnu : le modèle demanderait de dire une phrase que MIA n'entend pas");
+            $this->assertTrue($rendu['on']);
+            $this->assertCount(1, $rendu['targets'], "« $phrase » doit désigner UN service");
+            $this->assertSame([$cle], $rendu['targets'][0], "« $phrase » doit désigner « $cle », et lui seul");
+        }
+
+        // … et la consigne vocale ne parle d'aucun menu.
+        $note = ConnectorRegistry::dormantConnectorsNote(['Emails Gmail'], true);
+        $this->assertStringContainsString('« active »', $note);
+        $this->assertStringContainsString('« Emails Gmail »', $note);
+        $this->assertStringNotContainsString('menu « + »', $note);
+        $ecrit = ConnectorRegistry::dormantConnectorsNote(['Emails Gmail']);
+        $this->assertStringContainsString('menu « + »', $ecrit, 'à l\'écrit, le geste reste celui du menu');
+        $this->assertSame('', ConnectorRegistry::dormantConnectorsNote([], true));
+    }
+
+    // ------------------------------------------------------------------
     // 5. Serveur : phrases de retour, consignes au modèle
     // ------------------------------------------------------------------
 
@@ -607,7 +721,7 @@ final class VoiceCommandsTest extends TestCase
         $src = self::chatController();
 
         // À la pose de la carte : le retour de l'outil porte l'invite, en conversation vocale seulement.
-        $this->assertStringContainsString('use ($depositConnectorWrite, $voiceMode, $searchScope): array {', $src);
+        $this->assertStringContainsString('use ($depositConnectorWrite, $voiceMode, $searchScope, $userId): array {', $src);
         $this->assertStringContainsString("return ['statut' => 'en_attente_approbation', 'message' => self::pendingWriteMessage(\$mailService !== null, \$voiceMode)];", $src);
         $this->assertStringContainsString('return $voiceMode ? $message . self::voiceApprovalHint($mail) : $message;', $src);
         $this->assertStringNotContainsString('tu ne peux ni approuver', ChatController::pendingWriteMessage(false), 'Hors conversation vocale : aucune invite.');
@@ -693,15 +807,18 @@ final class VoiceCommandsTest extends TestCase
 
         $debut = strpos($js, 'function routeTurn(text) {');
         $this->assertIsInt($debut);
-        $corps = substr($js, $debut, 600);
+        $corps = substr($js, $debut, 800);
         $carte = strpos($corps, 'cardOrder(text)');
+        $connecteur = strpos($corps, 'VC.connectorCommand(text)');
         $fin   = strpos($corps, 'VC.endCommand(text)');
         $arret = strpos($corps, 'VC.stopCommand(text)');
         $envoi = strpos($corps, 'sendTurn(text)');
-        foreach (['carte', 'fin', 'arret', 'envoi'] as $v) {
+        foreach (['carte', 'connecteur', 'fin', 'arret', 'envoi'] as $v) {
             $this->assertIsInt($$v, "$v absent de routeTurn");
         }
         $this->assertLessThan($fin, $carte, 'la carte en attente passe avant tout');
+        $this->assertLessThan($connecteur, $carte, '« active Gmail » ne passe jamais devant une carte à décider');
+        $this->assertLessThan($envoi, $connecteur, 'allumer un connecteur n\'est pas un message');
         $this->assertLessThan($arret, $fin);
         $this->assertLessThan($envoi, $arret, 'un message ne part qu\'en dernier recours');
         // Sans le module (script non chargé), tout ce qui est dit reste un message.
@@ -733,8 +850,8 @@ final class VoiceCommandsTest extends TestCase
         $this->assertSame(1, substr_count($js, 'html += voiceHintHtml('));
         $this->assertStringContainsString("document.body.classList.toggle('voice-chat-on', on);", $js);
         // Le repère disparaît avec les boutons (exécutée, annulée, en échec,
-        // remplacée par une proposition révisée).
-        $this->assertSame(4, substr_count($js, "card.querySelector('.voice-cmd-hint')?.remove();"));
+        // remplacée par une proposition révisée, close ailleurs — workflow).
+        $this->assertSame(5, substr_count($js, "card.querySelector('.voice-cmd-hint')?.remove();"));
 
         $css = self::lire('public/assets/css/main.css');
         $this->assertStringContainsString('.voice-cmd-hint { display: none; }', $css);
@@ -789,6 +906,38 @@ final class VoiceCommandsTest extends TestCase
         }
         $this->assertSame('et pour demain ?', $r[count($arrets)]['remainder'] ?? null);
         $this->assertTrue($r[count($arrets) + 1]);
+    }
+
+    /** Même exigence pour les connecteurs : chaque phrase du tableau de la page allume ou éteint quelque chose. */
+    public function testLesPhrasesDeConnecteursDeLaDocumentationSontReconnues(): void
+    {
+        $page  = self::lire('docs/user/fonctionnalites/conversations/converser-a-la-voix.md');
+        $debut = strpos($page, '## Se servir de ses connecteurs à la voix');
+        $fin   = strpos($page, '## Régler la voix');
+        $this->assertIsInt($debut);
+        $this->assertIsInt($fin);
+        $section = substr($page, $debut, $fin - $debut);
+
+        $phrases = [];
+        foreach (explode("\n", $section) as $ligne) {
+            if (!preg_match('/^\| («[^|]+)\|/u', $ligne, $m)) {
+                continue;
+            }
+            preg_match_all('/«\s*([^»]+?)\s*»/u', $m[1], $cites);
+            foreach ($cites[1] as $phrase) {
+                $phrases[] = $phrase;
+            }
+        }
+        $this->assertGreaterThanOrEqual(5, count($phrases), 'Tableau des connecteurs introuvable dans la page d\'aide.');
+        $appels = array_map(static fn(string $p): array => ['fn' => 'connector', 'text' => $p], $phrases);
+        // La demande citée en contre-exemple, elle, doit rester un message.
+        $appels[] = ['fn' => 'connector', 'text' => 'utilise mes mails pour retrouver l\'adresse de Paul'];
+        $rendus = self::js($appels);
+        foreach ($phrases as $i => $phrase) {
+            $this->assertIsArray($rendus[$i], "La page d'aide dit de dire « $phrase », qui n'est pas reconnu.");
+        }
+        $this->assertNull($rendus[count($phrases)]);
+        $this->assertStringContainsString('« utilise mes mails pour retrouver', $section);
     }
 
     #[\PHPUnit\Framework\Attributes\Group('doc-interne')]
@@ -902,6 +1051,7 @@ final class VoiceCommandsTest extends TestCase
                 case 'echo':  return V.looksLikeEcho(a.text, a.ref);
                 case 'interrupt': return V.interruption(a.text, a.ref);
                 case 'forms': return V.verbForms(a.text);
+                case 'connector': return V.connectorCommand(a.text);
                 default:      throw new Error('appel inconnu : ' + a.fn);
             }
         });

@@ -252,6 +252,9 @@ final class AssistantDiagram
 
         if (empty($kb['is_active'])) {
             $note = t('Inactive — non interrogée');
+        } elseif (KnowledgeBase::isTable($kb)) {
+            // Table permanente : des lignes, pas des documents.
+            $note = t('Table') . ' · ' . WorkTableView::rowsLabel((int)($kb['table_rows'] ?? 0));
         } elseif ($live) {
             $note = t('MyBrain · pour ses groupes seulement');
         } elseif ((int)($kb['is_system'] ?? 0) === 1) {

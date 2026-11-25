@@ -409,6 +409,104 @@ final class UserTeamsServiceTest extends TestCase
         $muet->postMessage(['conversation' => self::CHAT1, 'texte' => 'x']);
     }
 
+    // ===================== Audit du 2026-11-13 (doc Graph relue) =====================
+
+    /**
+     * La réponse créée porte SON identifiant (`replyToId` = le message
+     * d'origine) : la référence de fil mémorisée doit rester celle de
+     * l'origine, sinon le tour suivant lirait puis répondrait à une réponse.
+     */
+    public function testUneReponseDansUnFilGardeLeMessageDOrigine(): void
+    {
+        $base = self::GRAPH . '/teams/' . self::TEAM . '/channels/' . rawurlencode(self::CHAN);
+        $svc = self::service([
+            'POST ' . $base . '/messages/1616/replies' => ['id' => '1700000000002', 'replyToId' => '1616'],
+            'POST ' . $base . '/messages' => ['id' => '1700000000003'],
+        ]);
+        $fil = $svc->postMessage(['conversation' => self::TEAM . '~' . self::CHAN, 'texte' => 'Vu', 'repondre_a' => '1616']);
+        $this->assertSame(['1616', '1700000000002'], [$fil['fil_id'], $fil['message']]);
+
+        $neuf = $svc->postMessage(['conversation' => self::TEAM . '~' . self::CHAN, 'texte' => 'Nouveau sujet']);
+        $this->assertSame('', $neuf['fil_id']);
+
+        $this->assertStringContainsString(
+            "UserTeamsService::REF_SEPARATOR . (string)\$result['fil_id']",
+            self::lire('src/Controllers/ChatController.php')
+        );
+    }
+
+    /** Graph rend `webUrl: null` pour un message de conversation : le lien de la carte sert. */
+    public function testUnMessageDeConversationGardeLeLienDeLaCarte(): void
+    {
+        $svc = self::service([
+            'POST ' . self::GRAPH . '/chats/' . rawurlencode(self::CHAT1) . '/messages' => ['id' => '1700000000001', 'webUrl' => null],
+        ]);
+        $lien = 'https://teams.microsoft.com/l/chat/19%3Aaaa_bbb%40unq.gbl.spaces/0';
+        $r = $svc->postMessage(['conversation' => self::CHAT1, 'texte' => 'x', 'lien' => $lien]);
+        $this->assertSame($lien, $r['url']);
+
+        $r = $svc->postMessage(['conversation' => self::CHAT1, 'texte' => 'x', 'lien' => 'https://evil.example.com/x']);
+        $this->assertStringNotContainsString('evil', $r['url'], 'Seul un lien Teams est transmis.');
+    }
+
+    public function testUnFilDontLOrigineEstSupprimeeResteLisible(): void
+    {
+        $base = self::GRAPH . '/teams/' . self::TEAM . '/channels/' . rawurlencode(self::CHAN);
+        $svc = self::service(['GET ' . self::GRAPH . '/me/chats?' => self::chats()] + self::equipes() + [
+            'GET ' . $base . '/messages?$top=20&$expand=replies' => ['value' => [
+                // Origine supprimée, une réponse vivante, et plus de réponses que Graph n'en joint.
+                ['id' => '30', 'createdDateTime' => '2026-10-03T10:00:00Z', 'deletedDateTime' => '2026-10-03T11:00:00Z',
+                    'body' => ['content' => ''],
+                    'replies' => [['id' => '31', 'createdDateTime' => '2026-10-03T12:00:00Z', 'body' => ['content' => 'encore là']]],
+                    'replies@odata.nextLink' => self::GRAPH . '/suite'],
+                // Supprimée et sans réponse : rien à lire.
+                ['id' => '40', 'createdDateTime' => '2026-10-04T10:00:00Z', 'deletedDateTime' => '2026-10-04T11:00:00Z',
+                    'body' => ['content' => ''], 'replies' => []],
+                // Évènement système : jamais un fil.
+                ['id' => '50', 'messageType' => 'systemEventMessage', 'createdDateTime' => '2026-10-05T10:00:00Z',
+                    'body' => ['content' => '<systemEventMessage/>'],
+                    'replies' => [['id' => '51', 'createdDateTime' => '2026-10-05T12:00:00Z', 'body' => ['content' => 'x']]]],
+            ]],
+        ]);
+        $r = $svc->readConversation('Projet Atlas > Général', 20, 4000);
+        $this->assertSame(['30'], array_column($r['messages'], 'id'));
+        $this->assertStringContainsString('supprimé', $r['messages'][0]['texte']);
+        $this->assertSame(1, $r['messages'][0]['reponses']);
+        $this->assertStringContainsString('lire_fil_teams', $r['messages'][0]['reponses_note']);
+    }
+
+    /** Un fil plus long que les pages lues le DIT (les réponses arrivent des plus récentes aux plus anciennes). */
+    public function testUnFilTresLongEstAnnonceIncomplet(): void
+    {
+        $base = self::GRAPH . '/teams/' . self::TEAM . '/channels/' . rawurlencode(self::CHAN);
+        $n = 0;
+        $svc = self::service([
+            'GET ' . $base . '/messages/10/replies' => function () use (&$n, $base): array {
+                $n++;
+                return ['value' => [['id' => (string)(100 + $n), 'createdDateTime' => '2026-10-01T1' . $n . ':00:00Z', 'body' => ['content' => 'r' . $n]]],
+                    '@odata.nextLink' => $base . '/messages/10/replies?$skiptoken=' . $n];
+            },
+            'GET ' . $base . '/messages/10' => ['id' => '10', 'createdDateTime' => '2026-10-01T10:00:00Z', 'body' => ['content' => 'Sujet']],
+        ]);
+        $fil = $svc->readThread(self::TEAM . '~' . self::CHAN, '10', 4000);
+        $this->assertTrue($fil['tronque']);
+        $this->assertStringContainsString('plus récentes', $fil['note']);
+        $this->assertGreaterThan(1, $n, 'Plusieurs pages lues avant de s\'arrêter.');
+    }
+
+    /** Aperçu = évènement système (doc List chats, exemple 4) : ni message, ni « non lu ». */
+    public function testUnApercuSystemeNEstPasUnMessage(): void
+    {
+        $row = UserTeamsService::summarizeChat([
+            'id' => self::CHAT1, 'chatType' => 'group', 'topic' => 'Projet',
+            'viewpoint' => ['lastMessageReadDateTime' => '2026-10-01T10:00:00Z'],
+            'lastMessagePreview' => ['createdDateTime' => '2026-10-03T10:00:00Z', 'messageType' => 'systemEventMessage',
+                'from' => null, 'body' => ['contentType' => 'html', 'content' => '<systemEventMessage/>']],
+        ], 'alex@example.com', 'Europe/Paris');
+        $this->assertNull($row['dernier_message']);
+        $this->assertFalse($row['non_lu']);
+    }
+
     public function testSansDroitDePublierRienNePart(): void
     {
         $lecture = self::service([], 'Chat.Read ChannelMessage.Read.All');

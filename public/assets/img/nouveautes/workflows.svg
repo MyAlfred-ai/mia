@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 180" width="320" height="180" role="img" aria-label="">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#f4f2ff"/>
+      <stop offset="1" stop-color="#eef7f3"/>
+    </linearGradient>
+    <filter id="sh" x="-10%" y="-10%" width="120%" height="140%">
+      <feDropShadow dx="0" dy="2" stdDeviation="2.2" flood-color="#2a2550" flood-opacity=".12"/>
+    </filter>
+  </defs>
+  <rect width="320" height="180" fill="url(#bg)"/>
+  <!-- fenêtre -->
+  <g filter="url(#sh)">
+    <rect x="20" y="14" width="280" height="166" rx="10" fill="#ffffff"/>
+  </g>
+  <rect x="20" y="14" width="280" height="20" rx="10" fill="#f6f6fa"/>
+  <rect x="20" y="26" width="280" height="8" fill="#f6f6fa"/>
+  <circle cx="33" cy="24" r="3" fill="#ff6b6b"/>
+  <circle cx="43" cy="24" r="3" fill="#ffc94d"/>
+  <circle cx="53" cy="24" r="3" fill="#4ade80"/>
+  <rect x="130" y="21" width="60" height="6" rx="3" fill="#e3e2ee"/>
+  <!-- départ : un email -->
+  <rect x="122" y="44" width="76" height="20" rx="10" fill="#eef2ff" stroke="#c7cdfa"/>
+  <rect x="131" y="50" width="12" height="8" rx="1.5" fill="none" stroke="#5b6cf0" stroke-width="1.4"/>
+  <path d="M131.5 50.8l5.5 4 5.5-4" fill="none" stroke="#5b6cf0" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="149" y="51.5" width="38" height="5" rx="2.5" fill="#b9c0f6"/>
+  <path d="M160 64v9" stroke="#cfcfe0" stroke-width="1.6"/>
+  <!-- étape confiée à un assistant -->
+  <rect x="112" y="73" width="96" height="22" rx="7" fill="#ffffff" stroke="#e0dff0"/>
+  <circle cx="124" cy="84" r="6" fill="#7c6cf2"/>
+  <path d="M121.5 84.5l1.8 1.8 3.4-3.6" fill="none" stroke="#fff" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="135" y="79" width="56" height="4.5" rx="2.25" fill="#3b3a52"/>
+  <rect x="135" y="86.5" width="38" height="3.5" rx="1.75" fill="#c9c8d8"/>
+  <!-- condition -->
+  <path d="M160 95v6" stroke="#cfcfe0" stroke-width="1.6"/>
+  <rect x="154" y="101" width="12" height="12" rx="2" transform="rotate(45 160 107)" fill="#fff7e6" stroke="#f0b23c" stroke-width="1.4"/>
+  <path d="M154 108H96v8M166 108h58v8" fill="none" stroke="#cfcfe0" stroke-width="1.6" stroke-linejoin="round"/>
+  <!-- deux voies -->
+  <rect x="62" y="116" width="68" height="20" rx="7" fill="#f3f1ff" stroke="#c9c2fb"/>
+  <rect x="70" y="122.5" width="36" height="4" rx="2" fill="#7c6cf2"/>
+  <rect x="70" y="129" width="24" height="3" rx="1.5" fill="#c4bdf7"/>
+  <rect x="190" y="116" width="68" height="20" rx="7" fill="#ecfbf2" stroke="#a9e8c3"/>
+  <rect x="198" y="122.5" width="36" height="4" rx="2" fill="#16a34a"/>
+  <rect x="198" y="129" width="24" height="3" rx="1.5" fill="#9ddcb6"/>
+  <path d="M96 136v8h64M224 136v8h-64M160 144v6" fill="none" stroke="#cfcfe0" stroke-width="1.6" stroke-linejoin="round"/>
+  <!-- livrable -->
+  <rect x="118" y="150" width="84" height="20" rx="10" fill="#22c55e"/>
+  <path d="M130 160l3 3 6-6.5" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="145" y="157.5" width="44" height="5" rx="2.5" fill="#dcfce7"/>
+</svg>

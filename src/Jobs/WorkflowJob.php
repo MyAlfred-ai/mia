@@ -16,7 +16,10 @@ declare(strict_types=1);
  *  - `loop_actions` : les actions retenues à la relecture groupée d'une boucle ;
  *  - `deliver`    : les livraisons du livrable (email, Drive, Slack, base) ;
  *  - `watch`      : la vérification d'une boîte mail ou d'un dossier surveillé
- *                   (WorkflowTriggers), qui lance une exécution par nouveauté.
+ *                   (WorkflowTriggers), qui lance une exécution par nouveauté ;
+ *                   réveillée aussi par une notification push (MailPush) ;
+ *  - `mail_push_sync` : les abonnements push des boîtes mail suivies
+ *                   (création, renouvellement, retrait — MailPush::sync).
  *
  * Les quatre premiers vivent dans le couloir de la conversation de l'exécution
  * (CONVERSATION_LANE_TYPES) : les briques d'une exécution partent l'une après
@@ -38,6 +41,7 @@ class WorkflowJob implements JobHandler
             'loop_actions' => WorkflowEngine::runLoopActionsJob($payload),
             'deliver'    => WorkflowEngine::runDeliverJob($payload),
             'watch'      => WorkflowTriggers::runWatchJob($payload),
+            'mail_push_sync' => MailPush::runSyncJob($payload),
             default      => throw new JobErrorException(['kind' => 'generic', 'message' => t('Opération de workflow inconnue.')], 'opération inconnue'),
         };
     }

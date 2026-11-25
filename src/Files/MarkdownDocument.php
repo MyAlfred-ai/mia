@@ -288,8 +288,14 @@ final class MarkdownDocument
         ], $i];
     }
 
-    /** @return list<string> */
-    private static function splitTableRow(string $line): array
+    /**
+     * Cellules d'une ligne de tableau (barres de bord retirées, `\|` gardé
+     * comme une barre dans sa cellule). Publique : MailHtml lit les tableaux
+     * des emails par la même règle.
+     *
+     * @return list<string>
+     */
+    public static function splitTableRow(string $line): array
     {
         $line = trim($line);
         if (str_starts_with($line, '|')) {

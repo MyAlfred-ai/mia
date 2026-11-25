@@ -15,8 +15,19 @@ class JobController
 {
     /** Fenêtre max d'une connexion : au-delà, EventSource se reconnecte tout seul. */
     private const MAX_STREAM_SEC = 300;
-    private const POLL_US        = 300_000;
     private const KEEPALIVE_SEC  = 15;
+
+    /**
+     * Fréquence de lecture du flux. Fixée à 300 ms, elle découpait toute réponse
+     * en paquets visibles et retardait le premier mot d'autant. Rapide tant que
+     * le texte coule ou peut arriver (POLL_FAST_US, y compris pendant que le
+     * modèle réfléchit), elle ralentit après POLL_FAST_FOR_SEC de silence : un
+     * outil long, une validation attendue ne coûtent presque plus rien.
+     */
+    private const POLL_MIN_US       = 25_000;
+    private const POLL_FAST_US      = 50_000;
+    private const POLL_SLOW_US      = 250_000;
+    private const POLL_FAST_FOR_SEC = 20;
 
     public function stream(string $id): void
     {
@@ -58,6 +69,7 @@ class JobController
 
         $startedAt     = microtime(true);
         $lastKeepalive = microtime(true);
+        $lastEvent     = microtime(true);
         $delivered     = 0;
 
         while (true) {
@@ -71,22 +83,27 @@ class JobController
             if ($events !== []) {
                 flush();
                 $lastKeepalive = microtime(true);
+                $lastEvent     = $lastKeepalive;
             }
 
             if (connection_aborted() === 1) {
                 return; // le client est parti : le job, lui, continue
             }
 
-            $live = JobQueue::liveStatus($jobId);
-            if ($live === null) {
-                return; // conversation supprimée entre-temps (cascade)
-            }
-            $status = (string)$live['status'];
+            // Le statut n'a d'intérêt qu'une fois le flux vide : pendant que le
+            // texte coule, une lecture par paquet suffit.
+            if ($events === []) {
+                $live = JobQueue::liveStatus($jobId);
+                if ($live === null) {
+                    return; // conversation supprimée entre-temps (cascade)
+                }
+                $status = (string)$live['status'];
 
-            // Terminé ET tout le flux délivré → clôture explicite.
-            if (JobQueue::isTerminal($status) && $cursor >= (int)$live['last_seq']) {
-                $this->closeStream($jobId, $status, $delivered, $cursor);
-                return;
+                // Terminé ET tout le flux délivré → clôture explicite.
+                if (JobQueue::isTerminal($status) && $cursor >= (int)$live['last_seq']) {
+                    $this->closeStream($jobId, $status, $delivered, $cursor);
+                    return;
+                }
             }
 
             if ((microtime(true) - $startedAt) >= self::MAX_STREAM_SEC) {
@@ -98,8 +115,18 @@ class JobController
                 $lastKeepalive = microtime(true);
             }
 
-            usleep(self::POLL_US);
+            usleep(self::pollDelay($events !== [], microtime(true) - $lastEvent));
         }
+    }
+
+    /** Attente avant la prochaine lecture du flux (cf. POLL_MIN_US). */
+    public static function pollDelay(bool $delivered, float $silentSec): int
+    {
+        if ($delivered) {
+            return self::POLL_MIN_US;
+        }
+
+        return $silentSec < self::POLL_FAST_FOR_SEC ? self::POLL_FAST_US : self::POLL_SLOW_US;
     }
 
     /**
@@ -143,14 +170,29 @@ class JobController
         echo json_encode(['jobs' => $jobs]);
     }
 
-    /** Demande d'arrêt : le worker la voit à son prochain tick (cf. JobContext). */
+    /**
+     * Demande d'arrêt : un job en file est clos tout de suite, un job en cours
+     * voit la demande à son prochain tick (cf. JobQueue::requestCancel).
+     * `seq` (facultatif) = dernier évènement du flux que l'écran montrait au
+     * clic : la réponse enregistrée s'y arrête.
+     */
     public function cancel(string $id): void
     {
         AuthMiddleware::requireAuth();
         $user = Session::currentUser();
 
-        $ok = JobQueue::requestCancel((int)$id, (int)$user['id']);
+        $ok = JobQueue::requestCancel((int)$id, (int)$user['id'], self::seenSeq($_POST['seq'] ?? null));
         header('Content-Type: application/json');
         echo json_encode(['cancelled' => $ok]);
+    }
+
+    /** Repère d'affichage posté par le bouton Stop : entier ≥ 0, sinon null. */
+    public static function seenSeq(mixed $raw): ?int
+    {
+        if (!is_string($raw) && !is_int($raw)) {
+            return null;
+        }
+        $raw = trim((string)$raw);
+        return preg_match('/^\d{1,9}$/', $raw) === 1 ? (int)$raw : null;
     }
 }

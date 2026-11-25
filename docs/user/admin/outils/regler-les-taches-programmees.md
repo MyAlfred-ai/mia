@@ -2,7 +2,7 @@
 title: Régler les tâches programmées
 description: Proposer ou suspendre les demandes récurrentes des utilisateurs, décider si elles peuvent agir sans validation, et savoir ce qu'elles coûtent.
 sidebar:
-  order: 6
+  order: 7
 ---
 
 Une tâche programmée est une demande qu'un utilisateur confie à MIA pour qu'elle se répète toute

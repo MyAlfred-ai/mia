@@ -30,11 +30,24 @@ class KnowledgeBaseDocument
      * l'upload manuel (AdminController) et la synchronisation de dossier
      * distant (KbSync, qui tourne aussi en worker CLI sans les contrôleurs).
      */
+    /**
+     * Acceptés au dépôt, jamais repris par la synchronisation d'un dossier :
+     * une archive peut peser lourd, et l'ingérer d'office la ferait facturer
+     * à chaque passage où elle change.
+     */
+    public const SYNC_EXCLUDED_MIMES = ['application/zip'];
+
     public const ALLOWED_MIMES = [
         'application/pdf' => 'pdf',
         'application/vnd.openxmlformats-officedocument.wordprocessingml.document'   => 'docx',
         'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'         => 'xlsx',
         'application/vnd.openxmlformats-officedocument.presentationml.presentation' => 'pptx',
+        'application/msword'       => 'doc',
+        'application/vnd.ms-excel' => 'xls',
+        'application/vnd.ms-powerpoint' => 'ppt',
+        'message/rfc822'             => 'eml',
+        'application/vnd.ms-outlook' => 'msg',
+        'application/zip'            => 'zip',
         'application/vnd.oasis.opendocument.text'         => 'odt',
         'application/vnd.oasis.opendocument.spreadsheet'  => 'ods',
         'application/vnd.oasis.opendocument.presentation' => 'odp',
@@ -50,25 +63,71 @@ class KnowledgeBaseDocument
         'image/webp' => 'webp',
     ];
 
+    /**
+     * Noms des documents de plusieurs bases, en UNE requête — la liste des
+     * bases les cherche avec le nom et la description (« où est le contrat
+     * Durand ? »). Une chaîne par base, noms séparés d'une espace.
+     *
+     * @param list<int> $kbIds
+     * @return array<int, string>
+     */
+    public static function namesByKb(array $kbIds): array
+    {
+        $kbIds = array_values(array_unique(array_filter(array_map('intval', $kbIds), static fn(int $id): bool => $id > 0)));
+        if ($kbIds === []) {
+            return [];
+        }
+        $stmt = Database::getInstance()->prepare(
+            'SELECT kb_id, file_name FROM knowledge_base_documents WHERE kb_id IN ('
+            . implode(',', array_fill(0, count($kbIds), '?')) . ') ORDER BY kb_id, id'
+        );
+        $stmt->execute($kbIds);
+        $out = [];
+        foreach ($stmt->fetchAll() as $row) {
+            $id = (int)$row['kb_id'];
+            $out[$id] = isset($out[$id]) ? $out[$id] . ' ' . (string)$row['file_name'] : (string)$row['file_name'];
+        }
+        return $out;
+    }
+
     public static function allForKb(int $kbId): array
     {
         $stmt = Database::getInstance()->prepare(
-            'SELECT id, kb_id, file_name, stored_name, mime_type, file_size,
-                    token_count, created_at, extraction_status, extraction_error,
-                    vector_status, vector_error, chunk_count, source, sync_file_id,
-                    CASE WHEN extracted_text IS NULL THEN 0 ELSE 1 END AS has_text
-             FROM knowledge_base_documents
-             WHERE kb_id = ?
-             ORDER BY created_at ASC, id ASC'
+            'SELECT d.id, d.kb_id, d.file_name, d.stored_name, d.mime_type, d.file_size,
+                    d.token_count, d.created_at, d.extraction_status, d.extraction_error,
+                    d.vector_status, d.vector_error, d.chunk_count, d.source, d.sync_file_id,
+                    d.excluded_at, d.excluded_by, d.excluded_reason, d.indexed_at,
+                    UNIX_TIMESTAMP(d.indexed_at) AS indexed_ts,
+                    u.name AS excluded_by_name,
+                    TIMESTAMPDIFF(SECOND, d.created_at, NOW()) AS age_s,
+                    CASE WHEN d.extracted_text IS NULL THEN 0 ELSE 1 END AS has_text
+             FROM knowledge_base_documents d
+             LEFT JOIN users u ON u.id = d.excluded_by
+             WHERE d.kb_id = ?
+             ORDER BY d.created_at ASC, d.id ASC'
         );
         $stmt->execute([$kbId]);
         return $stmt->fetchAll();
     }
 
+    /**
+     * Un document avec les colonnes de la liste (exclusion, âge) — pour sa
+     * fiche de détail. Null s'il n'appartient pas à la base.
+     */
+    public static function findForKb(int $kbId, int $id): ?array
+    {
+        foreach (self::allForKb($kbId) as $row) {
+            if ((int)$row['id'] === $id) {
+                return $row;
+            }
+        }
+        return null;
+    }
+
     public static function findById(int $id): ?array
     {
         $stmt = Database::getInstance()->prepare(
-            'SELECT * FROM knowledge_base_documents WHERE id = ?'
+            'SELECT *, UNIX_TIMESTAMP(indexed_at) AS indexed_ts FROM knowledge_base_documents WHERE id = ?'
         );
         $stmt->execute([$id]);
         return $stmt->fetch() ?: null;
@@ -129,6 +188,9 @@ class KnowledgeBaseDocument
      * Nouvelle version d'un document synchronisé : remplace fichier stocké et
      * métadonnées, remet les statuts d'ingestion à zéro. L'ancien fichier
      * disque est supprimé par l'appelant APRÈS téléchargement réussi.
+     *
+     * Une exclusion est LEVÉE : on avait écarté CETTE version (scan sans
+     * texte, fichier protégé…) ; corrigée à la source, elle mérite un essai.
      */
     public static function updateSyncedVersion(int $id, array $data): void
     {
@@ -137,7 +199,8 @@ class KnowledgeBaseDocument
              SET file_name = ?, stored_name = ?, mime_type = ?, file_size = ?,
                  sync_hash = ?, sync_modified_at = ?,
                  extraction_status = 'pending', extraction_error = NULL,
-                 vector_status = 'pending', vector_error = NULL
+                 vector_status = 'pending', vector_error = NULL,
+                 excluded_at = NULL, excluded_by = NULL, excluded_reason = NULL
              WHERE id = ?"
         )->execute([
             (string)$data['file_name'],
@@ -202,17 +265,139 @@ class KnowledgeBaseDocument
         )->execute([$text, TextChunker::estimateTokens($text), $id]);
     }
 
+    /**
+     * Statut de la vectorisation. Menée au bout (`done`), elle pose l'heure de
+     * la DERNIÈRE indexation du document (`indexed_at`, affichée par sa ligne
+     * et sa fiche) ; un échec garde l'heure de la précédente.
+     */
     public static function setVectorStatus(int $id, string $status, ?string $error = null, ?int $chunkCount = null): void
     {
+        $stamp = $status === 'done' ? ', indexed_at = NOW()' : '';
         if ($chunkCount !== null) {
             Database::getInstance()->prepare(
-                'UPDATE knowledge_base_documents SET vector_status = ?, vector_error = ?, chunk_count = ? WHERE id = ?'
+                'UPDATE knowledge_base_documents SET vector_status = ?, vector_error = ?, chunk_count = ?' . $stamp . ' WHERE id = ?'
             )->execute([$status, $error !== null ? mb_substr($error, 0, 500) : null, $chunkCount, $id]);
             return;
         }
         Database::getInstance()->prepare(
-            'UPDATE knowledge_base_documents SET vector_status = ?, vector_error = ? WHERE id = ?'
+            'UPDATE knowledge_base_documents SET vector_status = ?, vector_error = ?' . $stamp . ' WHERE id = ?'
         )->execute([$status, $error !== null ? mb_substr($error, 0, 500) : null, $id]);
+    }
+
+    /**
+     * Nombre d'extraits posé dès le découpage : un document dont la
+     * vectorisation échoue garde ses extraits MySQL (recherche par mots), et
+     * sa fiche doit pouvoir les montrer.
+     */
+    public static function setChunkCount(int $id, int $count): void
+    {
+        Database::getInstance()->prepare(
+            'UPDATE knowledge_base_documents SET chunk_count = ? WHERE id = ?'
+        )->execute([max(0, $count), $id]);
+    }
+
+    // ===================== Exclusion, nouvel essai =====================
+
+    /**
+     * Exclut un document de sa base : ses extraits sont retirés (MySQL ici ;
+     * les points Qdrant, par l'appelant, AVANT — leurs ids partent avec les
+     * lignes), il ne compte plus parmi les problèmes et n'est plus cherché.
+     * Le fichier est gardé : « Rétablir » le relit.
+     */
+    public static function exclude(int $id, ?int $userId, string $reason): void
+    {
+        $db = Database::getInstance();
+        $db->beginTransaction();
+        try {
+            $db->prepare('DELETE FROM knowledge_base_chunks WHERE document_id = ?')->execute([$id]);
+            $db->prepare(
+                'UPDATE knowledge_base_documents
+                 SET excluded_at = NOW(), excluded_by = ?, excluded_reason = ?, chunk_count = 0
+                 WHERE id = ?'
+            )->execute([$userId !== null && $userId > 0 ? $userId : null, mb_substr(trim($reason), 0, 255), $id]);
+            $db->commit();
+        } catch (\Throwable $e) {
+            $db->rollBack();
+            throw $e;
+        }
+    }
+
+    /**
+     * Prépare un nouvel essai : l'exclusion est levée et les statuts de la
+     * phase à refaire repartent de « en attente ».
+     *   - `full`   : lecture du texte, découpage et vectorisation ;
+     *   - `vector` : vectorisation seule (les extraits MySQL sont gardés) ;
+     *   - `sync`   : le fichier sera retéléchargé au prochain passage de la
+     *                synchronisation (son empreinte est oubliée).
+     */
+    public static function prepareRetry(int $id, string $mode): void
+    {
+        $sql = match ($mode) {
+            'vector' => "UPDATE knowledge_base_documents
+                         SET vector_status = 'pending', vector_error = NULL,
+                             excluded_at = NULL, excluded_by = NULL, excluded_reason = NULL
+                         WHERE id = ?",
+            'sync'   => "UPDATE knowledge_base_documents
+                         SET sync_hash = NULL, sync_modified_at = NULL,
+                             extraction_status = 'pending', extraction_error = NULL,
+                             vector_status = 'pending', vector_error = NULL,
+                             excluded_at = NULL, excluded_by = NULL, excluded_reason = NULL
+                         WHERE id = ?",
+            default  => "UPDATE knowledge_base_documents
+                         SET extraction_status = 'pending', extraction_error = NULL,
+                             vector_status = 'pending', vector_error = NULL,
+                             excluded_at = NULL, excluded_by = NULL, excluded_reason = NULL
+                         WHERE id = ?",
+        };
+        Database::getInstance()->prepare($sql)->execute([$id]);
+    }
+
+    /**
+     * Ce qui travaille en ce moment sur les documents d'une base : un job
+     * d'ingestion ou de vectorisation par document, une synchronisation ou
+     * une réindexation de la base. Sert à reconnaître un document dont le
+     * traitement s'est arrêté en route (KbDocIssue::KIND_STALLED). Ne lève
+     * jamais : en cas de doute, tout est réputé occupé (rien n'est déclaré
+     * interrompu à tort).
+     *
+     * @param list<int> $docIds
+     * @return array{base: bool, docs: array<int, true>}
+     */
+    public static function activeWork(int $kbId, array $docIds): array
+    {
+        $docIds = array_values(array_unique(array_filter(array_map('intval', $docIds), static fn(int $i): bool => $i > 0)));
+        $busy   = ['base' => false, 'docs' => []];
+        try {
+            $db   = Database::getInstance();
+            $keys = ['kb_sync:' . $kbId, 'kb_reindex:' . $kbId];
+            foreach ($docIds as $id) {
+                $keys[] = 'kb_document:' . $id;
+                $keys[] = 'kb_vectorize:' . $id;
+            }
+            $stmt = $db->prepare(
+                'SELECT dedup_key FROM async_jobs
+                 WHERE dedup_key IN (' . implode(',', array_fill(0, count($keys), '?')) . ")
+                   AND status IN ('pending', 'running')"
+            );
+            $stmt->execute($keys);
+            foreach ($stmt->fetchAll(\PDO::FETCH_COLUMN) as $key) {
+                $key = (string)$key;
+                if (str_starts_with($key, 'kb_sync:') || str_starts_with($key, 'kb_reindex:')) {
+                    $busy['base'] = true;
+                } elseif (preg_match('/^kb_(?:document|vectorize):(\d+)$/', $key, $m) === 1) {
+                    $busy['docs'][(int)$m[1]] = true;
+                }
+            }
+            $lock = $db->prepare('SELECT IS_USED_LOCK(?)');
+            $lock->execute(['kb_sync_' . $kbId]);
+            if ($lock->fetchColumn() !== null) {
+                $busy['base'] = true;
+            }
+        } catch (\Throwable $e) {
+            error_log('[KB] travail en cours de la base ' . $kbId . ' : ' . $e->getMessage());
+            return ['base' => true, 'docs' => []];
+        }
+        return $busy;
     }
 
     // ===================== Chunking =====================
@@ -433,6 +618,113 @@ class KnowledgeBaseDocument
         return TextChunker::packChunks($rows, $tokenBudget);
     }
 
+    /** Extraits rendus par « Que sait-elle ? » (page de consultation d'une base). */
+    public const SEARCH_EXTRACTS_MAX = 5;
+
+    /** Longueur d'un extrait montré par « Que sait-elle ? », autour du premier mot trouvé. */
+    public const SEARCH_EXCERPT_CHARS = 420;
+
+    /**
+     * « Que sait-elle ? » — les extraits d'UNE base qui répondent le mieux à
+     * une question, sans rien envoyer à un modèle : recherche plein texte
+     * (FULLTEXT, le repli lexical du chat), puis, si elle ne trouve rien (mots
+     * trop courts, mots vides), chaque mot cherché tel quel. Jamais compté
+     * comme une utilisation : rien ne part dans un prompt.
+     *
+     * @return list<array{document_id: int, file_name: string, chunk_index: int, excerpt: string}>
+     */
+    public static function searchExtracts(int $kbId, string $query, int $limit = self::SEARCH_EXTRACTS_MAX): array
+    {
+        $query = trim(mb_substr($query, 0, 200));
+        if ($kbId <= 0 || $query === '') {
+            return [];
+        }
+        $db   = Database::getInstance();
+        $rows = [];
+        try {
+            $stmt = $db->prepare(
+                "SELECT c.document_id, d.file_name, c.chunk_index, c.content,
+                        MATCH(c.content) AGAINST (? IN NATURAL LANGUAGE MODE) AS score
+                 FROM knowledge_base_chunks c
+                 JOIN knowledge_base_documents d ON d.id = c.document_id
+                 WHERE c.kb_id = ? AND MATCH(c.content) AGAINST (? IN NATURAL LANGUAGE MODE)
+                 ORDER BY score DESC
+                 LIMIT " . max(1, $limit)
+            );
+            $stmt->execute([$query, $kbId, $query]);
+            $rows = $stmt->fetchAll();
+        } catch (\Throwable $e) {
+            error_log('[KB] « Que sait-elle ? » plein texte, base #' . $kbId . ' : ' . $e->getMessage());
+        }
+        $words = self::searchWords($query);
+        if ($rows === [] && $words !== []) {
+            $like   = [];
+            $params = [$kbId];
+            foreach ($words as $word) {
+                $like[]   = "c.content LIKE ? ESCAPE '!'";
+                $params[] = '%' . strtr($word, ['!' => '!!', '%' => '!%', '_' => '!_']) . '%';
+            }
+            $stmt = $db->prepare(
+                "SELECT c.document_id, d.file_name, c.chunk_index, c.content
+                 FROM knowledge_base_chunks c
+                 JOIN knowledge_base_documents d ON d.id = c.document_id
+                 WHERE c.kb_id = ? AND (" . implode(' OR ', $like) . ")
+                 ORDER BY d.created_at ASC, c.chunk_index ASC
+                 LIMIT " . max(1, $limit)
+            );
+            $stmt->execute($params);
+            $rows = $stmt->fetchAll();
+        }
+        return array_map(static fn(array $row): array => [
+            'document_id' => (int)$row['document_id'],
+            'file_name'   => (string)$row['file_name'],
+            'chunk_index' => (int)$row['chunk_index'],
+            'excerpt'     => self::excerptAround((string)$row['content'], $words, self::SEARCH_EXCERPT_CHARS),
+        ], $rows);
+    }
+
+    /** Les mots d'une question qui valent d'être cherchés (3 lettres et plus). PURE. */
+    public static function searchWords(string $query): array
+    {
+        $words = preg_split('/[^\p{L}\p{N}]+/u', mb_strtolower($query)) ?: [];
+        return array_values(array_unique(array_filter($words, static fn(string $w): bool => mb_strlen($w) >= 3)));
+    }
+
+    /**
+     * Un passage d'au plus `$max` caractères autour du premier mot trouvé
+     * (sans tenir compte des accents ni de la casse), coupé à des espaces,
+     * points de suspension aux bords coupés. PURE.
+     *
+     * @param list<string> $words
+     */
+    public static function excerptAround(string $text, array $words, int $max): string
+    {
+        $text = trim((string)preg_replace('/\s+/u', ' ', $text));
+        if (mb_strlen($text) <= $max) {
+            return $text;
+        }
+        $fold = static fn(string $s): string => mb_strtolower((string)preg_replace('/\p{M}/u', '', (string)\Normalizer::normalize($s, \Normalizer::FORM_D)));
+        $haystack = $fold($text);
+        $at = null;
+        foreach ($words as $word) {
+            $pos = mb_strpos($haystack, $fold($word));
+            if ($pos !== false && ($at === null || $pos < $at)) {
+                $at = $pos;
+            }
+        }
+        $start = max(0, (int)($at ?? 0) - (int)floor($max / 3));
+        if ($start > 0) {
+            $space = mb_strpos($text, ' ', $start);
+            $start = $space !== false && $space < $start + 40 ? $space + 1 : $start;
+        }
+        $slice = mb_substr($text, $start, $max);
+        $end   = mb_strrpos($slice, ' ');
+        if ($start + $max < mb_strlen($text) && $end !== false && $end > $max - 60) {
+            $slice = mb_substr($slice, 0, $end);
+        }
+        return ($start > 0 ? '… ' : '') . trim($slice) . ($start + mb_strlen($slice) < mb_strlen($text) ? ' …' : '');
+    }
+
     /**
      * Contenus de chunks par ids, réordonnés selon l'ordre fourni (scores
      * vectoriels desc). Utilisé après un search Qdrant : les points orphelins
@@ -537,6 +829,7 @@ class KnowledgeBaseDocument
 
             self::setExtractedText($id, $text);
             $chunkCount = self::rechunkDocument($id);
+            self::setChunkCount($id, $chunkCount);
 
             if ($text === null || trim((string)$text) === '') {
                 self::setExtractionStatus($id, 'done', 'Aucun texte extrait.');

@@ -146,7 +146,7 @@ final class CompanyVocabularyTest extends TestCase
     /** Il a quitté Modèles IA → Modèles : ni champ là-bas, ni écriture par son ancien handler. */
     public function testDemenageSurLaPageEntreprise(): void
     {
-        $models = self::source('templates/admin/llms/models.php');
+        $models = self::source('templates/admin/llms/index.php');
         $this->assertStringNotContainsString('name="common_vocabulary"', $models);
         $this->assertStringContainsString('/admin/company#vocabulaire', $models);
 

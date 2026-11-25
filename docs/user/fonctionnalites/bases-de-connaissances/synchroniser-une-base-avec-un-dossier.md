@@ -22,8 +22,9 @@ ajouté, modifié ou retiré du dossier l'est aussi dans la base, sans que perso
 
 ## Étapes
 
-1. Ouvrez la fiche de la base (**Modifier** sur sa carte, ou **+ Nouvelle base**), section
-   **Sources**, et choisissez la tuile **Google Drive** — ou **OneDrive**, **SharePoint**.
+1. Ouvrez la fiche de la base (**Modifier** sur sa page, ou la carte **Nouvelle base**), section
+   **Documents**, et choisissez **Google Drive** — ou **OneDrive**, **SharePoint**.
+   Une source absente n'est pas encore configurée : la ligne sous les sources le dit.
 2. Choisissez l'**Accès au dossier** :
    - **Ma connexion Google Drive** : **Parcourir…** ouvre l'explorateur sous le champ ; choisissez
      **Mon Drive**, **Drive partagés** ou **Partagés avec moi**, descendez jusqu'au dossier et

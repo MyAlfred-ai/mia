@@ -1,8 +1,8 @@
 ---
 title: Travailler avec Slack
-description: Faire résumer un canal ou un fil, retrouver un message, et publier dans Slack en votre nom après approbation.
+description: Faire résumer un canal ou un fil, retrouver un message, et publier dans Slack en votre nom après approbation — dans un canal ou à une personne.
 sidebar:
-  order: 3
+  order: 4
 ---
 
 Une fois votre Slack relié et l'interrupteur **Messages Slack** allumé, MIA cherche et lit vos
@@ -50,6 +50,16 @@ faire dans Slack.
 
 **Annuler** ne publie rien. Sans réponse de votre part, la carte expire au bout de 30 minutes.
 
+## Écrire à une personne
+
+Demandez : *« Écris à Marie sur Slack que la réunion est déplacée »*. MIA retrouve la personne par
+son nom, son pseudo (`@marie`) ou son adresse email, et la carte d'approbation la nomme : le message
+lui arrive en **message direct**, elle seule le voit. Si le nom désigne plusieurs personnes, MIA vous
+demande laquelle plutôt que de choisir.
+
+Une connexion Slack ancienne ne porte pas cette autorisation : reliez à nouveau Slack depuis
+**Réglages → Comptes connectés**.
+
 Le texte est mis en forme **pour Slack** : écrivez votre demande normalement, le gras, l'italique,
 les listes et les liens sont convertis — rien n'arrive avec des astérisques en toutes lettres.
 
@@ -62,9 +72,10 @@ fil : au message suivant, *« ajoute un mot dans ce fil »* désigne bien celui-
 
 - **Pas de canal que vous ne voyez pas.** Un canal privé dont vous n'êtes pas membre est invisible
   pour MIA ; si elle ne trouve rien, c'est parfois qu'il faut d'abord le rejoindre dans Slack.
-- **Pas de nouveau message direct.** MIA ne peut pas ouvrir une conversation privée avec quelqu'un.
+- **Pas de conversation de groupe.** MIA écrit dans un canal ou à une seule personne.
 - **Pas de modification ni de suppression** d'un message, qu'il vienne de vous ou d'un autre.
-- **Pas de fichier.** Les fichiers partagés dans Slack ne sont pas lus.
+- **Pas de fichier lu.** Les fichiers partagés dans Slack ne sont pas lus. Joindre des fichiers à un
+  message se fait depuis un workflow : [Lire ou publier dans Slack](../workflows/lire-ou-publier-dans-slack.md).
 
 ## Voir aussi
 

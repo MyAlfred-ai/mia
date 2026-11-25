@@ -1,0 +1,14 @@
+-- Bouton Stop d'une réponse : où l'affichage s'est arrêté.
+--
+-- L'écran s'arrête au clic, tout de suite ; le worker, lui, ne voit la demande
+-- qu'à la prochaine lecture du flux du modèle (une demi-seconde quand le texte
+-- coule, davantage pendant qu'il réfléchit ou qu'un outil travaille). Le texte
+-- produit entre les deux n'a jamais été montré : la réponse enregistrée ne
+-- doit pas le garder, sinon la conversation rechargée en dirait plus que ce
+-- qu'on a vu s'arrêter.
+--
+-- `cancel_seq` = dernier évènement du flux (`job_events.seq`) appliqué par
+-- l'écran au moment du clic. NULL = arrêt sans repère (ancien client, tiroir
+-- des générations) : la réponse garde tout ce qui a été produit, comme avant.
+-- Lu par JobContext, appliqué par ChatController::runSend.
+ALTER TABLE async_jobs ADD COLUMN cancel_seq INT UNSIGNED NULL DEFAULT NULL AFTER cancel_requested;

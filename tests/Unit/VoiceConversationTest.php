@@ -416,14 +416,19 @@ final class VoiceConversationTest extends TestCase
 
     public function testLaCleDeCacheDUneAnnonceSuitLaVoixLaLangueEtLeTexte(): void
     {
-        $a = SpeechSynthesizer::cueCacheKey('Recherche sur Internet', 'fr');
+        $l = SpeechSynthesizer::ENGINE_LEGACY;
+        $a = SpeechSynthesizer::cueCacheKey($l, 'Recherche sur Internet', 'fr');
         $this->assertMatchesRegularExpression('/^[0-9a-f]{40}$/', $a);
-        $this->assertSame($a, SpeechSynthesizer::cueCacheKey("  Recherche sur Internet \n", 'fr'), 'les blancs de bord ne changent rien');
-        $this->assertNotSame($a, SpeechSynthesizer::cueCacheKey('Recherche sur Internet', 'en'), 'une langue = une voix');
-        $this->assertNotSame($a, SpeechSynthesizer::cueCacheKey('Recherche dans Gmail', 'fr'));
+        $this->assertSame($a, SpeechSynthesizer::cueCacheKey($l, "  Recherche sur Internet \n", 'fr'), 'les blancs de bord ne changent rien');
+        $this->assertNotSame($a, SpeechSynthesizer::cueCacheKey($l, 'Recherche sur Internet', 'en'), 'une langue = une voix');
+        $this->assertNotSame($a, SpeechSynthesizer::cueCacheKey($l, 'Recherche dans Gmail', 'fr'));
+        // Une autre voix de lecture = une autre annonce (et un autre format).
+        $this->assertNotSame($a, SpeechSynthesizer::cueCacheKey(SpeechSynthesizer::ENGINE_OPENAI, 'Recherche sur Internet', 'fr'));
+        $this->assertNotSame($a, SpeechSynthesizer::cueCacheKey(SpeechSynthesizer::ENGINE_MISTRAL, 'Recherche sur Internet', 'fr'));
         // Le chemin vit sous le dossier de cache donné (le cache d'instance par défaut).
-        $this->assertSame('/tmp/x/' . $a . '.mp3', SpeechSynthesizer::cueCachePath('Recherche sur Internet', 'fr', '/tmp/x/'));
-        $this->assertStringStartsWith(ROOT . SpeechSynthesizer::CACHE_DIR . '/', SpeechSynthesizer::cueCachePath('Recherche sur Internet', 'fr'));
+        $this->assertSame('/tmp/x/' . $a . '.mp3', SpeechSynthesizer::cueCachePath($l, 'Recherche sur Internet', 'fr', '/tmp/x/'));
+        $this->assertStringEndsWith('.wav', SpeechSynthesizer::cueCachePath(SpeechSynthesizer::ENGINE_OPENAI, 'Recherche sur Internet', 'fr', '/tmp/x/'));
+        $this->assertStringStartsWith(ROOT . SpeechSynthesizer::CACHE_DIR . '/', SpeechSynthesizer::cueCachePath($l, 'Recherche sur Internet', 'fr'));
         $this->assertStringStartsWith('/storage/cache/', SpeechSynthesizer::CACHE_DIR, 'à côté des autres caches d\'instance (volume storage_cache)');
     }
 
@@ -437,25 +442,25 @@ final class VoiceConversationTest extends TestCase
             return ['status' => 200, 'body' => $audio];
         };
         try {
-            $this->assertNull(SpeechSynthesizer::readCachedCue('Recherche sur Internet', 'fr', $dir));
+            $this->assertNull(SpeechSynthesizer::readCachedCue(SpeechSynthesizer::ENGINE_LEGACY, 'Recherche sur Internet', 'fr', $dir));
 
-            $premier = SpeechSynthesizer::synthesizeCached('Recherche sur Internet', 'sk-test', 'fr', $transport, $dir);
+            $premier = SpeechSynthesizer::synthesizeCached(SpeechSynthesizer::ENGINE_LEGACY, 'Recherche sur Internet', 'sk-test', 'fr', $transport, $dir);
             $this->assertFalse($premier['cached']);
             $this->assertSame($audio, $premier['audio']);
             $this->assertEqualsWithDelta(20 * 576 / 24000, $premier['seconds'], 1e-9);
             $this->assertSame(1, $appels);
-            $this->assertSame($audio, file_get_contents(SpeechSynthesizer::cueCachePath('Recherche sur Internet', 'fr', $dir)));
+            $this->assertSame($audio, file_get_contents(SpeechSynthesizer::cueCachePath(SpeechSynthesizer::ENGINE_LEGACY, 'Recherche sur Internet', 'fr', $dir)));
             $this->assertSame([], array_values(array_filter(scandir($dir), static fn(string $f): bool => str_starts_with($f, 'cue-'))), 'aucun fichier temporaire ne reste');
 
-            $second = SpeechSynthesizer::synthesizeCached('Recherche sur Internet', 'sk-test', 'fr', $transport, $dir);
+            $second = SpeechSynthesizer::synthesizeCached(SpeechSynthesizer::ENGINE_LEGACY, 'Recherche sur Internet', 'sk-test', 'fr', $transport, $dir);
             $this->assertTrue($second['cached'], 'servie du disque : rien à facturer');
             $this->assertSame($audio, $second['audio']);
             $this->assertEqualsWithDelta($premier['seconds'], $second['seconds'], 1e-9);
             $this->assertSame(1, $appels, 'aucun second appel au fournisseur');
-            $this->assertSame($audio, SpeechSynthesizer::readCachedCue('Recherche sur Internet', 'fr', $dir));
+            $this->assertSame($audio, SpeechSynthesizer::readCachedCue(SpeechSynthesizer::ENGINE_LEGACY, 'Recherche sur Internet', 'fr', $dir));
 
             // Une autre langue = une autre annonce.
-            SpeechSynthesizer::synthesizeCached('Recherche sur Internet', 'sk-test', 'en', $transport, $dir);
+            SpeechSynthesizer::synthesizeCached(SpeechSynthesizer::ENGINE_LEGACY, 'Recherche sur Internet', 'sk-test', 'en', $transport, $dir);
             $this->assertSame(2, $appels);
         } finally {
             foreach (glob($dir . '/*') ?: [] as $f) {
@@ -485,28 +490,30 @@ final class VoiceConversationTest extends TestCase
         $src   = self::chatController();
         $debut = strpos($src, 'public function voiceCue(): void');
         $this->assertIsInt($debut);
-        $corps = substr($src, $debut, 3500);
+        $corps = substr($src, $debut, 4000);
 
         $auth    = strpos($corps, 'AuthMiddleware::requireAuth();');
         $reglage = strpos($corps, 'SpeechSynthesizer::isEnabled()');
         $phrase  = strpos($corps, 'self::cuePhrase(');
+        $voix    = strpos($corps, '$this->speechEngineAndKey()');
         $cache   = strpos($corps, 'SpeechSynthesizer::readCachedCue(');
         $quota   = strpos($corps, 'isCreditQuotaExceeded(');
         $appel   = strpos($corps, 'SpeechSynthesizer::synthesizeCached(');
         $facture = strpos($corps, 'UsageMeter::speech(');
-        foreach (['auth', 'reglage', 'phrase', 'cache', 'quota', 'appel', 'facture'] as $v) {
+        foreach (['auth', 'reglage', 'phrase', 'voix', 'cache', 'quota', 'appel', 'facture'] as $v) {
             $this->assertIsInt($$v, "$v absent de voiceCue");
         }
         $this->assertLessThan($reglage, $auth);
         $this->assertLessThan($phrase, $reglage);
-        $this->assertLessThan($cache, $phrase);
+        $this->assertLessThan($voix, $phrase);
+        $this->assertLessThan($cache, $voix, 'l\'annonce en cache est celle de la voix EN VIGUEUR');
         $this->assertLessThan($quota, $cache, 'une annonce en cache ne coûte rien : le quota ne se contrôle que si une synthèse doit partir');
         $this->assertLessThan($appel, $quota, 'le quota se contrôle AVANT l\'appel payant');
         $this->assertLessThan($facture, $appel);
         // Facturée seulement quand le fournisseur a été appelé ; type inconnu = 204, audio en GET cachable.
         $this->assertStringContainsString("if (!\$result['cached'])", $corps);
         $this->assertStringContainsString('http_response_code(204)', $corps);
-        $this->assertStringContainsString("header('Content-Type: audio/mpeg');", $corps);
+        $this->assertStringContainsString("header('Content-Type: ' . SpeechSynthesizer::mimeOf(\$engine));", $corps, 'MP3 ou WAV selon la voix');
         $this->assertStringContainsString("header('Cache-Control: private, max-age=", $corps);
         $this->assertStringContainsString('I18n::locale()', $corps);
 
@@ -547,9 +554,16 @@ final class VoiceConversationTest extends TestCase
         $src   = self::chatController();
         $debut = strpos($src, 'public function realtimeTranscriptionToken');
         $this->assertIsInt($debut);
-        $corps = substr($src, $debut, 6000);
+        $corps = substr($src, $debut, 9000);
 
-        $this->assertStringContainsString("(\$_POST['purpose'] ?? '') === 'conversation'", $corps);
+        $this->assertStringContainsString("\$conversation = (\$purpose === 'conversation');", $corps);
+        // La seconde session de la conversation (micro de la lecture) suit le
+        // MÊME interrupteur qu'elle : ce n'est pas un troisième usage à régler.
+        $this->assertStringContainsString("\$interruption = (\$purpose === 'interruption');", $corps);
+        $this->assertStringContainsString('$voiceChat    = $conversation || $interruption;', $corps);
+        $this->assertStringContainsString('if ($voiceChat && !SpeechSynthesizer::isEnabled()) {', $corps);
+        $this->assertStringContainsString("if (!\$voiceChat && Settings::get('mic_enabled', '1') !== '1') {", $corps);
+        $this->assertStringContainsString('self::interruptionSessionCandidates()', $corps);
         // Chaque usage a SON interrupteur d'administration, contrôlé AVANT la session.
         $garde   = strpos($corps, 'SpeechSynthesizer::isEnabled()');
         $mic     = strpos($corps, "Settings::get('mic_enabled'");
@@ -580,7 +594,7 @@ final class VoiceConversationTest extends TestCase
         $reglage  = strpos($corps, 'SpeechSynthesizer::isEnabled()');
         $acces    = strpos($corps, 'Conversation::belongsToUser(');
         $quota    = strpos($corps, 'isCreditQuotaExceeded(');
-        $appel    = strpos($corps, 'SpeechSynthesizer::synthesize(');
+        $appel    = strpos($corps, 'SpeechSynthesizer::speak($engine,');
         $facture  = strpos($corps, 'UsageMeter::speech(');
         foreach (['reglage', 'acces', 'quota', 'appel', 'facture'] as $v) {
             $this->assertIsInt($$v, "$v absent de speakMessage");
@@ -613,7 +627,7 @@ final class VoiceConversationTest extends TestCase
         $acces   = strpos($corps, 'Conversation::belongsToUser(');
         $texte   = strpos($corps, 'JobQueue::eventPayloads(');
         $quota   = strpos($corps, 'isCreditQuotaExceeded(');
-        $appel   = strpos($corps, 'SpeechSynthesizer::synthesize(');
+        $appel   = strpos($corps, 'SpeechSynthesizer::speak($engine,');
         $facture = strpos($corps, 'UsageMeter::speech(');
         foreach (['reglage', 'tache', 'acces', 'texte', 'quota', 'appel', 'facture'] as $v) {
             $this->assertIsInt($$v, "$v absent de speakLive");
@@ -656,8 +670,8 @@ final class VoiceConversationTest extends TestCase
         $this->assertStringContainsString('fetchWithSessionGuard(`/jobs/${jobId}/speak`', $js);
         $this->assertStringNotContainsString('/chat/message/${msgId}/speak', $js);
         // Les évènements d'une AUTRE génération (réponse arrêtée qui se clôt en
-        // retard) ne pilotent jamais la lecture : les trois portent leur jobId.
-        $this->assertSame(3, preg_match_all('/notifyChatTurnEnded\(cidStr, \{[^\n]*jobId: state\.jobId \|\| null/', $js));
+        // retard) ne pilotent jamais la lecture : les quatre portent leur jobId.
+        $this->assertSame(4, preg_match_all('/notifyChatTurnEnded\(cidStr, \{[^\n]*jobId: state\.jobId \|\| null/', $js));
         $this->assertStringContainsString('return !d.jobId || !turnJobId || String(d.jobId) === turnJobId;', $js);
         // « Stop » pendant l'écriture arrête aussi la réponse ; la question
         // suivante attend qu'elle soit close.
@@ -881,7 +895,10 @@ final class VoiceConversationTest extends TestCase
         $this->assertSame(2, substr_count($chat, '$voiceChatEnabled = SpeechSynthesizer::isEnabled();'));
         $tpl = self::src('templates/chat/index.php');
         // … et le module des ordres vocaux (voice-commands.js), chargé sous la même condition.
-        $this->assertSame(3, substr_count($tpl, "if (!empty(\$hasOpenaiKey) && !empty(\$voiceChatEnabled)):"));
+        // Le bouton, lui, se montre aussi quand il faut dire pourquoi la conversation
+        // ne marchera pas (cf. VoiceChatIssueTest).
+        $this->assertSame(2, substr_count($tpl, "if (!empty(\$hasOpenaiKey) && !empty(\$voiceChatEnabled)):"));
+        $this->assertSame(1, substr_count($tpl, "if (!empty(\$voiceChatEnabled) && (!empty(\$hasOpenaiKey) || !empty(\$voiceChatIssue))):"));
         $this->assertStringContainsString('id="voiceChatBtn"', $tpl);
         $this->assertStringContainsString('id="voiceChatBar"', $tpl);
         foreach (['voiceChatStatus', 'voiceChatLive', 'voiceChatSkip', 'voiceChatEnd', 'voiceChatBargeIn'] as $id) {
@@ -956,15 +973,17 @@ final class VoiceConversationTest extends TestCase
         $this->assertStringContainsString('data-builtin-key="<?= htmlspecialchars(SpeechSynthesizer::SETTING_ENABLED) ?>"', $tpl);
         $this->assertStringContainsString("const builtinKey = card.dataset.builtinKey || '';", $tpl);
         $this->assertStringContainsString("body.append(isBuiltin ? builtinKey : 'enabled', wanted ? '1' : '0');", $tpl);
-        // Dictée, conversation vocale, suggestions de suite, tâches programmées, workflows : cinq cartes intégrées.
-        $this->assertStringContainsString('count($tools) + 5', $tpl);
+        // Dictée, conversation vocale, suggestions de suite, mémoire, tâches programmées, workflows : six cartes intégrées.
+        $this->assertStringContainsString('count($tools) + 6', $tpl);
 
         $admin = self::src('src/Controllers/AdminController.php');
         $this->assertStringContainsString('public const BUILTIN_TOOL_KEYS = [', $admin);
         require_once ROOT . '/src/Controllers/AdminController.php';
         $this->assertSame(
             ['mic_enabled', SpeechSynthesizer::SETTING_ENABLED, FollowUpSuggestion::SETTING_ENABLED,
-             ScheduledTask::SETTING_ENABLED, ScheduledTask::SETTING_AUTO, Workflow::SETTING_ENABLED, Workflow::SETTING_AUTO],
+             ScheduledTask::SETTING_ENABLED, ScheduledTask::SETTING_AUTO, Workflow::SETTING_ENABLED, Workflow::SETTING_AUTO,
+             MailPush::SETTING_ENABLED,
+             UserMemory::SETTING_ENABLED, MemoryQuestions::SETTING_ENABLED, MemoryLearner::SETTING_ENABLED],
             AdminController::BUILTIN_TOOL_KEYS
         );
         $debut = strpos($admin, 'public function saveBuiltinTools(): void');
@@ -997,7 +1016,23 @@ final class VoiceConversationTest extends TestCase
         $corpsRelease = substr($js, $debutRelease, 700);
         $this->assertStringContainsString('mediaStream?.getTracks().forEach(piste => piste.stop());', $corpsRelease);
         $this->assertStringContainsString('mediaStream = micTrack = null;', $corpsRelease);
-        $this->assertStringContainsString("navigator.mediaDevices.getUserMedia({ audio: true })", substr($js, strpos($js, 'async function attachMic() {'), 1500));
+        // Micro repris avec annulation d'écho, réduction de bruit et gain demandés
+        // (les deux prises du socle) : micro ouvert pendant la lecture, la voix
+        // de MIA ne doit pas y repasser.
+        $this->assertStringContainsString('const MIC_CONSTRAINTS = { echoCancellation: true, noiseSuppression: true, autoGainControl: true };', $js);
+        $this->assertStringContainsString('navigator.mediaDevices.getUserMedia({ audio: MIC_CONSTRAINTS })', substr($js, strpos($js, 'async function attachMic() {'), 1500));
+        $this->assertSame(2, substr_count($js, 'getUserMedia({ audio: MIC_CONSTRAINTS })'));
+        $this->assertStringNotContainsString('getUserMedia({ audio: true })', $js);
+        // Capture GARDÉE hors iPhone et iPad : relâcher coupe la piste et la
+        // retire de l'émetteur, sans refermer la capture — et sur iOS elle est
+        // toujours refermée (le correctif du volume).
+        $this->assertLessThan(
+            strpos($corpsRelease, 'mediaStream?.getTracks().forEach(piste => piste.stop());'),
+            strpos($corpsRelease, 'if (keepsCapture() && micTrack && micTrack.readyState === \'live\') {'),
+            'la capture gardée sort AVANT l\'arrêt des pistes'
+        );
+        $this->assertLessThan(strpos($corpsRelease, 'if (keepsCapture()'), strpos($corpsRelease, 'sender.replaceTrack(null)'), 'plus rien ne part chez OpenAI dans les deux cas');
+        $this->assertStringContainsString('keepCapture: () => !IS_IOS,', $js);
         // Repères sonores synthétisés sur place (aucun fichier à servir), un
         // seul élément audio en file, tics tant que MIA travaille.
         $this->assertStringContainsString('function synthWav(', $js);
@@ -1026,8 +1061,9 @@ final class VoiceConversationTest extends TestCase
         $this->assertStringContainsString("fd.append('voice_mode', voiceModeActive ? '1' : '0');", $js);
         $this->assertStringContainsString('outcome = await submitForm();', $js);
         $this->assertStringContainsString("return 'tool';", $js);
-        // La fin d'un tour est signalée par les DEUX clôtures et consommée par la conversation.
-        $this->assertSame(3, substr_count($js, 'notifyChatTurnEnded(cidStr, {'), 'done, quota, flux clos');
+        // La fin d'un tour est signalée par les DEUX clôtures — et par le bouton
+        // Stop, qui l'annonce dès le clic — et consommée par la conversation.
+        $this->assertSame(4, substr_count($js, 'notifyChatTurnEnded(cidStr, {'), 'done, quota, flux clos, arrêt au clic');
         $this->assertStringContainsString("document.addEventListener('mia:chat-turn-ended'", $js);
         $this->assertStringContainsString('/speak`', $js);
         // Exclusion mutuelle et changement de conversation.
@@ -1064,11 +1100,13 @@ final class VoiceConversationTest extends TestCase
         $this->assertIsInt($debutPrise);
         $corpsPrise = substr($js, $debutPrise, (int)strpos($js, "\n    }\n", $debutPrise) - $debutPrise);
         $garde  = strpos($corpsPrise, "if (bargeIn && mode === 'speaking' && seq === speakSeq) {");
-        $attach = strpos($corpsPrise, 'transcriber.attachMic(),');
+        $attach = strpos($corpsPrise, 'openBargeMic(),');
         $this->assertIsInt($garde);
         $this->assertIsInt($attach);
         $this->assertLessThan($attach, $garde);
-        $this->assertSame(1, substr_count($corpsPrise, 'attachMic('));
+        // Un seul chemin ouvre ce micro (il choisit la session qui écoute la lecture).
+        $this->assertSame(1, substr_count($corpsPrise, 'openBargeMic('));
+        $this->assertSame(0, substr_count($corpsPrise, 'attachMic('));
         // … et il est repris AVANT la première note de la voix.
         $debutLecture = strpos($js, 'function readReply(jobId) {');
         $this->assertIsInt($debutLecture);
@@ -1082,10 +1120,10 @@ final class VoiceConversationTest extends TestCase
         // … et il est relâché AVANT le repère « je vous écoute ».
         $debutEcoute = strpos($js, 'async function startListening() {');
         $corpsEcoute = substr($js, (int)$debutEcoute, 700);
-        $this->assertLessThan(strpos($corpsEcoute, "enqueueAudio(earcon('listen')"), strpos($corpsEcoute, 'if (bargeMicOpen) {'));
+        $this->assertLessThan(strpos($corpsEcoute, "enqueueAudio(earcon('listen')"), strpos($corpsEcoute, 'closeBargeMic();'));
 
         // Pendant la lecture, seul un ordre d'arrêt est consulté — jamais un ordre de carte.
-        $debutEntendre = strpos($js, 'function hearWhileSpeaking(transcript) {');
+        $debutEntendre = strpos($js, 'function hearWhileSpeaking(transcript, earRank) {');
         $this->assertIsInt($debutEntendre);
         $corpsEntendre = substr($js, $debutEntendre, (int)strpos($js, "\n    }\n", $debutEntendre) - $debutEntendre);
         // (et la phrase est comparée au texte que MIA est en train de lire : sa propre voix n'interrompt rien).

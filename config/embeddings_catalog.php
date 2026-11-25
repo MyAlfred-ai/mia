@@ -14,7 +14,10 @@ declare(strict_types=1);
  *   max_batch     : nb max de textes par requête (prudent vs limites tokens)
  *   models        : label affiché, dims (taille de vecteur = collection
  *                   Qdrant), options de requête spécifiques au provider
- *                   (request_dimensions / output_dimensionality) et
+ *                   (request_dimensions / output_dimensionality),
+ *                   task_prefixes (tâche écrite dans le texte : `query` pour
+ *                   la question d'un tour, `document` pour un extrait — cf.
+ *                   EmbeddingService::withTaskPrefix) et
  *                   pricing_usd_per_1m : tarif officiel USD / 1M tokens —
  *                   repli de CreditService quand aucun service
  *                   `embedding:{provider}::{model}` n'est tarifé dans
@@ -59,11 +62,34 @@ return [
             ],
         ],
     ],
+    // Pages Embeddings, Models, Pricing et Deprecations de Google relues le
+    // 2026-11-19. Gemini Embedding 2 (GA 22/04/2026) est le modèle que Google
+    // recommande : gemini-embedding-001 a une date d'arrêt annoncée (« au plus
+    // tôt » le 14/05/2028, remplaçant gemini-embedding-2). Les deux espaces de
+    // vecteurs sont INCOMPATIBLES : changer de modèle = réindexer la base (ce
+    // que fait « Réindexer avec »). Une base existante garde son modèle ; seul
+    // le modèle proposé à la création change.
     'gemini' => [
-        'default_model' => 'gemini-embedding-001',
+        'default_model' => 'gemini-embedding-2',
         'endpoint'      => 'https://generativelanguage.googleapis.com/v1beta/models/{model}:batchEmbedContents',
         'max_batch'     => 64,
         'models'        => [
+            // `task_type` REFUSÉ par ce modèle (« the task_type parameter is not
+            // supported ») : la tâche s'écrit DANS le texte, préfixe de requête
+            // d'un côté, structure de document de l'autre (format « asymétrique »
+            // de Google pour la recherche). Sans titre connu : `title: none`.
+            // Dimensions réduites renormalisées par Google lui-même (Qdrant
+            // compare en cosinus de toute façon). 8 192 jetons par texte.
+            'gemini-embedding-2' => [
+                'label'                  => 'Gemini Embedding 2 (1536d)',
+                'dims'                   => 1536,
+                'output_dimensionality'  => 1536,
+                'task_prefixes'          => [
+                    'query'    => 'task: search result | query: ',
+                    'document' => 'title: none | text: ',
+                ],
+                'pricing_usd_per_1m'     => 0.20,
+            ],
             'gemini-embedding-001' => [
                 'label'                  => 'Gemini Embedding (1536d)',
                 'dims'                   => 1536,

@@ -100,6 +100,9 @@ final class SlidesPdfExporter
                         // Image ENTIÈRE (logo), dans sa boîte : ni recadrage
                         // ni réécriture, la transparence est conservée.
                         $path = SlideImage::resolvePath((string)($el['url'] ?? ''));
+                        // Taille d'impression : un logo démesuré à canal alpha
+                        // épuise la mémoire de PHP dans Dompdf (erreur fatale).
+                        $path = $path !== null ? ImageBytes::boundedFile($path, ImageBytes::PRINT_LOGO_SIDE) : null;
                         if ($path !== null) {
                             [$fx, $fy, $fw, $fh] = SlideImage::containBox($path, $x, $y, $w, $h, (string)($el['anchor'] ?? 'center'));
                             $html .= self::positioned(
@@ -269,6 +272,7 @@ final class SlidesPdfExporter
     private static function imageHtml(array $el, float $w, float $h, string $cropDir, array &$tempImages): string
     {
         $path = SlideImage::resolvePath((string)($el['url'] ?? ''));
+        $path = $path !== null ? ImageBytes::boundedFile($path, ImageBytes::PRINT_IMAGE_SIDE) : null;
         if ($path === null || $h <= 0) {
             return '';
         }

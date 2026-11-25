@@ -13,6 +13,16 @@ declare(strict_types=1);
 class LlmAdapterHelpers
 {
     /**
+     * Tranche de lecture (s) d'un flux SSE de raisonnement long : chaque
+     * tranche vide bat le cœur du job (cf. readSseLine). Sous les 120 s au
+     * bout desquelles le reaper déclare un job muet mort.
+     */
+    public const SILENCE_TICK_SEC = 10;
+
+    /** Silence CONTINU (s) au-delà duquel un flux est abandonné (cf. readSseLine). */
+    public const SILENCE_MAX_SEC = 900;
+
+    /**
      * Encode un payload en JSON UTF-8 en substituant les octets invalides
      * par U+FFFD au lieu de faire échouer silencieusement json_encode().
      * Retourne false uniquement sur une erreur structurelle (ressource, etc.).
@@ -226,15 +236,18 @@ class LlmAdapterHelpers
     public static function stopKind(?string $reason): ?string
     {
         return match (strtolower(trim((string)$reason))) {
-            // Plafond de sortie atteint.
-            'length', 'max_tokens', 'max_output_tokens', 'max_completion_tokens'
+            // Plafond de sortie atteint. `continuation` : Gemini s'arrête à la
+            // limite d'une requête, réponse inachevée (référence de l'API
+            // `FinishReason`, relue le 2026-11-10).
+            'length', 'max_tokens', 'max_output_tokens', 'max_completion_tokens', 'continuation'
                 => 'truncated',
             // Fenêtre de contexte pleine en cours de génération.
             'model_length', 'model_context_window_exceeded', 'context_window_exceeded', 'context_length_exceeded'
                 => 'context',
-            // Filtres de sécurité : OpenAI, Google (demande ET réponse), Z.ai.
+            // Filtres de sécurité : OpenAI, Google (demande ET réponse — dont
+            // une règle d'escalade), Z.ai.
             'content_filter', 'safety', 'recitation', 'blocklist', 'prohibited_content', 'spii',
-            'image_safety', 'image_prohibited_content', 'sensitive'
+            'image_safety', 'image_prohibited_content', 'image_recitation', 'escalation', 'sensitive'
                 => 'filtered',
             // DeepSeek (« insufficient_system_resource ») et Z.ai coupent une
             // réponse faute de ressources : surcharge, pas faute de l'utilisateur.
@@ -242,7 +255,12 @@ class LlmAdapterHelpers
                 => 'overloaded',
             // `aborted` : DeepSeek (« if the generation was interrupted »,
             // référence de l'API relue le 2026-10-07).
-            'error', 'other', 'language', 'malformed_function_call', 'unexpected_tool_call', 'incomplete', 'aborted'
+            // Gemini : réponse ou appel d'outil mal formés, trop d'appels
+            // d'outils d'affilée, signature de réflexion manquante, compte
+            // restreint par Google (`pup_limited_disabled`), image absente.
+            'error', 'other', 'language', 'malformed_function_call', 'unexpected_tool_call', 'incomplete', 'aborted',
+            'malformed_response', 'too_many_tool_calls', 'missing_thought_signature', 'pup_limited_disabled',
+            'image_other', 'no_image'
                 => 'generic',
             default => null,
         };
@@ -498,6 +516,61 @@ class LlmAdapterHelpers
     }
 
     /**
+     * Prochaine ligne COMPLÈTE du flux SSE, ou null en fin de flux.
+     *
+     * Pendant un raisonnement long, le modèle peut rester muet plusieurs
+     * minutes (Claude en affichage `omitted`, Gemini 4 Argon : aucun delta
+     * avant la fin du raisonnement). Le flux, réglé par l'appelant sur
+     * `stream_set_timeout($stream, SILENCE_TICK_SEC)`, est lu par tranches :
+     * à chaque tranche vide, keepAlive() bat le cœur du job — muet 120 s, le
+     * reaper le déclarerait mort — et rassure le watchdog du navigateur.
+     * `$stopped` : arrêt demandé pendant le silence ; `$stalled` :
+     * SILENCE_MAX_SEC secondes de silence continu, flux abandonné. Une ligne
+     * coupée par une tranche est recollée (`$pending`) : un JSON à moitié lu
+     * serait pris pour une erreur.
+     *
+     * @param resource $stream
+     */
+    public static function readSseLine($stream, string &$pending, bool &$stalled, bool &$stopped): ?string
+    {
+        $silentSince = null;
+        while (true) {
+            $line = fgets($stream);
+            if ($line !== false) {
+                if (!str_ends_with($line, "\n") && !feof($stream)) {
+                    $pending .= $line; // tranche écoulée en pleine ligne
+                    continue;
+                }
+                $full    = $pending . $line;
+                $pending = '';
+                return $full;
+            }
+            if (feof($stream)) {
+                if ($pending !== '') {
+                    $full    = $pending;
+                    $pending = '';
+                    return $full;
+                }
+                return null;
+            }
+
+            // Silence : ni ligne ni fin de flux.
+            $silentSince ??= microtime(true);
+            if (self::keepAlive()) {
+                $stopped = true;
+                return null;
+            }
+            if (microtime(true) - $silentSince >= self::SILENCE_MAX_SEC) {
+                $stalled = true;
+                return null;
+            }
+            if (empty(stream_get_meta_data($stream)['timed_out'])) {
+                usleep(200000); // lecture vide sans délai écoulé : pas de boucle à vide
+            }
+        }
+    }
+
+    /**
      * Note au modèle quand la recherche Internet ne peut pas accompagner ses
      * outils dans cette réponse : sans elle, il répondrait de mémoire comme
      * s'il avait vérifié en ligne.
@@ -507,6 +580,31 @@ class LlmAdapterHelpers
         return "Note : la recherche Internet n'est pas disponible pour cette réponse (ce modèle ne sait pas "
             . "consulter le web en même temps qu'il utilise des outils). Si la question exige une information "
             . "récente, dis clairement que tu n'as pas pu vérifier en ligne.";
+    }
+
+    /**
+     * Bloc « Sources » ajouté en fin de réponse par un fournisseur qui cite ses
+     * sources hors du texte (recherche Internet d'Anthropic, de DeepSeek) :
+     * liste numérotée de liens Markdown, 20 au plus, crochets du titre
+     * neutralisés (ils fermeraient le lien), adresse en guise de titre quand il
+     * manque. Vide sans source. Pure — partagée pour que deux fournisseurs ne
+     * présentent pas leurs sources de deux façons.
+     *
+     * @param list<array{url:string,title:string}> $sources
+     */
+    public static function sourcesMarkdown(array $sources): string
+    {
+        $lines = [];
+        foreach (array_slice(array_values($sources), 0, 20) as $i => $source) {
+            $url = (string)($source['url'] ?? '');
+            if ($url === '') {
+                continue;
+            }
+            $title = trim((string)($source['title'] ?? '')) !== '' ? (string)$source['title'] : $url;
+            $title = str_replace(['[', ']'], ['(', ')'], $title);
+            $lines[] = ($i + 1) . '. [' . $title . '](' . $url . ')';
+        }
+        return $lines === [] ? '' : "\n\nSources:\n" . implode("\n", $lines) . "\n";
     }
 
     public static function keepAlive(): bool

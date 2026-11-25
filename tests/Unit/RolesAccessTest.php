@@ -257,7 +257,7 @@ final class RolesAccessTest extends TestCase
     {
         $constats = [
             ['id' => 'a', 'entry' => 'users'],
-            ['id' => 'b', 'entry' => 'llms-models'],
+            ['id' => 'b', 'entry' => 'llms-keys'],
             ['id' => 'c', 'entry' => 'tools'],
         ];
         $this->assertSame($constats, AdminAccess::filterAttention($constats, self::ADMIN));
@@ -446,7 +446,14 @@ final class RolesAccessTest extends TestCase
         $this->assertSame([
             ScheduleTools::TOOL, AssistantDraft::TOOL, WorkflowEngine::GATE_TOOL, WorkflowDraft::TOOL,
             'executer_workflow_n8n', 'generer_presentation_gamma', 'nourrir_mybrain',
+            // Enrichir une table de travail : des appels au modèle, rien chez un tiers.
+            WorkTableTools::ENRICH,
+            // Écrire dans une table permanente : une base de connaissances, pas un
+            // compte relié — son propre droit (« Bases — Modifier ») est revérifié à l'accord.
+            WorkTableTools::PERM_WRITE,
         ], $outils);
+        // Une action par ligne, elle, écrit par un connecteur : le droit s'applique.
+        $this->assertNotContains(WorkTableTools::ACT, $outils);
         $this->assertStringContainsString("'executer_workflow_n8n'", self::lire('src/Agent/Tools/N8nTools.php'));
         $this->assertStringContainsString("'generer_presentation_gamma'", self::lire('src/Agent/Tools/GammaTools.php'));
         $this->assertStringContainsString("'nourrir_mybrain'", self::lire('src/Agent/Tools/MyBrainTools.php'));

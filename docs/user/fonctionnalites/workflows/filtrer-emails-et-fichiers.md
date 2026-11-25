@@ -32,6 +32,7 @@ l'étape consulte Gmail, Outlook ou Google Drive, ou que l'action agit dans l'un
   dossier* = *Clients/@[Client en cours]* dans une boucle. La valeur est reprise à chaque exécution.
 - **Un email vers une adresse non permise est refusé** avant même sa carte d'approbation — et aussi
   quand la brique agit sans validation. Une réponse dans un fil doit alors nommer son destinataire.
+  Les **invités d'une réunion Outlook** suivent la même règle : Outlook leur écrit.
 - **Un fichier créé par une action Drive filtrée** est rangé dans le dossier du filtre.
 - **Le déclencheur aussi se filtre** : un workflow qui démarre à l'arrivée d'un email ne part que
   pour les emails d'un expéditeur, d'un objet, avec une pièce jointe ; à l'arrivée d'un fichier, que

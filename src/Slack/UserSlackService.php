@@ -5,7 +5,8 @@ declare(strict_types=1);
 /**
  * Accès à l'espace de travail SLACK d'un utilisateur (OAuth Slack par
  * utilisateur, jetons `UserDriveToken` provider 'slack') : recherche et
- * lecture de messages, publication d'un message APRÈS APPROBATION.
+ * lecture de messages, publication d'un message APRÈS APPROBATION — dans un
+ * canal ou à une personne (message direct), avec ou sans fichiers joints.
  *
  * Tout se fait avec un jeton UTILISATEUR : MIA ne voit que ce que la personne
  * voit et ne publie qu'en son nom. Aucun jeton de bot n'est demandé nulle part
@@ -16,9 +17,15 @@ declare(strict_types=1);
  *    côté API sur les messages de la personne (`chat.delete`, `chat.update`) :
  *    aucun outil n'est exposé, exactement comme pour `Mail.ReadWrite` chez
  *    Outlook. Ce sont des garde-fous applicatifs, pas un demi-droit Slack.
- *  - **Aucun nouveau message direct.** Ouvrir une conversation privée demande
- *    `im:write`, qui n'est pas demandé. MIA lit les messages directs existants
- *    (ils font partie de ce que la personne voit) mais ne peut pas en ouvrir.
+ *  - **Un message direct, seulement à UNE personne désignée.** `im:write`
+ *    ouvre la conversation directe (`conversations.open`) au moment d'y
+ *    publier, comme pour un canal : même file d'approbation, même carte, qui
+ *    nomme la personne. Jamais de conversation de groupe ouverte par MIA.
+ *  - **Des fichiers, seulement ceux d'un workflow.** `files:write` téléverse
+ *    les pièces jointes d'une brique Slack (`files.getUploadURLExternal`, puis
+ *    `files.completeUploadExternal`, qui les publie avec le texte en un seul
+ *    message). Le modèle ne désigne jamais un fichier : la liste est posée
+ *    par le serveur (`_wf_attach`, WorkflowDeliveries::attachmentsFor).
  *  - **Aucune publication sans approbation.** `postMessage()` n'est appelée que
  *    depuis la file d'approbation, au clic « Approuver ». Et contrairement à un
  *    brouillon d'email, un message publié est VU IMMÉDIATEMENT : la carte
@@ -45,6 +52,12 @@ class UserSlackService extends SlackUserApiService
     public const SCOPE_SEARCH = 'search:read';
     public const SCOPE_USERS  = 'users:read';
     public const SCOPE_WRITE  = 'chat:write';
+    /** Ouvrir une conversation directe avec une personne, pour y publier. */
+    public const SCOPE_DIRECT = 'im:write';
+    /** Joindre des fichiers à une publication. */
+    public const SCOPE_FILES  = 'files:write';
+    /** Retrouver une personne par son adresse (une Fiche porte souvent un email). */
+    public const SCOPE_EMAILS = 'users:read.email';
 
     /** Lister les conversations : une famille de scopes, un par type. */
     public const SCOPES_LIST = ['channels:read', 'groups:read', 'im:read', 'mpim:read'];
@@ -56,6 +69,12 @@ class UserSlackService extends SlackUserApiService
         . 'L\'utilisateur doit reconnecter son Slack dans Réglages → Comptes connectés.';
     public const MSG_RECONNECT_WRITE = 'Autorisation de publication Slack non accordée. '
         . 'L\'utilisateur doit reconnecter son Slack dans Réglages → Comptes connectés.';
+    public const MSG_DIRECT_NOT_GRANTED = 'Votre connexion Slack ne permet pas encore d\'écrire à une personne '
+        . '(autorisation im:write). Reconnectez Slack dans Réglages → Comptes connectés.';
+    public const MSG_FILES_NOT_GRANTED = 'Votre connexion Slack ne permet pas encore de joindre des fichiers '
+        . '(autorisation files:write). Reconnectez Slack dans Réglages → Comptes connectés.';
+    public const MSG_EMAIL_NOT_GRANTED = 'Votre connexion Slack ne permet pas de retrouver une personne par son adresse '
+        . '(autorisation users:read.email) : désignez-la par son nom, ou reconnectez Slack dans Réglages → Comptes connectés.';
 
     protected const OAUTH_CLASS       = SlackMessagesOAuth::class;
     protected const TOKEN_PROVIDER    = UserDriveToken::PROVIDER_SLACK;
@@ -81,9 +100,22 @@ class UserSlackService extends SlackUserApiService
     /** Personnes résolues par appel : au-delà, les identifiants restent bruts. */
     private const NAMES_MAX = 30;
 
+    /** Membres de l'espace parcourus pour retrouver une personne par son nom (users.list, limité en débit). */
+    private const PEOPLE_PAGE = 200;
+    private const PEOPLE_MAX_PAGES = 5;
+
+    /** Lecture d'une période (brique « Lire » d'un workflow) : messages et fils dépliés au plus. */
+    public const PERIOD_MAX = 200;
+    private const PERIOD_THREADS_MAX = 15;
+
+    /** Fichiers joints à une publication : nombre et octets au plus. */
+    public const FILES_MAX = 10;
+    public const FILES_MAX_BYTES = 50 * 1024 * 1024;
+
     /** Cache d'instance : un tour de chat lit souvent le même canal deux fois. */
     private array $cacheCanaux = [];
     private array $cacheNoms   = [];
+    private array $cachePersonnes = [];
 
     /** Instance pour l'utilisateur, ou null si Slack non connecté (ou révoqué). */
     public static function forUser(int $userId): ?self
@@ -124,6 +156,43 @@ class UserSlackService extends SlackUserApiService
     public function canPost(): bool
     {
         return self::scopeGranted($this->grantedScope, self::SCOPE_WRITE);
+    }
+
+    /** Écrire à une personne (message direct) accordé ? */
+    public function canDirect(): bool
+    {
+        return $this->canPost() && self::scopeGranted($this->grantedScope, self::SCOPE_DIRECT);
+    }
+
+    /** Joindre des fichiers accordé ? */
+    public function canAttach(): bool
+    {
+        return $this->canPost() && self::scopeGranted($this->grantedScope, self::SCOPE_FILES);
+    }
+
+    /** Retrouver une personne par son adresse accordé ? */
+    public function canFindByEmail(): bool
+    {
+        return self::scopeGranted($this->grantedScope, self::SCOPE_EMAILS);
+    }
+
+    /**
+     * Ce que la connexion permet, pour l'écran d'un workflow (« À régler ») :
+     * mêmes gardes que les outils et la publication.
+     *
+     * @return array{read: bool, search: bool, list: bool, post: bool, direct: bool, files: bool, email: bool}
+     */
+    public function capabilities(): array
+    {
+        return [
+            'read'   => $this->canRead(),
+            'search' => $this->canSearch(),
+            'list'   => $this->canList(),
+            'post'   => $this->canPost(),
+            'direct' => $this->canDirect(),
+            'files'  => $this->canAttach(),
+            'email'  => $this->canFindByEmail(),
+        ];
     }
 
     /**
@@ -173,6 +242,27 @@ class UserSlackService extends SlackUserApiService
                     . "dans un fil, après son approbation sur une carte.",
                 'outils' => ['envoyer_message_slack'],
                 'sans'   => "Lecture seule : MIA rédige le texte, l'utilisateur le publie lui-même.",
+            ],
+            [
+                'scopes' => [self::SCOPE_DIRECT],
+                'usage'  => "Écrire à une personne (message direct) plutôt que dans un canal : depuis une "
+                    . "conversation, ou une brique Slack d'un workflow.",
+                'outils' => [],
+                'sans'   => "MIA ne publie que dans des canaux.",
+            ],
+            [
+                'scopes' => [self::SCOPE_FILES],
+                'usage'  => "Joindre des fichiers au message publié par une brique Slack d'un workflow : "
+                    . "images, documents, tableaux du dossier de l'exécution.",
+                'outils' => [],
+                'sans'   => "Le message part sans ses pièces jointes : la brique échoue en le disant.",
+            ],
+            [
+                'scopes' => [self::SCOPE_EMAILS],
+                'usage'  => "Retrouver la personne à qui écrire par son adresse email — celle d'une Fiche, "
+                    . "par exemple.",
+                'outils' => [],
+                'sans'   => "Une personne ne se désigne que par son nom ou son pseudo Slack.",
             ],
         ];
     }
@@ -277,16 +367,99 @@ class UserSlackService extends SlackUserApiService
         return $this->rendreMessages($canal, (array)($data['messages'] ?? []), $tokenBudget, false);
     }
 
+    /**
+     * Les messages d'une conversation DEPUIS une date (brique « Lire » d'un
+     * workflow), du plus ANCIEN au plus récent, chaque fil déplié sous son
+     * message d'origine. Bornée : PERIOD_MAX messages (les plus récents
+     * gardés), PERIOD_THREADS_MAX fils dépliés, le budget de texte.
+     *
+     * @param array{id:string,nom:string} $canal
+     * @return array{canal:string,canal_id:string,messages:list<array>,tronque:bool}
+     */
+    public function readPeriod(array $canal, int $since, int $tokenBudget): array
+    {
+        if (!$this->canRead()) {
+            throw new \RuntimeException(self::MSG_SCOPE_INSUFFICIENT);
+        }
+        $raw = [];
+        $cursor = '';
+        $plus = false;
+        for ($page = 0; $page < 5 && count($raw) < self::PERIOD_MAX; $page++) {
+            $data = $this->slackGet('conversations.history', [
+                'channel' => $canal['id'],
+                'oldest'  => (string)max(0, $since),
+                'limit'   => '200',
+                'cursor'  => $cursor,
+            ]);
+            foreach ((array)($data['messages'] ?? []) as $m) {
+                if (is_array($m)) {
+                    $raw[] = $m;
+                }
+            }
+            $cursor = trim((string)($data['response_metadata']['next_cursor'] ?? ''));
+            $plus = !empty($data['has_more']);
+            if ($cursor === '' || !$plus) {
+                break;
+            }
+        }
+        // L'historique arrive du plus RÉCENT au plus ancien : garder le début,
+        // c'est garder les plus récents.
+        $tronque = $plus || count($raw) > self::PERIOD_MAX;
+        $raw = array_reverse(array_slice($raw, 0, self::PERIOD_MAX));
+
+        // Les fils : leurs réponses rangées juste après le message d'origine
+        // (les fils les plus récents d'abord dépliés, dans la limite).
+        $replies = [];
+        $budgetFils = self::PERIOD_THREADS_MAX;
+        foreach (array_reverse($raw) as $m) {
+            $ts = trim((string)($m['ts'] ?? ''));
+            if ((int)($m['reply_count'] ?? 0) <= 0 || $ts === '' || $budgetFils <= 0) {
+                continue;
+            }
+            $budgetFils--;
+            try {
+                $d = $this->slackGet('conversations.replies', ['channel' => $canal['id'], 'ts' => $ts, 'limit' => (string)self::HISTORY_MAX]);
+                $replies[$ts] = array_values(array_filter(
+                    (array)($d['messages'] ?? []),
+                    static fn($r): bool => is_array($r) && trim((string)($r['ts'] ?? '')) !== $ts
+                ));
+            } catch (\RuntimeException $e) {
+                // Un fil illisible n'empêche pas la lecture : son message reste.
+                continue;
+            }
+        }
+        $ordered = [];
+        foreach ($raw as $m) {
+            $ordered[] = $m;
+            foreach ($replies[trim((string)($m['ts'] ?? ''))] ?? [] as $r) {
+                $ordered[] = $r + ['_reponse' => true];
+            }
+        }
+        $out = $this->rendreMessages($canal, $ordered, $tokenBudget, false);
+        $out['tronque'] = $out['tronque'] || $tronque;
+        return $out;
+    }
+
     // ===================== Écriture (après approbation) =====================
 
     /**
-     * Publie un message AU NOM de l'utilisateur. Appelée uniquement depuis la
-     * file d'approbation (clic « Approuver »).
+     * Publie un message AU NOM de l'utilisateur, dans un canal ou à une
+     * personne (message direct), avec ou sans fichiers joints. Appelée
+     * uniquement depuis la file d'approbation (clic « Approuver », ou le
+     * moteur d'un workflow réglé « sans validation »).
      *
-     * @param array{canal?:string,texte?:string,repondre_a?:string} $args
-     * @return array{canal:string,canal_id:string,ts:string,url:string,texte:string,fil:bool,compte:string}
+     * Avec des fichiers, texte et fichiers partent en UN message : les
+     * fichiers sont téléversés (`files.getUploadURLExternal` + octets), puis
+     * publiés ensemble par `files.completeUploadExternal`, le texte en
+     * `initial_comment`. Slack partage les fichiers de façon asynchrone :
+     * l'horodatage du message, donc son lien, n'est rendu que s'il est déjà
+     * connu — un lien absent n'est pas un échec.
+     *
+     * @param array{canal?:string,personne?:string,texte?:string,repondre_a?:string} $args
+     * @param list<array{name:string,mime:string,bytes:string}> $files fichiers joints (posés par le serveur)
+     * @return array{canal:string,canal_id:string,ts:string,url:string,texte:string,fil:bool,compte:string,direct:bool,fichiers:list<string>}
      */
-    public function postMessage(array $args): array
+    public function postMessage(array $args, array $files = []): array
     {
         if (!$this->canPost()) {
             throw new \RuntimeException(self::MSG_RECONNECT_WRITE);
@@ -294,41 +467,272 @@ class UserSlackService extends SlackUserApiService
         // `assertPostArgs` et NON `normalizePostArgs` : le texte reçu ici a
         // déjà été converti en mrkdwn par le handler (cf. la note de cette
         // dernière). Le reconvertir ABÎMERAIT le message.
-        $normalise = self::assertPostArgs($args);
-        $canal     = $this->resolveChannel($normalise['canal']);
-
-        $payload = [
-            'channel' => $canal['id'],
-            'text'    => $normalise['texte'],
-            // `mrkdwn` est le défaut, mais l'écrire protège d'un changement de
-            // défaut côté Slack : sans lui, le message partirait un jour en
-            // texte brut, astérisques comprises.
-            'mrkdwn'  => true,
-        ];
-        if ($normalise['repondre_a'] !== '') {
-            $payload['thread_ts'] = $normalise['repondre_a'];
+        $normalise = self::assertPostArgs($args, $files !== []);
+        $files = self::normalizeFiles($files);
+        if ($files !== [] && !$this->canAttach()) {
+            throw new \RuntimeException(self::MSG_FILES_NOT_GRANTED);
+        }
+        $direct = $normalise['personne'] !== '';
+        if ($direct) {
+            $personne = $this->resolvePerson($normalise['personne']);
+            $canal = ['id' => $this->openDirect($personne['id']), 'nom' => $personne['nom']];
+        } else {
+            $canal = $this->resolveChannel($normalise['canal']);
         }
 
-        $data = $this->slackPost('chat.postMessage', $payload);
-        $ts   = trim((string)($data['ts'] ?? ''));
-        if ($ts === '') {
-            // Slack a répondu `ok:true` sans horodatage : rien ne prouve que le
-            // message existe, et annoncer un succès serait pire que l'erreur.
-            throw new \RuntimeException('Slack n\'a pas confirmé la publication du message.');
+        if ($files === []) {
+            $payload = [
+                'channel' => $canal['id'],
+                'text'    => $normalise['texte'],
+                // `mrkdwn` est le défaut, mais l'écrire protège d'un changement de
+                // défaut côté Slack : sans lui, le message partirait un jour en
+                // texte brut, astérisques comprises.
+                'mrkdwn'  => true,
+            ];
+            if ($normalise['repondre_a'] !== '') {
+                $payload['thread_ts'] = $normalise['repondre_a'];
+            }
+
+            $data = $this->slackPost('chat.postMessage', $payload);
+            $ts   = trim((string)($data['ts'] ?? ''));
+            if ($ts === '') {
+                // Slack a répondu `ok:true` sans horodatage : rien ne prouve que le
+                // message existe, et annoncer un succès serait pire que l'erreur.
+                throw new \RuntimeException('Slack n\'a pas confirmé la publication du message.');
+            }
+        } else {
+            $ts = $this->shareFiles($canal['id'], $files, $normalise['texte'], $normalise['repondre_a']);
         }
 
-        error_log(self::LOG_LABEL . ' message publié canal=' . $canal['id'] . ' ts=' . $ts
+        error_log(self::LOG_LABEL . ' message publié ' . ($direct ? 'direct' : 'canal') . '=' . $canal['id']
+            . ' ts=' . ($ts !== '' ? $ts : '?') . ($files !== [] ? ' fichiers=' . count($files) : '')
             . ($normalise['repondre_a'] !== '' ? ' (dans un fil)' : ''));
 
         return [
             'canal'    => $canal['nom'],
             'canal_id' => $canal['id'],
             'ts'       => $ts,
-            'url'      => $this->permalink($canal['id'], $ts),
+            'url'      => $ts !== '' ? $this->permalink($canal['id'], $ts) : '',
             'texte'    => $normalise['texte'],
             'fil'      => $normalise['repondre_a'] !== '',
             'compte'   => $this->accountEmail,
+            'direct'   => $direct,
+            'fichiers' => array_map(static fn(array $f): string => $f['name'], $files),
         ];
+    }
+
+    /**
+     * Téléverse les fichiers puis les publie ensemble, avec le texte, dans la
+     * conversation. Rend l'horodatage du message s'il est déjà connu, ''
+     * sinon (partage asynchrone).
+     *
+     * @param list<array{name:string,mime:string,bytes:string}> $files
+     */
+    private function shareFiles(string $channelId, array $files, string $texte, string $threadTs): string
+    {
+        $ids = [];
+        foreach ($files as $f) {
+            $up = $this->slackForm('files.getUploadURLExternal', [
+                'filename' => $f['name'],
+                'length'   => (string)strlen($f['bytes']),
+            ]);
+            $url = trim((string)($up['upload_url'] ?? ''));
+            $id  = trim((string)($up['file_id'] ?? ''));
+            if ($url === '' || $id === '') {
+                throw new \RuntimeException('Slack n\'a pas préparé l\'envoi du fichier « ' . $f['name'] . ' ».');
+            }
+            $this->uploadToSlack($url, $f['bytes']);
+            $ids[] = ['id' => $id, 'title' => $f['name']];
+        }
+        $body = ['files' => $ids, 'channel_id' => $channelId];
+        if ($texte !== '') {
+            $body['initial_comment'] = $texte;
+        }
+        if ($threadTs !== '') {
+            $body['thread_ts'] = $threadTs;
+        }
+        $data = $this->slackPost('files.completeUploadExternal', $body);
+        return self::sharedTs($data, $channelId);
+    }
+
+    /**
+     * Horodatage du message qui partage les fichiers, s'il figure déjà dans la
+     * réponse (`files[].shares.public|private[canal][0].ts`) — '' sinon. Pure.
+     */
+    public static function sharedTs(array $data, string $channelId): string
+    {
+        foreach ((array)($data['files'] ?? []) as $f) {
+            foreach (['public', 'private'] as $kind) {
+                $ts = trim((string)($f['shares'][$kind][$channelId][0]['ts'] ?? ''));
+                if (preg_match('/^\d{10}\.\d{6}$/', $ts) === 1) {
+                    return $ts;
+                }
+            }
+        }
+        return '';
+    }
+
+    /**
+     * Fichiers joints nettoyés et bornés (FILES_MAX, FILES_MAX_BYTES). Pure.
+     *
+     * @return list<array{name:string,mime:string,bytes:string}>
+     */
+    public static function normalizeFiles(array $files): array
+    {
+        $out = [];
+        $total = 0;
+        foreach ($files as $f) {
+            if (!is_array($f) || !is_string($f['bytes'] ?? null) || $f['bytes'] === '') {
+                continue;
+            }
+            $out[] = [
+                'name'  => OutgoingAttachments::cleanName((string)($f['name'] ?? '')),
+                'mime'  => OutgoingAttachments::cleanMime((string)($f['mime'] ?? '')),
+                'bytes' => $f['bytes'],
+            ];
+            $total += strlen($f['bytes']);
+        }
+        if (count($out) > self::FILES_MAX) {
+            throw new \RuntimeException(t('{n} fichiers au plus par message Slack.', ['n' => self::FILES_MAX]));
+        }
+        if ($total > self::FILES_MAX_BYTES) {
+            throw new \RuntimeException(t('Fichiers trop lourds : {n} Mo au plus par message Slack.', ['n' => (int)(self::FILES_MAX_BYTES / 1024 / 1024)]));
+        }
+        return $out;
+    }
+
+    // ===================== Personnes =====================
+
+    /**
+     * Même recherche que resolvePerson(), SANS lever quand la personne est
+     * introuvable : la personne trouvée (null sinon), le nom cherché et les
+     * personnes approchantes (8 au plus). Une adresse sans l'autorisation de
+     * la chercher lève (MSG_EMAIL_NOT_GRANTED) : c'est un réglage, pas une
+     * absence.
+     *
+     * @return array{personne: ?array{id:string,nom:string}, nom: string, approchants: list<string>}
+     */
+    public function findPerson(string $ref): array
+    {
+        [$id, $email, $nom] = self::parsePersonInput($ref);
+        if ($id !== '') {
+            return ['personne' => ['id' => $id, 'nom' => $this->resoudreNoms([$id])[$id] ?? $id], 'nom' => $id, 'approchants' => []];
+        }
+        if ($email !== '') {
+            if (!$this->canFindByEmail()) {
+                throw new \RuntimeException(self::MSG_EMAIL_NOT_GRANTED);
+            }
+            $data = $this->slackTry('users.lookupByEmail', ['email' => $email], ['users_not_found']);
+            $u = is_array($data['user'] ?? null) ? $data['user'] : null;
+            if ($u === null || !empty($u['deleted']) || trim((string)($u['id'] ?? '')) === '') {
+                return ['personne' => null, 'nom' => $email, 'approchants' => []];
+            }
+            return ['personne' => ['id' => (string)$u['id'], 'nom' => self::personLabel(self::personRow($u))], 'nom' => $email, 'approchants' => []];
+        }
+        $m = self::matchPerson($this->toutesLesPersonnes(), $nom);
+        return ['personne' => $m['personne'], 'nom' => $nom, 'approchants' => $m['approchants']];
+    }
+
+    /**
+     * Personne désignée → identifiant et nom. Introuvable ou ambiguë : erreur
+     * qui NOMME les personnes approchantes — deviner enverrait le message à
+     * quelqu'un d'autre, et un message direct ne se rattrape pas.
+     *
+     * @return array{id:string,nom:string}
+     */
+    public function resolvePerson(string $ref): array
+    {
+        if (trim($ref) === '') {
+            throw new \RuntimeException('Aucune personne indiquée.');
+        }
+        $f = $this->findPerson($ref);
+        if ($f['personne'] !== null) {
+            return $f['personne'];
+        }
+        throw new \RuntimeException(
+            'Personne Slack « ' . $f['nom'] . ' » introuvable ou ambiguë'
+            . ($f['approchants'] !== []
+                ? '. Personnes approchantes : ' . implode(', ', $f['approchants']) . '.'
+                : ' parmi les membres de l\'espace de travail.')
+        );
+    }
+
+    /** Conversation directe avec une personne, ouverte pour y publier (im:write). */
+    public function openDirect(string $userId): string
+    {
+        if (!$this->canDirect()) {
+            throw new \RuntimeException(self::MSG_DIRECT_NOT_GRANTED);
+        }
+        $data = $this->slackPost('conversations.open', ['users' => $userId]);
+        $id = trim((string)($data['channel']['id'] ?? ''));
+        if ($id === '') {
+            throw new \RuntimeException('Slack n\'a pas ouvert la conversation directe.');
+        }
+        return $id;
+    }
+
+    /**
+     * Conversation directe EXISTANTE avec une personne, pour la lire : cherchée
+     * parmi les conversations directes de l'utilisateur (im:read), à défaut
+     * ouverte (im:write). Null si aucune n'existe et qu'elle ne peut pas l'être.
+     */
+    public function directWith(string $userId): ?string
+    {
+        if (self::scopeGranted($this->grantedScope, 'im:read')) {
+            $cursor = '';
+            for ($page = 0; $page < self::CHANNELS_MAX_PAGES; $page++) {
+                $data = $this->slackGet('conversations.list', [
+                    'types'  => 'im',
+                    'limit'  => (string)self::CHANNELS_PAGE,
+                    'cursor' => $cursor,
+                ]);
+                foreach ((array)($data['channels'] ?? []) as $c) {
+                    if (is_array($c) && (string)($c['user'] ?? '') === $userId && trim((string)($c['id'] ?? '')) !== '') {
+                        return (string)$c['id'];
+                    }
+                }
+                $cursor = trim((string)($data['response_metadata']['next_cursor'] ?? ''));
+                if ($cursor === '') {
+                    break;
+                }
+            }
+        }
+        return $this->canDirect() ? $this->openDirect($userId) : null;
+    }
+
+    /**
+     * Membres de l'espace de travail, en cache pour le tour : ni comptes
+     * supprimés, ni applications. `users.list` est limitée en débit.
+     *
+     * @return list<array{id:string,handle:string,nom:string,affiche:string}>
+     */
+    private function toutesLesPersonnes(): array
+    {
+        if ($this->cachePersonnes !== []) {
+            return $this->cachePersonnes;
+        }
+        if (!self::scopeGranted($this->grantedScope, self::SCOPE_USERS)) {
+            throw new \RuntimeException(self::MSG_SCOPE_INSUFFICIENT . ' (autorisation attendue : ' . self::SCOPE_USERS . ')');
+        }
+        $out = [];
+        $cursor = '';
+        for ($page = 0; $page < self::PEOPLE_MAX_PAGES; $page++) {
+            $data = $this->slackGet('users.list', ['limit' => (string)self::PEOPLE_PAGE, 'cursor' => $cursor]);
+            foreach ((array)($data['members'] ?? []) as $u) {
+                if (!is_array($u) || !empty($u['deleted']) || !empty($u['is_bot']) || ($u['id'] ?? '') === 'USLACKBOT') {
+                    continue;
+                }
+                $row = self::personRow($u);
+                if ($row['id'] !== '') {
+                    $out[] = $row;
+                }
+            }
+            $cursor = trim((string)($data['response_metadata']['next_cursor'] ?? ''));
+            if ($cursor === '') {
+                break;
+            }
+        }
+        return $this->cachePersonnes = $out;
     }
 
     // ===================== Résolution =====================
@@ -350,37 +754,56 @@ class UserSlackService extends SlackUserApiService
         if ($ref === '') {
             throw new \RuntimeException('Aucun canal Slack indiqué.');
         }
-        [$id, $nom] = self::parseChannelInput($ref);
-        if ($id !== '') {
-            // Identifiant explicite : on ne cherche pas son nom si le cache ne
-            // l'a pas — un appel de plus par lecture, pour un affichage.
-            foreach ($this->cacheCanaux as $canal) {
-                if ($canal['id'] === $id) {
-                    return ['id' => $id, 'nom' => $canal['nom']];
-                }
-            }
-            return ['id' => $id, 'nom' => $id];
-        }
-
-        $cible = self::normaliserNom($nom);
-        $approchants = [];
-        foreach ($this->tousLesCanaux() as $canal) {
-            $courant = self::normaliserNom($canal['nom']);
-            if ($courant === $cible) {
-                return ['id' => $canal['id'], 'nom' => $canal['nom']];
-            }
-            if (str_contains($courant, $cible)) {
-                $approchants[] = '#' . $canal['nom'];
-            }
+        ['canal' => $canal, 'nom' => $nom, 'approchants' => $approchants] = $this->findChannel($ref);
+        if ($canal !== null) {
+            return $canal;
         }
 
         throw new \RuntimeException(
             'Canal Slack « ' . $nom . ' » introuvable'
             . ($approchants !== []
-                ? '. Canaux approchants : ' . implode(', ', array_slice($approchants, 0, 8))
+                ? '. Canaux approchants : ' . implode(', ', $approchants)
                     . '. Demande lequel plutôt que de choisir.'
                 : ' parmi les conversations de l\'utilisateur (MIA ne voit que celles dont il est membre).')
         );
+    }
+
+    /**
+     * Même recherche que resolveChannel(), SANS lever : rend le canal trouvé
+     * (null sinon), le nom cherché et les canaux approchants (8 au plus). Les
+     * appelants qui parlent à une PERSONNE (livraison d'un workflow) bâtissent
+     * leur propre message — celui de resolveChannel() s'adresse au modèle.
+     *
+     * @return array{canal: ?array{id:string,nom:string}, nom: string, approchants: list<string>}
+     */
+    public function findChannel(string $ref): array
+    {
+        [$id, $nom] = self::parseChannelInput(trim($ref));
+        if ($id !== '') {
+            // Identifiant explicite : on ne cherche pas son nom si le cache ne
+            // l'a pas — un appel de plus par lecture, pour un affichage.
+            foreach ($this->cacheCanaux as $canal) {
+                if ($canal['id'] === $id) {
+                    return ['canal' => ['id' => $id, 'nom' => $canal['nom']], 'nom' => $id, 'approchants' => []];
+                }
+            }
+            return ['canal' => ['id' => $id, 'nom' => $id], 'nom' => $id, 'approchants' => []];
+        }
+
+        $cible = self::normaliserNom($nom);
+        $approchants = [];
+        if ($cible !== '') {
+            foreach ($this->tousLesCanaux() as $canal) {
+                $courant = self::normaliserNom($canal['nom']);
+                if ($courant === $cible) {
+                    return ['canal' => ['id' => $canal['id'], 'nom' => $canal['nom']], 'nom' => $nom, 'approchants' => []];
+                }
+                if (str_contains($courant, $cible)) {
+                    $approchants[] = '#' . $canal['nom'];
+                }
+            }
+        }
+        return ['canal' => null, 'nom' => $nom, 'approchants' => array_slice($approchants, 0, 8)];
     }
 
     /**
@@ -542,7 +965,7 @@ class UserSlackService extends SlackUserApiService
                 'fil'      => trim((string)($m['thread_ts'] ?? '')) !== ''
                     && (string)($m['thread_ts'] ?? '') !== $ts,
                 'reponses' => (int)($m['reply_count'] ?? 0),
-            ];
+            ] + (!empty($m['_reponse']) ? ['reponse' => true] : []);
         }
 
         return [
@@ -581,6 +1004,136 @@ class UserSlackService extends SlackUserApiService
             return [$ref, ''];
         }
         return ['', ltrim($ref, '#')];
+    }
+
+    /**
+     * Référence de personne → [identifiant, adresse, nom]. Un seul des trois
+     * est rempli. Formes reconnues : la mention Slack (`<@U04F3KJ1>`, avec ou
+     * sans libellé), l'identifiant (`U…`, `W…` : majuscules ET chiffres),
+     * l'adresse email (nue, ou « Marie Dupont <marie@exemple.fr> »), sinon un
+     * nom ou un pseudo (`@marie`).
+     *
+     * @return array{0:string,1:string,2:string}
+     */
+    public static function parsePersonInput(string $ref): array
+    {
+        $ref = trim($ref);
+        if (preg_match('/^<@([UW][A-Z0-9]{2,})(?:\|[^>]*)?>$/', $ref, $m) === 1) {
+            return [$m[1], '', ''];
+        }
+        if (preg_match('/^[UW](?=[A-Z0-9]*\d)[A-Z0-9]{6,}$/', $ref) === 1) {
+            return [$ref, '', ''];
+        }
+        if (filter_var($ref, FILTER_VALIDATE_EMAIL)) {
+            return ['', mb_strtolower($ref), ''];
+        }
+        if (preg_match('/<([^<>\s]+@[^<>\s]+)>/', $ref, $m) === 1 && filter_var($m[1], FILTER_VALIDATE_EMAIL)) {
+            return ['', mb_strtolower($m[1]), ''];
+        }
+        return ['', '', trim(ltrim($ref, '@'))];
+    }
+
+    /**
+     * Une personne parmi les membres, par son nom : correspondance EXACTE (le
+     * pseudo, le nom complet ou le nom affiché, sans casse ni accents) et
+     * UNIQUE ; sinon aucune, avec les personnes approchantes — deux homonymes
+     * exacts sont rendus comme approchants, jamais départagés. Pure.
+     *
+     * @param list<array{id:string,handle:string,nom:string,affiche:string}> $people
+     * @return array{personne: ?array{id:string,nom:string}, approchants: list<string>}
+     */
+    public static function matchPerson(array $people, string $name): array
+    {
+        $cible = self::normaliserNom($name);
+        if ($cible === '') {
+            return ['personne' => null, 'approchants' => []];
+        }
+        $exact = [];
+        $proches = [];
+        foreach ($people as $p) {
+            $noms = array_values(array_filter(array_map(
+                static fn(string $n): string => self::normaliserNom($n),
+                [(string)($p['handle'] ?? ''), (string)($p['nom'] ?? ''), (string)($p['affiche'] ?? '')]
+            )));
+            if (in_array($cible, $noms, true)) {
+                $exact[] = $p;
+                continue;
+            }
+            foreach ($noms as $n) {
+                if (str_contains($n, $cible)) {
+                    $proches[] = $p;
+                    break;
+                }
+            }
+        }
+        if (count($exact) === 1) {
+            return ['personne' => ['id' => (string)$exact[0]['id'], 'nom' => self::personLabel($exact[0])], 'approchants' => []];
+        }
+        $liste = array_values(array_unique(array_map(
+            static fn(array $p): string => self::personLabel($p) . ($p['handle'] !== '' ? ' (@' . $p['handle'] . ')' : ''),
+            count($exact) > 1 ? $exact : $proches
+        )));
+        return ['personne' => null, 'approchants' => array_slice($liste, 0, 8)];
+    }
+
+    /**
+     * Personne RÉSOLUE, désignée sans ambiguïté sur la carte d'approbation :
+     * la mention Slack porteuse de son nom (`<@U04F3KJ1|Marie Dupont>`) —
+     * l'identifiant fait foi à l'exécution, le nom se lit. Pure.
+     */
+    public static function personRef(string $id, string $nom): string
+    {
+        $nom = trim((string)preg_replace('/\s+/u', ' ', (string)preg_replace('/[<>|]+/u', ' ', $nom)));
+        return '<@' . $id . ($nom !== '' && $nom !== $id ? '|' . $nom : '') . '>';
+    }
+
+    /** Ce qu'une référence de personne montre : le nom d'une mention résolue, sinon elle-même. Pure. */
+    public static function personDisplay(string $ref): string
+    {
+        if (preg_match('/^<@[UW][A-Z0-9]{2,}\|([^>]+)>$/', trim($ref), $m) === 1) {
+            return trim($m[1]);
+        }
+        return trim($ref);
+    }
+
+    /** Membre Slack brut → ligne comparable. Pure. @return array{id:string,handle:string,nom:string,affiche:string} */
+    public static function personRow(array $u): array
+    {
+        return [
+            'id'      => trim((string)($u['id'] ?? '')),
+            'handle'  => trim((string)($u['name'] ?? '')),
+            'nom'     => trim((string)($u['real_name'] ?? $u['profile']['real_name'] ?? '')),
+            'affiche' => trim((string)($u['profile']['display_name'] ?? '')),
+        ];
+    }
+
+    /** Nom à montrer d'une personne : son nom complet, sinon affiché, sinon son pseudo. Pure. */
+    public static function personLabel(array $p): string
+    {
+        foreach (['nom', 'affiche', 'handle'] as $k) {
+            $v = trim((string)($p[$k] ?? ''));
+            if ($v !== '') {
+                return $v;
+            }
+        }
+        return (string)($p['id'] ?? '');
+    }
+
+    /**
+     * La référence PEUT-ELLE désigner un canal ? Un nom de canal Slack ne
+     * contient jamais d'espace : « Canal Slack », « le canal de l'équipe »
+     * sont des descriptions, pas des canaux — aucune recherche ne les
+     * trouvera. Pure : sert à le dire AVANT toute exécution (« À régler »
+     * d'un workflow), sans appel à Slack. Un identifiant ou un lien passe.
+     */
+    public static function isPlausibleChannelRef(string $ref): bool
+    {
+        $ref = trim($ref);
+        if ($ref === '') {
+            return false;
+        }
+        [$id, $nom] = self::parseChannelInput($ref);
+        return $id !== '' || ($nom !== '' && preg_match('/\s/u', $nom) !== 1);
     }
 
     /**
@@ -674,28 +1227,34 @@ class UserSlackService extends SlackUserApiService
      * cette méthode convertit (handler), `assertPostArgs` se contente de
      * valider (exécution, au clic « Approuver »).
      *
-     * @return array{canal:string,texte:string,repondre_a:string}
+     * `$hasFiles` : des fichiers partent avec le message (brique d'un
+     * workflow) — le texte devient alors facultatif.
+     *
+     * @return array{canal:string,personne:string,texte:string,repondre_a:string}
      */
-    public static function normalizePostArgs(array $args): array
+    public static function normalizePostArgs(array $args, bool $hasFiles = false): array
     {
         $args['texte'] = SlackMrkdwn::toMrkdwn((string)($args['texte'] ?? ''));
-        return self::assertPostArgs($args);
+        return self::assertPostArgs($args, $hasFiles);
     }
 
     /**
      * Mêmes contrôles, SANS conversion : le texte est déjà du mrkdwn. Appelée
      * à l'exécution, où les arguments viennent de la carte approuvée.
+     * Destination : un canal OU une personne (message direct) — la personne,
+     * si elle est indiquée, l'emporte.
      *
-     * @return array{canal:string,texte:string,repondre_a:string}
+     * @return array{canal:string,personne:string,texte:string,repondre_a:string}
      */
-    public static function assertPostArgs(array $args): array
+    public static function assertPostArgs(array $args, bool $hasFiles = false): array
     {
-        $canal = trim((string)($args['canal'] ?? ''));
-        if ($canal === '') {
-            throw new \RuntimeException('Aucun canal Slack indiqué pour la publication.');
+        $personne = trim((string)($args['personne'] ?? ''));
+        $canal = $personne !== '' ? '' : trim((string)($args['canal'] ?? ''));
+        if ($canal === '' && $personne === '') {
+            throw new \RuntimeException('Aucun canal Slack (ni aucune personne) indiqué pour la publication.');
         }
         $texte = trim((string)($args['texte'] ?? ''));
-        if ($texte === '') {
+        if ($texte === '' && !$hasFiles) {
             throw new \RuntimeException('Le message à publier est vide.');
         }
         if (mb_strlen($texte) > SlackMrkdwn::MAX_MESSAGE_LEN) {
@@ -705,6 +1264,7 @@ class UserSlackService extends SlackUserApiService
 
         return [
             'canal'      => $canal,
+            'personne'   => $personne,
             'texte'      => $texte,
             'repondre_a' => $fil !== '' ? self::assertTs($fil) : '',
         ];
@@ -751,21 +1311,35 @@ class UserSlackService extends SlackUserApiService
      */
     public static function actionPreview(string $tool, array $args): array
     {
+        $personne = self::personDisplay((string)($args['personne'] ?? ''));
         $canal = trim((string)($args['canal'] ?? ''));
         $canal = $canal !== '' && !str_starts_with($canal, '#') && !str_starts_with($canal, 'http')
+            && preg_match('/^[CGD][A-Z0-9]{2,}$/', $canal) !== 1
             ? '#' . ltrim($canal, '#')
             : $canal;
         $texte = trim((string)($args['texte'] ?? ''));
         $fil   = trim((string)($args['repondre_a'] ?? '')) !== '';
         $apercu = $texte === '' ? null : (mb_strlen($texte) > 280 ? mb_substr($texte, 0, 280) . '…' : $texte);
+        // Fichiers joints par un workflow : nommés sur la carte (posés par le serveur).
+        $fichiers = [];
+        foreach ((array)($args[WorkflowDeliveries::ATTACH_KEY] ?? []) as $r) {
+            if (is_array($r) && trim((string)($r['name'] ?? '')) !== '') {
+                $fichiers[] = '« ' . trim((string)$r['name']) . ' »';
+            }
+        }
 
         return [
-            'action'  => $fil ? t('Répondre dans un fil Slack') : t('Publier un message Slack'),
-            'fichier' => $canal !== '' ? $canal : t('(canal non précisé)'),
+            'action'  => $personne !== ''
+                ? t('Envoyer un message direct Slack')
+                : ($fil ? t('Répondre dans un fil Slack') : t('Publier un message Slack')),
+            'fichier' => $personne !== '' ? $personne : ($canal !== '' ? $canal : t('(canal non précisé)')),
             'url'     => null,
             'impacts' => array_values(array_filter([
-                t('Le message sera publié EN VOTRE NOM et visible immédiatement par les membres du canal.'),
+                $personne !== ''
+                    ? t('Le message sera envoyé EN VOTRE NOM à {personne}, qui le verra immédiatement.', ['personne' => $personne])
+                    : t('Le message sera publié EN VOTRE NOM et visible immédiatement par les membres du canal.'),
                 $fil ? t('Il sera rattaché au fil du message d\'origine.') : null,
+                $fichiers !== [] ? t('Fichiers joints : {fichiers}.', ['fichiers' => implode(', ', $fichiers)]) : null,
                 t('Contrairement à un brouillon d\'email, rien ne sera mis en attente : la publication est immédiate.'),
                 t('MIA ne peut ni modifier ni supprimer un message publié — vous le ferez depuis Slack si besoin.'),
             ])),

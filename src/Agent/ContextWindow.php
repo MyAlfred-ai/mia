@@ -55,6 +55,17 @@ final class ContextWindow
 
     public const IMAGE_TOKENS = 1600;
 
+    /**
+     * Part du budget d'historique qu'UN message peut consacrer au texte de ses
+     * pièces jointes (partagée entre elles). Un journal, un export CSV ou un
+     * code source de plusieurs mégaoctets ne tiendrait dans aucune fenêtre :
+     * seul son début part, la suite se relit par partie.
+     */
+    public const FILE_TEXT_SHARE = 0.4;
+
+    /** Plancher par fichier (jetons) : le début d'un fichier reste lisible même sur un petit modèle. */
+    public const FILE_TEXT_MIN = 1500;
+
     /** Budget d'historique (jetons) pour une fenêtre de modèle. */
     public static function budget(int $contextWindow): int
     {
@@ -134,6 +145,7 @@ final class ContextWindow
         $plan = [
             'total' => 0, 'budget' => $budget, 'strip_files_before' => 0,
             'cutoff' => 0, 'reuse_summary' => false, 'needs_summary' => false, 'dropped' => 0,
+            'files_cut' => [], 'files_cut_now' => false,
         ];
         $rows = array_values($history);
         $n    = count($rows);
@@ -238,6 +250,116 @@ final class ContextWindow
         return $out;
     }
 
+    /**
+     * Pièces jointes TEXTE trop longues pour le modèle : seul leur début part,
+     * coupé à une fin de ligne, suivi d'une ligne qui le dit. Les images et les
+     * PDF (envoyés tels quels au modèle) ne sont pas touchés. Le texte gardé
+     * en base reste entier : la suite se relit par partie
+     * (`relire_fichier_conversation`). Comme `stripFiles`, la ligne ajoutée ne
+     * dépend pas de la disponibilité de l'outil : la conduite à tenir vit dans
+     * `cutNote()`, au prompt système. Pure.
+     *
+     * @return array{0: list<array>, 1: list<string>, 2: bool} historique, noms des
+     *   fichiers coupés, un fichier du DERNIER message de l'utilisateur coupé
+     */
+    public static function boundFiles(array $history, int $budget): array
+    {
+        $rows    = array_values($history);
+        $lastUser = -1;
+        foreach ($rows as $i => $r) {
+            if (($r['role'] ?? '') === 'user') {
+                $lastUser = $i;
+            }
+        }
+        $names = [];
+        $now   = false;
+        foreach ($rows as $i => $r) {
+            $legacy = empty($r['files_json']) && !empty($r['file_name']);
+            $files  = $legacy ? null : json_decode((string)($r['files_json'] ?? ''), true);
+            if (!$legacy && !is_array($files)) {
+                continue;
+            }
+            $entries = $legacy
+                ? [['name' => (string)$r['file_name'], 'type' => (string)($r['file_type'] ?? ''), 'extracted' => (string)($r['file_extracted'] ?? '')]]
+                : $files;
+            $text = [];
+            foreach ($entries as $k => $f) {
+                if (!is_array($f)) {
+                    continue;
+                }
+                $type = (string)($f['type'] ?? '');
+                $body = (string)($f['extracted'] ?? '');
+                if ($type === '' || $body === '' || str_starts_with($type, 'image/') || $type === 'application/pdf') {
+                    continue;
+                }
+                $text[] = $k;
+            }
+            if ($text === []) {
+                continue;
+            }
+            $cap = max(self::FILE_TEXT_MIN, intdiv((int)floor($budget * self::FILE_TEXT_SHARE), count($text)));
+            $changed = false;
+            foreach ($text as $k) {
+                $body = (string)$entries[$k]['extracted'];
+                if (TextChunker::estimateTokens($body) <= $cap) {
+                    continue;
+                }
+                $name = trim((string)($entries[$k]['name'] ?? '')) ?: 'sans nom';
+                $entries[$k]['extracted'] = self::cutText($body, $cap * 4, $name);
+                $changed = true;
+                if (!in_array($name, $names, true)) {
+                    $names[] = $name;
+                }
+                $now = $now || $i === $lastUser;
+            }
+            if (!$changed) {
+                continue;
+            }
+            if ($legacy) {
+                $rows[$i]['file_extracted'] = (string)$entries[0]['extracted'];
+            } else {
+                $rows[$i]['files_json'] = json_encode($entries, JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
+            }
+        }
+        return [$rows, $names, $now];
+    }
+
+    /**
+     * Début d'un texte, au plus `$chars` caractères, coupé à une fin de ligne
+     * (à défaut de paragraphe, de phrase ou d'espace) quand elle n'est pas trop
+     * loin, puis la ligne qui dit la coupe. Pure.
+     */
+    public static function cutText(string $text, int $chars, string $name): string
+    {
+        $total = mb_strlen($text);
+        if ($total <= $chars) {
+            return $text;
+        }
+        $head = mb_substr($text, 0, max(1, $chars));
+        foreach (["\n", '. ', ' '] as $sep) {
+            $at = mb_strrpos($head, $sep);
+            if ($at !== false && $at >= (int)($chars * 0.8)) {
+                $head = mb_substr($head, 0, $at + ($sep === "\n" ? 0 : 1));
+                break;
+            }
+        }
+        $pct = max(1, (int)floor(mb_strlen($head) * 100 / max(1, $total)));
+        return rtrim($head) . "\n\n[Fichier « " . $name . " » trop long pour être envoyé en entier : seul son début "
+            . "(environ " . $pct . " %) figure ici.]";
+    }
+
+    /**
+     * Conduite à tenir quand une pièce jointe n'a été envoyée qu'en partie
+     * (fragment de prompt système).
+     */
+    public static function cutNote(): string
+    {
+        return "\n\nFichier trop long : un fichier joint n'est envoyé qu'en partie (« [Fichier … trop long …] »). "
+            . "Si la réponse dépend de la suite, lis-la avec `relire_fichier_conversation` (les parties qui suivent "
+            . "ce que tu as déjà) quand cet outil t'est proposé ; sinon, dis à l'utilisateur que tu n'as lu que le début et "
+            . "propose-lui de joindre la partie utile. N'invente jamais ce que contient la suite.";
+    }
+
     /** Ligne sans ses pièces jointes, chacune nommée à la fin du texte. */
     public static function stripFiles(array $row): array
     {
@@ -298,10 +420,11 @@ final class ContextWindow
      */
     public static function mentionsCompactedFile(string $content, array $history, array $plan): bool
     {
-        if ($plan['strip_files_before'] <= 0) {
+        $cut = (array)($plan['files_cut'] ?? []);
+        if ($plan['strip_files_before'] <= 0 && $cut === []) {
             return false;
         }
-        $names = self::strippedFileNames($history, $plan);
+        $names = array_values(array_unique(array_merge(self::strippedFileNames($history, $plan), array_map('strval', $cut))));
         if ($names === []) {
             return false;
         }

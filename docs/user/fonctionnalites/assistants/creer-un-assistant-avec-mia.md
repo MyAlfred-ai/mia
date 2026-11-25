@@ -18,8 +18,9 @@ dans une **carte**. Rien n'est créé avant que vous l'approuviez.
 
 ## Étapes
 
-1. Dans le chat, demandez-le simplement : *« Crée-moi un assistant qui prépare mes rendez-vous
-   clients à partir de notre catalogue »*. Dites pour qui il travaille, ce qu'il doit faire, sur
+1. Dans le chat, demandez-le en une phrase : *« Crée-moi un assistant qui prépare mes rendez-vous
+   clients à partir de notre catalogue »*. La carte **Le décrire à MIA** de la page **Assistants**
+   ouvre une conversation avec ce début de demande déjà écrit : complétez-le. Dites pour qui il travaille, ce qu'il doit faire, sur
    quelles sources, et le ton voulu ; si la demande est floue, MIA vous pose une question.
 2. MIA propose l'assistant dans une carte **Créer un assistant** :
    - son **nom**, son **avatar** ou la pastille de sa **couleur**, sa **description** ;
@@ -57,7 +58,7 @@ est plus ouvert entre-temps empêche la création, et la carte le dit.
 La carte confirme **Assistant créé**, avec un lien vers sa fiche et un bouton **Discuter avec lui**
 qui ouvre une conversation avec l'assistant. Comme tout assistant, il est **personnel** : vous seul
 le voyez dans le chat jusqu'à ce qu'un administrateur le partage. Il rejoint la liste des
-assistants de la zone de saisie et celle de vos assistants.
+assistants de la zone de saisie et la page **Assistants**.
 
 Ses **documents de référence** s'ajoutent ensuite depuis sa fiche — voir
 [Créer un assistant](creer-un-assistant.md).

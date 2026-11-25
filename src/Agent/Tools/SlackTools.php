@@ -12,6 +12,12 @@ declare(strict_types=1);
  * jamais une exception qui casserait le flux ; toute écriture passe par la
  * file d'approbation ($this->turn->queueWrite), rien n'est exécuté pendant
  * le flux.
+ *
+ * Brique Slack d'un workflow qui PUBLIE (SearchScope::slackPost) : un seul
+ * outil, `envoyer_message_slack` réduit à son texte — la destination et les
+ * fichiers sont imposés par la brique, le modèle ne lit rien et ne choisit
+ * rien (WorkflowSlack). Une brique qui LIT n'expose aucun outil Slack : ses
+ * messages sont lus par le serveur avant le tour.
  */
 final class SlackTools extends AbstractToolProvider
 {
@@ -32,11 +38,19 @@ final class SlackTools extends AbstractToolProvider
 
     public function definitions(): array
     {
+        if ($this->turn->scope()->slackPost() !== null) {
+            return $this->slack->canPost() ? [self::workflowPostDefinition($this->turn->scope()->slackAttach() !== [])] : [];
+        }
         return $this->slackToolDefinitions($this->slack);
     }
 
     public function guidance(): string
     {
+        // Brique qui publie : sa consigne est dans le prompt de l'étape
+        // (WorkflowSlack::promptNote) — rien à lire, rien à choisir.
+        if ($this->turn->scope()->slackPost() !== null) {
+            return '';
+        }
         return $this->slackToolGuidance($this->slack);
     }
 
@@ -56,6 +70,23 @@ final class SlackTools extends AbstractToolProvider
         $slackTextBudget     = $this->turn->textBudget;
         $queueConnectorWrite = $this->turn->queueWrite;
         $toolHandlers = [];
+
+        $scope = $this->turn->scope();
+        if ($scope->slackPost() !== null) {
+            if ($slackService->canPost()) {
+                $toolHandlers['envoyer_message_slack'] = function (array $args) use ($queueConnectorWrite, $scope) {
+                    // La destination de la brique remplace celle du modèle ; le
+                    // texte devient facultatif quand des fichiers partent.
+                    try {
+                        $normalise = UserSlackService::normalizePostArgs($scope->applyToSlackPost($args), $scope->slackAttach() !== []);
+                    } catch (\RuntimeException $e) {
+                        return ['error' => $e->getMessage()];
+                    }
+                    return $queueConnectorWrite('envoyer_message_slack', $normalise, null);
+                };
+            }
+            return $toolHandlers;
+        }
 
         if ($slackService->canList()) {
             $toolHandlers['lister_canaux_slack'] = function (array $args) use ($slackService) {
@@ -120,14 +151,27 @@ final class SlackTools extends AbstractToolProvider
             };
         }
         if ($slackService->canPost()) {
-            $toolHandlers['envoyer_message_slack'] = function (array $args) use ($queueConnectorWrite) {
+            $toolHandlers['envoyer_message_slack'] = function (array $args) use ($queueConnectorWrite, $slackService) {
                 // Validation amont (canal, texte, horodatage du fil) : une
                 // erreur revient au modèle pendant qu'il rédige, jamais dans
                 // une carte d'approbation que l'utilisateur validerait pour
                 // rien. La conversion en mrkdwn a lieu ici aussi, pour que la
-                // carte montre EXACTEMENT ce qui sera publié.
+                // carte montre EXACTEMENT ce qui sera publié. Le canal est
+                // cherché pour de bon (s'il est possible de lister) : un nom
+                // inventé ne découvrait son erreur qu'après l'approbation.
+                // Une personne (message direct) est cherchée ici aussi, et
+                // désignée sur la carte par son identifiant ET son nom.
                 try {
                     $normalise = UserSlackService::normalizePostArgs($args);
+                    if ($normalise['personne'] !== '') {
+                        if (!$slackService->canDirect()) {
+                            return ['error' => UserSlackService::MSG_DIRECT_NOT_GRANTED];
+                        }
+                        $personne = $slackService->resolvePerson($normalise['personne']);
+                        $normalise['personne'] = UserSlackService::personRef($personne['id'], $personne['nom']);
+                    } elseif ($slackService->canList()) {
+                        $slackService->resolveChannel($normalise['canal']);
+                    }
                 } catch (\RuntimeException $e) {
                     return ['error' => $e->getMessage()];
                 }
@@ -146,7 +190,33 @@ final class SlackTools extends AbstractToolProvider
      */
     private function slackToolDefinitions(UserSlackService $slack): array
     {
-        return self::definitionsFor($slack->canList(), $slack->canSearch(), $slack->canRead(), $slack->canPost());
+        return self::definitionsFor($slack->canList(), $slack->canSearch(), $slack->canRead(), $slack->canPost(), $slack->canDirect());
+    }
+
+    /**
+     * `envoyer_message_slack` d'une brique de workflow qui publie : le texte
+     * seul — destination et fichiers sont imposés. Pure.
+     */
+    public static function workflowPostDefinition(bool $hasFiles): array
+    {
+        return [
+            'name'        => 'envoyer_message_slack',
+            'description' => "Publie le message de cette brique Slack, AU NOM de l'utilisateur. La destination (canal ou "
+                . "personne) et les fichiers joints sont imposés par le workflow : ne donne que le texte, en Markdown "
+                . "normal (la conversion vers Slack est faite pour toi). À appeler UNE seule fois.",
+            'parameters'  => [
+                'type'       => 'object',
+                'properties' => [
+                    'texte' => [
+                        'type'        => 'string',
+                        'description' => $hasFiles
+                            ? "Texte du message, en Markdown — facultatif : les fichiers partent avec lui."
+                            : "Texte du message, en Markdown.",
+                    ],
+                ],
+                'required'   => $hasFiles ? [] : ['texte'],
+            ],
+        ];
     }
 
     /**
@@ -157,7 +227,7 @@ final class SlackTools extends AbstractToolProvider
      *
      * @return array<int, array<string, mixed>>
      */
-    public static function definitionsFor(bool $canList, bool $canSearch, bool $canRead, bool $canPost): array
+    public static function definitionsFor(bool $canList, bool $canSearch, bool $canRead, bool $canPost, bool $canDirect = false): array
     {
         $defs = [];
 
@@ -247,20 +317,32 @@ final class SlackTools extends AbstractToolProvider
         }
 
         if ($canPost) {
+            $destination = [
+                'canal' => [
+                    'type'        => 'string',
+                    'description' => $canDirect
+                        ? "Nom, identifiant ou lien du canal de destination. Vide pour un message direct (`personne`)."
+                        : "Nom, identifiant ou lien du canal de destination.",
+                ],
+            ];
+            if ($canDirect) {
+                $destination['personne'] = [
+                    'type'        => 'string',
+                    'description' => "Pour écrire à UNE personne (message direct) plutôt que dans un canal : son nom, "
+                        . "son pseudo Slack (@marie) ou son adresse email. Laisse `canal` vide dans ce cas.",
+                ];
+            }
             $defs[] = [
                 'name'        => 'envoyer_message_slack',
-                'description' => "Publie un message Slack AU NOM de l'utilisateur. Chaque publication est "
+                'description' => "Publie un message Slack AU NOM de l'utilisateur" . ($canDirect ? ", dans un canal ou à une personne" : "")
+                    . ". Chaque publication est "
                     . "soumise à son approbation explicite (carte de confirmation) ; une fois approuvée, le "
                     . "message est IMMÉDIATEMENT VISIBLE par les membres du canal et ne peut plus être ni "
                     . "modifié ni supprimé par MIA. Écris le texte en Markdown normal : la conversion vers "
                     . "la syntaxe Slack est faite pour toi.",
                 'parameters'  => [
                     'type'       => 'object',
-                    'properties' => [
-                        'canal' => [
-                            'type'        => 'string',
-                            'description' => "Nom, identifiant ou lien du canal de destination.",
-                        ],
+                    'properties' => $destination + [
                         'texte' => [
                             'type'        => 'string',
                             'description' => "Contenu du message, en Markdown.",
@@ -271,7 +353,7 @@ final class SlackTools extends AbstractToolProvider
                                 . "DANS SON FIL au lieu d'ouvrir une nouvelle discussion. Vide = nouveau message.",
                         ],
                     ],
-                    'required'   => ['canal', 'texte'],
+                    'required'   => $canDirect ? ['texte'] : ['canal', 'texte'],
                 ],
             ];
         }
@@ -282,7 +364,7 @@ final class SlackTools extends AbstractToolProvider
     /** Consigne ajoutée au system prompt quand les outils Slack sont disponibles. */
     private function slackToolGuidance(UserSlackService $slack): string
     {
-        return self::guidanceFor($slack->canPost());
+        return self::guidanceFor($slack->canPost(), $slack->canDirect());
     }
 
     /**
@@ -312,7 +394,7 @@ final class SlackTools extends AbstractToolProvider
      * Consigne selon le droit de publier — forme PURE, SOURCE UNIQUE partagée
      * avec l'écran d'administration (même raison que `definitionsFor`).
      */
-    public static function guidanceFor(bool $canPost): string
+    public static function guidanceFor(bool $canPost, bool $canDirect = false): string
     {
         $txt = "\n\nTu peux consulter le Slack personnel de l'utilisateur. Tu ne vois QUE ce qu'il voit "
             . "lui-même : un canal privé dont il n'est pas membre n'existe pas pour toi, et « je ne trouve "
@@ -334,6 +416,10 @@ final class SlackTools extends AbstractToolProvider
                 . "réponse. N'affirme JAMAIS que le message est parti : annonce qu'il attend son approbation, "
                 . "en résumant le canal visé et le contenu. Pour répondre à un message existant, passe son "
                 . "identifiant dans `repondre_a` plutôt que d'ouvrir une nouvelle discussion dans le canal.";
+            if ($canDirect) {
+                $txt .= " Pour écrire à UNE personne plutôt que dans un canal, passe-la dans `personne` (nom, pseudo "
+                    . "ou adresse) : le message lui arrive en message direct, et elle seule le voit.";
+            }
         } else {
             $txt .= " Tu ne peux PAS publier de message : la connexion Slack actuelle est en lecture seule. "
                 . "Si l'utilisateur le demande, propose-lui de rédiger le texte qu'il copiera, et invite-le "

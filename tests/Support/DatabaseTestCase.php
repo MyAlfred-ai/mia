@@ -21,10 +21,12 @@ abstract class DatabaseTestCase extends TestCase
 
     /** Tables vidées avant chaque test (ordre indifférent, FK désactivées). */
     protected const TABLES = [
+        'workflow_versions',
         'workflow_artifacts',
         'workflow_run_steps',
         'workflow_runs',
         'workflows',
+        'mail_push_subscriptions',
         'scheduled_task_runs',
         'scheduled_tasks',
         'push_subscriptions',
@@ -35,6 +37,8 @@ abstract class DatabaseTestCase extends TestCase
         'conversation_connector_refs',
         'conversation_knowledge_bases',
         'conversation_context_summaries',
+        'work_table_rows',
+        'work_tables',
         'messages',
         'conversations',
         'tool_usage_logs',
@@ -52,12 +56,17 @@ abstract class DatabaseTestCase extends TestCase
         'profile_documents',
         'profile_knowledge_bases',
         'knowledge_base_shares',
-        'knowledge_base_remotes',
+        'knowledge_base_remotes', 'knowledge_base_tables', 'knowledge_base_table_rows', 'knowledge_base_table_versions',
         'knowledge_base_chunks',
         'knowledge_base_documents',
         'knowledge_bases',
         'profiles',
         'user_identities',
+        'conversation_memory_scans',
+        'user_memory_questions',
+        'memory_signal_events',
+        'user_memories',
+        'user_feature_news',
         'users',
         // Rôles personnalisés et surcharges : vidés, les rôles livrés et leurs
         // défauts s'appliquent (Role les définit dans le code).
@@ -83,6 +92,10 @@ abstract class DatabaseTestCase extends TestCase
         // (CI) : un « clé refusée » laissé par un test unitaire de la voix
         // devenait un point à régler inattendu ici.
         ProviderIncident::useMemoryStore();
+        // Dates d'arrêt relevées chez l'éditeur : en mémoire, vides — une date
+        // laissée par un test changerait le catalogue des suivants. Les tests
+        // de persistance rendent la table (LlmShutdownWatch::useSettingsStore()).
+        LlmShutdownWatch::useMemoryStore();
         // Rôles : lecture mémorisée pour le processus — un test qui a modifié
         // un rôle ne doit pas la laisser au suivant.
         Role::forget();

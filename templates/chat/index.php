@@ -15,6 +15,8 @@
     <link rel="stylesheet" href="/assets/css/files.css?v=<?= (int)$filesCssVersion ?>">
     <?php $choicesCssVersion = @filemtime(ROOT . '/public/assets/css/choices.css') ?: time(); ?>
     <link rel="stylesheet" href="/assets/css/choices.css?v=<?= (int)$choicesCssVersion ?>">
+    <?php $workTablesCssVersion = @filemtime(ROOT . '/public/assets/css/work-tables.css') ?: time(); ?>
+    <link rel="stylesheet" href="/assets/css/work-tables.css?v=<?= (int)$workTablesCssVersion ?>">
     <?php if (Workflow::canUse(Session::currentUser())): ?>
     <?php $wfCssVersion = @filemtime(ROOT . '/public/assets/css/workflows.css') ?: time(); ?>
     <link rel="stylesheet" href="/assets/css/workflows.css?v=<?= (int)$wfCssVersion ?>">
@@ -43,6 +45,7 @@
             <span class="logo-text"><?= htmlspecialchars(Settings::get('app_name', 'MIA')) ?></span>
             <span class="logo-tagline" title="<?= htmlspecialchars($appTagline) ?>"><?= htmlspecialchars($appTagline) ?></span>
         </div>
+        <?php require ROOT . '/templates/partials/sidebar-fold-all.php'; ?>
         <button type="button" class="sidebar-collapse-btn" id="sidebarCollapseBtn"
                 title="<?= te('Masquer le volet') ?>" aria-label="<?= te('Masquer le volet') ?>"
                 aria-controls="sidebar" aria-expanded="true">
@@ -71,7 +74,12 @@
         </button>
     </div>
 
-    <?php require ROOT . '/templates/partials/sidebar-shortcuts.php'; ?>
+    <?php
+        // Assistants et bases déjà lus pour les sélecteurs de la zone de saisie :
+        // les tuiles d'espace reprennent ces comptes au lieu de les relire.
+        $sbNavKnown = ['profiles' => count($profiles ?? []), 'kb' => count($chatKnowledgeBases ?? [])];
+        require ROOT . '/templates/partials/sidebar-shortcuts.php';
+    ?>
 
     <!-- Générations en cours (file de jobs). Masqué tant qu'il n'y a rien :
          un tiroir vide en permanence serait du bruit. Alimenté par
@@ -99,25 +107,34 @@
         <?php foreach ($conversations as $conv): ?>
             <?php
                 $isPinned    = (int)($conv['is_pinned'] ?? 0) === 1;
-                // Conversation née d'une tâche programmée, et résultat arrivé
-                // en l'absence de la personne (pastille, éteinte à l'ouverture).
+                // Conversation née d'une tâche programmée ou d'une exécution de
+                // workflow, et résultat arrivé en l'absence de la personne
+                // (pastille, éteinte à l'ouverture).
                 $isScheduled = !empty($conv['scheduled_task_id']);
+                $isWorkflow  = !$isScheduled && !empty($conv['workflow_run_id']);
                 $isUnread    = !empty($conv['unread_at']) && !(isset($conversation) && $conversation['id'] == $conv['id']);
             ?>
             <a href="/chat/<?= $conv['id'] ?>"
-               class="conv-item <?= (isset($conversation) && $conversation['id'] == $conv['id']) ? 'active' : '' ?> <?= $isPinned ? 'is-pinned' : '' ?><?= $isScheduled ? ' is-scheduled' : '' ?><?= $isUnread ? ' is-unread' : '' ?>"
+               class="conv-item <?= (isset($conversation) && $conversation['id'] == $conv['id']) ? 'active' : '' ?> <?= $isPinned ? 'is-pinned' : '' ?><?= $isScheduled ? ' is-scheduled' : '' ?><?= $isWorkflow ? ' is-workflow' : '' ?><?= $isUnread ? ' is-unread' : '' ?>"
                data-id="<?= $conv['id'] ?>"
                data-pinned="<?= $isPinned ? '1' : '0' ?>"
                data-ts="<?= (int)strtotime((string)($conv['updated_at'] ?? 'now')) ?>"
                <?php if (!empty($conv['profile_color'])): ?>style="--conv-color:<?= htmlspecialchars($conv['profile_color']) ?>"<?php endif; ?>>
-                <?php if (!empty($conv['profile_color'])): ?>
+                <?php /* UN marqueur par ligne, dans une case de 13 px : tous les titres
+                         démarrent à la même abscisse (main.css, .conv-plain-dot).
+                         Rendu aussi par chat-shell-sidebar.php et addConvToSidebar
+                         (chat.js) — à garder synchronisés. */ ?>
+                <?php if ($isScheduled): ?>
+                    <span class="conv-scheduled-icon" role="img" aria-label="<?= te('Tâche programmée') ?>"><?= ScheduledTask::icon(13) ?></span>
+                <?php elseif ($isWorkflow): ?>
+                    <span class="conv-workflow-icon" role="img" aria-label="<?= te('Workflow') ?>"><?= Workflow::icon(13) ?></span>
+                <?php elseif (!empty($conv['profile_color'])): ?>
                     <span class="conv-color-bar"></span>
+                <?php else: ?>
+                    <span class="conv-plain-dot" aria-hidden="true"></span>
                 <?php endif; ?>
                 <?php if ($isPinned): ?>
                     <svg class="conv-pin-icon" width="11" height="13" viewBox="0 0 384 512" fill="currentColor" aria-hidden="true"><path d="M32 32C32 14.3 46.3 0 64 0L320 0c17.7 0 32 14.3 32 32s-14.3 32-32 32l-29.5 0 10.3 134.1c37.1 21.2 65.8 56.4 78.2 99.7l3.8 13.4c2.8 9.7 .8 20-5.2 28.1S362 352 352 352L32 352c-10 0-19.5-4.7-25.5-12.7s-8-18.4-5.2-28.1L5 297.8c12.4-43.3 41-78.5 78.2-99.7L93.5 64 64 64C46.3 64 32 49.7 32 32zM160 400l64 0 0 112c0 17.7-14.3 32-32 32s-32-14.3-32-32l0-112z"/></svg>
-                <?php endif; ?>
-                <?php if ($isScheduled): ?>
-                    <span class="conv-scheduled-icon" role="img" aria-label="<?= te('Tâche programmée') ?>"><?= ScheduledTask::icon(13) ?></span>
                 <?php endif; ?>
                 <span class="conv-title"><?= htmlspecialchars(Conversation::displayTitle($conv['title'] ?? null)) ?></span>
                 <?php if ($isUnread): ?><span class="conv-unread-dot" title="<?= te('Nouveau résultat') ?>" aria-label="<?= te('Nouveau résultat') ?>"></span><?php endif; ?>
@@ -130,6 +147,10 @@
             <p class="conv-empty"><?= te('Aucune conversation') ?></p>
         <?php endif; ?>
     </nav>
+    <?php /* Sections repliables et rangement de l'historique : SANS defer, juste
+             après la liste — les groupes sont posés avant le premier rendu. */ ?>
+    <?php $sbSectionsJsVersion = @filemtime(ROOT . '/public/assets/js/sidebar-sections.js') ?: time(); ?>
+    <script src="/assets/js/sidebar-sections.js?v=<?= (int)$sbSectionsJsVersion ?>"></script>
 
 
     <div class="sidebar-footer">
@@ -186,9 +207,11 @@
     <!-- Assistant actif, LLM courant : calculés une fois, servis au <main>, au composer et au bandeau LLM -->
     <?php
         $logos = LLMFactory::logos();
-        // Même règle que send() et la liste blanche des groupes (défaut
-        // effectif, restreint au périmètre de l'utilisateur).
-        $defaultChatLlm = LLMFactory::appDefault($llms) ?? 'openai';
+        // Le modèle qui ouvre une nouvelle conversation : celui que la personne
+        // a choisi comme le sien (étoile du sélecteur, Préférences IA), sinon
+        // celui de l'organisation — même règle que create() et send().
+        $llmPreference = $llmPreference ?? LlmPreference::state(Session::currentUser(), $llms);
+        $defaultChatLlm = $llmPreference['effective'];
 
         $activeProfile = null;
         if (isset($conversation) && !empty($conversation['profile_id'])) {
@@ -271,13 +294,15 @@
             : t('Cet assistant applique des instructions dédiées à ce cas d\'usage.');
     ?>
 <!-- MAIN CHAT -->
-<main class="chat-main<?= !isset($conversation) ? ' is-home' : '' ?><?= $profileLocked ? ' has-assistant' : '' ?>"<?= $profileAccent !== '' ? ' style="--profile-accent:' . htmlspecialchars($profileAccent) . '"' : '' ?>>
+<main class="chat-main<?= !isset($conversation) ? ' is-home' : '' ?><?= $profileLocked ? ' has-assistant' : '' ?>"<?= $profileAccent !== '' ? ' style="--profile-accent:' . htmlspecialchars($profileAccent) . '"' : '' ?> data-workflow-run="<?= (int)($workflowRunId ?? 0) ?>">
 
     <!-- Header mobile (logo à la place du burger quand la toolbar est visible) -->
     <div class="mobile-header" id="mobileHeader">
         <button type="button" class="btn-sidebar-toggle" data-drawer-toggle title="<?= te('Ouvrir le menu') ?>"
                 aria-label="<?= te('Ouvrir le menu') ?>" aria-controls="sidebar" aria-expanded="false">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+            <?php // Un espace de travail ou une page d'administration à découvrir, dans le tiroir. ?>
+            <?= MajorFeatures::dotHtml(array_merge(MajorFeatures::dotsAt(MajorFeatures::PLACE_SPACE), MajorFeatures::dotsAt(MajorFeatures::PLACE_ADMIN))) ?>
         </button>
         <img src="<?= htmlspecialchars(Settings::get('logo_url', '/assets/img/logo.png')) ?>"
              alt="" class="mobile-header-logo">
@@ -454,6 +479,27 @@
         // se confonde pas avec la page web dans le menu « + ».
         $toolIcons['html_illustrated'] = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 8h18"/><rect x="6.5" y="11" width="6" height="6" rx="1"/><path d="M15 12h3M15 15.5h3"/></svg>';
         ?>
+        <?php
+        // Démo terminée : MIA ne répond plus, les conversations restent
+        // lisibles. Rendu masqué pour tout compte de démo, montré par
+        // applyQuotaStatus (chat.js) dès que l'enveloppe est épuisée.
+        $demoStatus = $creditQuotaStatus ?? [];
+        ?>
+        <?php if (!empty($demoStatus['demo'])): ?>
+        <?php $demoEnded = ($demoStatus['reason'] ?? null) === CreditQuota::REASON_QUOTA; $demoEmail = DemoAccount::contactEmail(); ?>
+        <section class="demo-ended-banner" id="demoEndedBanner" role="status"<?= $demoEnded ? '' : ' hidden' ?>>
+            <span class="demo-ended-icon" aria-hidden="true">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.8 4.6L18 9l-4.2 1.4L12 15l-1.8-4.6L6 9l4.2-1.4z"/><path d="M19 15l.8 2 2 .8-2 .8-.8 2-.8-2-2-.8 2-.8z"/></svg>
+            </span>
+            <div class="demo-ended-text">
+                <p class="demo-ended-title"><?= htmlspecialchars(DemoAccount::endedTitle()) ?></p>
+                <p class="demo-ended-message"><?= htmlspecialchars(DemoAccount::endedMessageForInstance()) ?></p>
+            </div>
+            <?php if ($demoEmail !== ''): ?>
+                <a class="btn-primary demo-ended-mail" href="<?= htmlspecialchars(DemoAccount::mailtoHref($demoEmail)) ?>"><?= te('Nous écrire') ?></a>
+            <?php endif; ?>
+        </section>
+        <?php endif; ?>
         <form class="chat-input-form" id="chatForm">
             <input type="hidden" id="convId" value="<?= $conversation['id'] ?? '' ?>">
 
@@ -579,6 +625,11 @@
                     </button>
                     <button type="button" class="voice-chat-skip" id="voiceChatSkip" hidden><?= te('Passer') ?></button>
                     <button type="button" class="voice-chat-end" id="voiceChatEnd" title="<?= te('Terminer la conversation vocale') ?>"><?= te('Terminer') ?></button>
+                    <!-- Connecteurs dont MIA dispose pendant la conversation
+                         (allumés, ou activés à la demande) : à l'oreille, rien
+                         ne dit si elle a accès aux mails ou à l'agenda. Rempli
+                         par chat.js depuis les interrupteurs du menu « + ». -->
+                    <span class="voice-chat-sources" id="voiceChatSources" hidden></span>
                 </div>
                 <?php endif; ?>
 
@@ -689,8 +740,10 @@
                                     // Connecteurs personnels. Une ligne n'est rendue QUE si
                                     // l'administrateur a configuré ET autorisé la source
                                     // (OAuth déclaré + fonctionnalité activée) : pas d'option
-                                    // morte dans le menu. Jamais cochée côté serveur (opt-in
-                                    // explicite) — le JS restaure le choix mémorisé.
+                                    // morte dans le menu. Jamais cochée côté serveur — le JS
+                                    // restaure le choix mémorisé, et allume de lui-même un
+                                    // connecteur qui vient d'être relié
+                                    // (window.CONNECTORS_JUST_CONNECTED).
                                     // La compatibilité du modèle n'entre PAS ici : un
                                     // connecteur reste toujours activable, l'activation sur
                                     // un modèle sans function-calling ouvre la modale de
@@ -874,7 +927,7 @@
                                         <span class="plus-menu-fold-name"><?= te('Connecteurs') ?></span>
                                         <span class="plus-menu-fold-count" id="plusMenuFoldCount"></span>
                                         <?php if ($foldExpired > 0): ?>
-                                        <span class="reconnect-dot plus-menu-fold-alert" title="<?= htmlspecialchars(I18n::plural($foldExpired, 'Une connexion à reconnecter', '{n} connexions à reconnecter')) ?>"></span>
+                                        <span class="reconnect-dot plus-menu-fold-alert" data-tip="<?= htmlspecialchars(I18n::plural($foldExpired, 'Une connexion à reconnecter', '{n} connexions à reconnecter')) ?>" data-tip-tone="warn"></span>
                                         <?php endif; ?>
                                         <span class="plus-menu-fold-logos" id="plusMenuFoldLogos" aria-hidden="true"></span>
                                     </button>
@@ -911,7 +964,7 @@
                                     data-disabled="<?= $notConnected ? '1' : '0' ?>"
                                     data-reason="<?= $reconnect ? 'reconnect' : ($notConnected ? 'connect' : '') ?>"
                                     title="<?= htmlspecialchars($reconnect ? t('La connexion à {service} a expiré ou a été révoquée — cliquer pour la reconnecter (Réglages → Comptes connectés)', ['service' => $service]) : ($notConnected ? $c['connect'] : $c['title'])) ?>">
-                                    <span class="plus-menu-icon"><?= $c['icon'] ?><?php if ($reconnect): ?><span class="reconnect-dot" aria-hidden="true"></span><?php endif; ?></span>
+                                    <span class="plus-menu-icon"><?= $c['icon'] ?><?= $reconnect ? ConnectorRegistry::reconnectDot([$c['key']], t('Connexion expirée — cliquer pour reconnecter')) : '' ?></span>
                                     <span class="plus-menu-info">
                                         <strong><?= htmlspecialchars($c['label']) ?></strong>
                                         <span class="plus-menu-hint"><?= htmlspecialchars($reconnect ? t('Connexion expirée — cliquer pour reconnecter') : ($notConnected ? t('À connecter dans Réglages → Comptes connectés') : $c['hint'])) ?></span>
@@ -935,6 +988,17 @@
                              Rempli par chat.js depuis les interrupteurs (source unique) ; un
                              clic ouvre le menu sur le volet « Connecteurs ». */ ?>
                     <button type="button" class="composer-connectors-chip" id="connectorsChip" hidden></button>
+                    <?php /* Tables de travail de la conversation : leur nombre, menu fermé. Un
+                             clic ouvre le volet « Tables » — une table ne s'affiche jamais
+                             d'elle-même dans le fil. Tenue à jour par work-tables.js depuis
+                             ce que rend le serveur (WorkTableView::chip) : aucun libellé en JS. */
+                          $wtChip = $workTablesChip ?? WorkTableView::chip(0); ?>
+                    <button type="button" class="composer-tables-chip" id="tablesChip"<?= (int)$wtChip['count'] > 0 ? '' : ' hidden' ?>
+                            title="<?= htmlspecialchars((string)$wtChip['title']) ?>" aria-label="<?= htmlspecialchars((string)$wtChip['title']) ?>">
+                        <?= WorkTableView::icon(14) ?>
+                        <span class="composer-tables-chip-label" data-tables-chip-label><?= htmlspecialchars((string)$wtChip['label']) ?></span>
+                        <span class="composer-tables-chip-count" data-tables-chip-count aria-hidden="true"><?= (int)$wtChip['count'] ?></span>
+                    </button>
                     <!-- Chip outil actif : témoin visible menu fermé, croix pour désélectionner -->
                     <div class="composer-tool-chip" id="toolChip" hidden>
                         <span class="composer-tool-chip-name" id="toolChipName"></span>
@@ -1067,8 +1131,15 @@
                                 </li>
                                 <?php endforeach; ?>
 
-                                <?php foreach ($chatKnowledgeBases as $kbRow):
-                                    if (in_array((int)$kbRow['id'], $kbLockedIds, true)) { continue; }
+                                <?php
+                                    // Les tables permanentes après les bases, sous leur rubrique :
+                                    // même sélecteur, même plafond — ce sont des bases d'une autre
+                                    // nature (des lignes à compter, pas des textes à chercher).
+                                    $kbPickerRows = array_values(array_filter($chatKnowledgeBases, static fn(array $r): bool => !in_array((int)$r['id'], $kbLockedIds, true)));
+                                    usort($kbPickerRows, static fn(array $a, array $b): int => (int)KnowledgeBase::isTable($a) <=> (int)KnowledgeBase::isTable($b));
+                                    $kbTableSection = false;
+                                ?>
+                                <?php foreach ($kbPickerRows as $kbRow):
                                     // SOURCE UNIQUE du grisé : le contrôleur valide avec la
                                     // même méthode, une seconde règle ici afficherait une
                                     // case cochable que le serveur refuserait.
@@ -1079,8 +1150,12 @@
                                     // Base en direct (MyBrain) : pas de documents à compter, un
                                     // cerveau interrogé à chaque message.
                                     $kbLive    = KnowledgeBase::isRemote($kbRow);
+                                    $kbTable   = KnowledgeBase::isTable($kbRow);
                                 ?>
-                                <li class="kb-picker-row<?= $kbOff ? ' is-unavailable' : '' ?>"
+                                <?php if ($kbTable && !$kbTableSection): $kbTableSection = true; ?>
+                                <li class="picker-section-label kb-picker-section" role="presentation"><?= te('Tables') ?></li>
+                                <?php endif; ?>
+                                <li class="kb-picker-row<?= $kbOff ? ' is-unavailable' : '' ?><?= $kbTable ? ' is-table' : '' ?>"
                                     data-kb-id="<?= (int)$kbRow['id'] ?>" data-locked="0"
                                     data-disabled="<?= $kbOff ? '1' : '0' ?>"
                                     data-reason="<?= htmlspecialchars((string)$kbReason) ?>"
@@ -1089,22 +1164,30 @@
                                             ? t((string)$kbReason) . t(' — cette base ne peut pas encore être interrogée.')
                                             : ($kbLive && trim((string)($kbRow['description'] ?? '')) === ''
                                                 ? t('Cerveau MyBrain de l\'équipe, interrogé à chaque message : les réponses citent ses fiches.')
-                                                : (string)($kbRow['description'] ?? $kbRow['name']))) ?>">
+                                                : ($kbTable && trim((string)($kbRow['description'] ?? '')) === ''
+                                                    ? t('Table : MIA compte, filtre et croise ses lignes, sans en oublier.')
+                                                    : (string)($kbRow['description'] ?? $kbRow['name'])))) ?>">
                                     <label class="kb-picker-label">
                                         <input type="checkbox"<?= $kbOff ? ' disabled' : '' ?><?= $kbChecked ? ' checked' : '' ?>>
                                         <span class="kb-picker-meta">
-                                            <span class="kb-picker-name"><?php if ($kbLive): ?><img class="kb-picker-live-ico" src="/assets/img/mybrain.png" alt=""><?php endif; ?><?= htmlspecialchars((string)$kbRow['name']) ?></span>
+                                            <span class="kb-picker-name"><?php if ($kbLive): ?><img class="kb-picker-live-ico" src="/assets/img/mybrain.png" alt=""><?php endif; ?><?php if ($kbTable): ?><span class="kb-picker-table-ico" aria-hidden="true"><?= WorkTableView::icon(13) ?></span><?php endif; ?><?= htmlspecialchars((string)$kbRow['name']) ?></span>
                                             <span class="kb-picker-sub<?= $kbOff ? ' kb-picker-sub-warn' : '' ?>">
                                                 <?= $kbOff
                                                     ? te((string)$kbReason)
                                                     : ($kbLive
                                                         ? te('Interrogé en direct')
-                                                        : $kbDocs . ' document' . ($kbDocs > 1 ? 's' : '')) ?>
+                                                        : ($kbTable
+                                                            ? htmlspecialchars(WorkTableView::rowsLabel((int)($kbRow['table_rows'] ?? 0)) . ' · ' . I18n::plural((int)($kbRow['table_columns'] ?? 0), '{n} colonne', '{n} colonnes'))
+                                                            : $kbDocs . ' document' . ($kbDocs > 1 ? 's' : ''))) ?>
                                             </span>
                                         </span>
                                     </label>
-                                    <?php if ($kbLive): ?>
+                                    <?php if (KnowledgeBase::isPrivate($kbRow)): ?>
+                                    <span class="kb-picker-badge kb-picker-badge-private" title="<?= te('Réservée à vous seul : personne d\'autre, pas même un administrateur, ne la voit.') ?>"><?= te('Pour moi') ?></span>
+                                    <?php elseif ($kbLive): ?>
                                     <span class="kb-picker-badge kb-picker-badge-live">MyBrain</span>
+                                    <?php elseif (KnowledgeBase::isPublic($kbRow)): ?>
+                                    <span class="kb-picker-badge" title="<?= te('Toute l\'organisation la voit et la coche dans le chat. Seuls son créateur et les administrateurs la modifient.') ?>"><?= te('Publique') ?></span>
                                     <?php elseif (!empty($kbRow['is_shared'])): ?>
                                     <span class="kb-picker-badge"><?= te('Partagée') ?></span>
                                     <?php endif; ?>
@@ -1125,6 +1208,23 @@
                                 <span id="llmPickerLabel"><?= htmlspecialchars($llms[$currentLlm] ?? '') ?></span>
                                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
                             </button>
+                            <?php
+                                // Étoile « modèle par défaut » (LlmPreference) : pleine
+                                // et colorée sur le modèle de la personne, pleine et
+                                // discrète sur celui de l'organisation tant qu'elle
+                                // n'en a pas choisi, vide ailleurs. Rien à choisir
+                                // avec un seul modèle proposé.
+                                $llmStarsOn = !empty($llmPreference['choosable']);
+                                $llmStarTitle = static function (string $key, string $label) use ($llmPreference): string {
+                                    if ($key === $llmPreference['mine']) {
+                                        return t('{model} est votre modèle par défaut. Touchez l\'étoile pour revenir à celui de votre organisation.', ['model' => $label]);
+                                    }
+                                    if ($key === $llmPreference['effective']) {
+                                        return t('{model} est le modèle par défaut de votre organisation. Touchez l\'étoile pour le garder comme le vôtre.', ['model' => $label]);
+                                    }
+                                    return t('Faire de {model} votre modèle par défaut', ['model' => $label]);
+                                };
+                            ?>
                             <ul class="llm-picker-list" id="llmPickerList" style="display:none">
                                 <li class="llm-picker-list-header"><?= te('Coût LLM (pas performance)') ?></li>
                                 <?php $lastGroup = null; foreach ($llms as $key => $label):
@@ -1133,7 +1233,11 @@
                                         $lastGroup = $keyProvider; ?>
                                     <li class="llm-picker-list-header llm-picker-group"><?= htmlspecialchars(LLMFactory::providerLabel($keyProvider)) ?></li>
                                     <?php endif; ?>
-                                    <li class="llm-picker-item <?= $key === $currentLlm ? 'active' : '' ?>"
+                                    <?php
+                                        $isDefaultLlm = $key === $llmPreference['effective'];
+                                        $isMineLlm    = $key === $llmPreference['mine'];
+                                    ?>
+                                    <li class="llm-picker-item <?= $key === $currentLlm ? 'active' : '' ?> <?= $isDefaultLlm ? 'is-default' : '' ?> <?= $isMineLlm ? 'is-mine' : '' ?>"
                                         data-value="<?= htmlspecialchars($key) ?>"
                                         data-logo="<?= htmlspecialchars($logos[$keyProvider] ?? '') ?>"
                                         data-cost="<?= (int)($llmStars[$key] ?? 0) ?>"
@@ -1144,12 +1248,30 @@
                                         <?php if (!empty($llmStars[$key])): ?>
                                         <span class="llm-cost-stars" title="<?= htmlspecialchars($llmCostTitle((string)$key)) ?>"><?= str_repeat('€', $llmStars[$key]) ?><?= str_repeat('·', 5 - $llmStars[$key]) ?></span>
                                         <?php endif; ?>
+                                        <?php if ($llmStarsOn): ?>
+                                        <?php $starTitle = $llmStarTitle((string)$key, (string)$label); ?>
+                                        <button type="button" class="llm-fav-btn" data-llm-fav
+                                                aria-pressed="<?= $isMineLlm ? 'true' : 'false' ?>"
+                                                aria-label="<?= htmlspecialchars($starTitle) ?>"
+                                                title="<?= htmlspecialchars($starTitle) ?>">
+                                            <svg width="16" height="16" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><polygon points="12 2.6 14.9 8.6 21.5 9.5 16.7 14.1 17.9 20.6 12 17.5 6.1 20.6 7.3 14.1 2.5 9.5 9.1 8.6 12 2.6"/></svg>
+                                        </button>
+                                        <?php endif; ?>
                                     </li>
                                 <?php endforeach; ?>
+                                <?php if ($llmStarsOn): ?>
+                                <li class="llm-picker-foot">
+                                    <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><polygon points="12 2.6 14.9 8.6 21.5 9.5 16.7 14.1 17.9 20.6 12 17.5 6.1 20.6 7.3 14.1 2.5 9.5 9.1 8.6 12 2.6"/></svg>
+                                    <span><?= te('L\'étoile marque votre modèle par défaut : il ouvre chaque nouvelle conversation.') ?></span>
+                                </li>
+                                <?php endif; ?>
                             </ul>
                     </div>
-                    <?php if (!empty($hasOpenaiKey) && !empty($micEnabled)): ?>
-                    <button type="button" class="btn-icon btn-mic" id="micBtn" title="<?= te('Dicter le message') ?>">
+                    <?php if (!empty($dictationEngine) && !empty($micEnabled)): ?>
+                    <!-- Dictée : moteur choisi par l'administrateur (Dictation) —
+                         OpenAI Realtime en direct, ou Voxtral phrase par phrase. -->
+                    <button type="button" class="btn-icon btn-mic" id="micBtn" title="<?= te('Dicter le message') ?>"
+                            data-engine="<?= htmlspecialchars((string)$dictationEngine) ?>">
                         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                             <rect x="9" y="3" width="6" height="12" rx="3"/>
                             <path d="M5 11a7 7 0 0 0 14 0"/>
@@ -1158,7 +1280,7 @@
                         </svg>
                     </button>
                     <?php endif; ?>
-                    <?php if (!empty($hasOpenaiKey) && !empty($voiceChatEnabled)): ?>
+                    <?php if (!empty($voiceChatEnabled) && (!empty($hasOpenaiKey) || !empty($voiceChatIssue))): ?>
                     <!-- Conversation vocale (à côté du micro) : onde sonore —
                          cinq barres arrondies centrées sur l'axe, dessinées à
                          la main (aucune icône tierce). Accordée au MICRO qui la
@@ -1166,8 +1288,17 @@
                          empreinte horizontale (x 5 → 19) — plus large ou plus
                          dense, elle pèserait deux fois le voisin dans la
                          pilule. Réglage admin voice_chat_enabled — bouton
-                         absent si coupé. -->
-                    <button type="button" class="btn-icon btn-voice" id="voiceChatBtn" title="<?= te('Converser à la voix') ?>" aria-pressed="false">
+                         absent si coupé. Si la conversation ne peut pas marcher
+                         avec l'IA vocale en vigueur (SpeechSynthesizer::issueFrom),
+                         pastille rouge et raison : au survol, et au clic ou au
+                         doigt, où chat.js l'affiche. -->
+                    <?php
+                        $voiceBlocked = !empty($voiceChatIssue['blocking']);
+                        $voiceBtnTitle = !empty($voiceChatIssue)
+                            ? $voiceChatIssue['title'] . ' — ' . $voiceChatIssue['message']
+                            : t('Converser à la voix');
+                    ?>
+                    <button type="button" class="btn-icon btn-voice<?= $voiceBlocked ? ' is-blocked' : '' ?>" id="voiceChatBtn" title="<?= htmlspecialchars($voiceBtnTitle) ?>" aria-pressed="false"<?php if ($voiceBlocked): ?> aria-disabled="true" data-voice-blocked="1" data-issue-title="<?= htmlspecialchars((string)$voiceChatIssue['title']) ?>" data-issue-message="<?= htmlspecialchars((string)$voiceChatIssue['message']) ?>"<?php endif; ?>>
                         <svg class="voice-wave-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
                             <path d="M5 8.5v7"/>
                             <path d="M8.5 5.5v13"/>
@@ -1175,6 +1306,7 @@
                             <path d="M15.5 7.5v9"/>
                             <path d="M19 6v12"/>
                         </svg>
+                        <?php if (!empty($voiceChatIssue)): ?><span class="voice-issue-dot" aria-hidden="true"></span><?php endif; ?>
                     </button>
                     <?php endif; ?>
                     <button type="submit" class="btn-send" id="sendBtn" title="<?= te('Envoyer') ?>" disabled>
@@ -1208,18 +1340,29 @@
         </div>
     </footer>
 </main>
+<?php if (Workflow::canUse(Session::currentUser())): ?>
+<?php /* Avancement d'une exécution de workflow, sur le côté de SA conversation
+         (la discussion d'abord) : rempli par workflow-progress.js depuis
+         GET /workflows/runs/{id}/progress. */ ?>
+<aside id="wfProgress" class="wfp-panel" hidden aria-label="<?= te('Avancement du workflow') ?>" aria-live="polite"></aside>
+<button type="button" id="wfProgressToggle" class="wfp-toggle" hidden aria-controls="wfProgress" aria-expanded="false" title="<?= te('Avancement du workflow') ?>">
+    <?= Workflow::icon(16) ?><span class="wfp-toggle-label"><?= te('Avancement') ?></span><span class="wfp-toggle-state" data-wfp-toggle-state></span>
+</button>
+<?php endif; ?>
 
 <?php require ROOT . '/templates/partials/whats-new-modal.php'; ?>
+<?php // Nouveautés MAJEURES depuis la dernière visite : une seule fois par compte (MajorFeatures). ?>
+<?php require ROOT . '/templates/partials/feature-news-modal.php'; ?>
 
 <!-- Modale quota épuisé -->
 <div class="modal" id="quotaModal" style="display:none">
     <div class="modal-box" style="max-width:420px;text-align:center">
-        <div style="font-size:40px;margin-bottom:12px">🚫</div>
         <?php $quotaResetLabel = te('1er') . ' ' . htmlspecialchars(Format::monthLabel(date('Y-m', strtotime('first day of next month')))); ?>
         <!-- Deux raisons, deux gestes : le quota PERSONNEL (un admin l'augmente)
              ou le budget IA de l'ORGANISATION (un admin accorde une rallonge).
              showQuotaModal(reason) montre le bloc de la raison reçue. -->
         <div data-quota-reason="quota">
+            <div style="font-size:40px;margin-bottom:12px">🚫</div>
             <h3 style="margin-bottom:12px"><?= te('Quota mensuel atteint') ?></h3>
             <p style="color:var(--text-muted);font-size:14px;line-height:1.6;margin-bottom:20px">
                 <?= te('Vous avez consommé l\'intégralité de votre quota mensuel de crédits.') ?><br>
@@ -1227,7 +1370,18 @@
                 <strong><?= $quotaResetLabel ?></strong>.
             </p>
         </div>
+        <?php // Compte de démo dont l'enveloppe est épuisée : remerciement et contact (DemoAccount). ?>
+        <div data-quota-reason="demo" hidden>
+            <div style="font-size:40px;margin-bottom:12px">✨</div>
+            <h3 style="margin-bottom:12px"><?= htmlspecialchars(DemoAccount::endedTitle()) ?></h3>
+            <p style="color:var(--text-muted);font-size:14px;line-height:1.6;margin-bottom:20px"><?= htmlspecialchars(DemoAccount::endedMessageForInstance()) ?></p>
+            <?php $demoMailto = DemoAccount::mailtoHref(DemoAccount::contactEmail()); ?>
+            <?php if ($demoMailto !== ''): ?>
+                <p style="margin:0 0 16px"><a class="btn-primary demo-ended-mail" href="<?= htmlspecialchars($demoMailto) ?>"><?= te('Écrire à {email}', ['email' => DemoAccount::contactEmail()]) ?></a></p>
+            <?php endif; ?>
+        </div>
         <div data-quota-reason="budget" hidden>
+            <div style="font-size:40px;margin-bottom:12px">🚫</div>
             <h3 style="margin-bottom:12px"><?= te('Service IA suspendu') ?></h3>
             <p style="color:var(--text-muted);font-size:14px;line-height:1.6;margin-bottom:20px">
                 <?= te('Le budget IA mensuel de votre organisation est atteint : les nouvelles demandes sont suspendues jusqu\'au') ?>
@@ -1400,6 +1554,9 @@ window.LOGO_URL        = <?= json_encode(Settings::get('logo_url', '/assets/img/
 window.USER_AVATAR_URL = <?= json_encode($currentUser['avatar_url'] ?? '') ?>;
 // Sert à cloisonner les préférences locales (connecteurs) par compte
 window.CURRENT_USER_ID = <?= json_encode((int)($currentUser['id'] ?? 0)) ?>;
+// Connecteurs reliés depuis le dernier affichage du chat (lu une seule fois par
+// le serveur) : chat.js les allume dans le menu « + ».
+window.CONNECTORS_JUST_CONNECTED = <?= json_encode(array_values($connectorsJustConnected ?? [])) ?>;
 // Tâches programmées : bouton « Refaire régulièrement » sous les réponses.
 // Le serveur reste juge (la page de création refuse si l'option est coupée).
 // « Refaire régulièrement », horloge de l'assistant : droit « Tâches programmées — Créer ».
@@ -1427,6 +1584,9 @@ window.TOOL_TRIGGERS = <?= json_encode(ToolTriggers::all(), JSON_UNESCAPED_UNICO
 // l'utilisateur ne peut pas en changer (picker masqué côté serveur).
 window.PROFILE_LOCKED_LLM = <?= json_encode($profileLocked) ?>;
 window.LLM_INFO        = <?= json_encode($llmInfoData, JSON_UNESCAPED_UNICODE) ?>;
+// Modèle par défaut de la personne (étoile du sélecteur) : état et textes
+// traduits par le serveur (LlmPreference) — le script n'a aucun libellé.
+window.LLM_PREFERENCE  = <?= json_encode(LlmPreference::clientConfig($llmPreference), JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP) ?>;
 // Titres des encadrés d'erreur → genre. Seul le texte d'une erreur est
 // enregistré : à la relecture, c'est son titre qui rend à l'encadré son ton
 // (ambre : quelque chose à régler ; rouge : le fournisseur ne répond pas).
@@ -1513,6 +1673,8 @@ window.DECK_DEFAULTS   = <?= json_encode([
 window.VIDEO_TOOL_CAPABILITIES = <?= json_encode($videoToolCapabilities, JSON_UNESCAPED_UNICODE) ?>;
 window.ACTIVE_PROFILE_AVATAR = <?= json_encode($toolbarAvatar ?? '') ?>;
 window.DRIVE_PENDING_ACTIONS = <?= json_encode($drivePendingActions ?? [], JSON_UNESCAPED_UNICODE) ?>;
+<?php // Questions de MIA (mémoire) : libellés de la carte et question restée en attente. ?>
+window.MIA_MEMORY_Q = <?= json_encode(MemoryQuestions::clientConfig($memoryQuestion ?? null), JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) ?>;
 <?php
 // Types d'outils liés à l'assistant actif : tool-suggest.js s'abstient de
 // suggérer une image quand le LLM la génère déjà lui-même (function-calling).
@@ -1531,6 +1693,8 @@ window.KB_PICKER = <?= json_encode([
     // Bases « cochées par défaut » pour les groupes du compte (migration 073) :
     // elles amorcent le brouillon d'une conversation pas encore créée.
     'defaults' => array_values(array_map('intval', $chatDefaultKbIds ?? [])),
+    // « Interroger dans le chat » depuis la page d'une base (/?kb=ID).
+    'preselect' => (int)($chatPreselectKbId ?? 0),
     'profile'  => array_map(
         static fn(array $k): array => ['id' => (int)$k['id'], 'name' => (string)$k['name']],
         $chatProfileKbs ?? []
@@ -1559,6 +1723,7 @@ window.COMPOSER_HINTS = <?= json_encode(ComposerHints::forChat([
     'workflow'   => Workflow::allows($hintUser, 'create'),
     'assistant'  => AssistantDraft::canCreate($hintUser),
     'company'    => CompanyProfile::name(),
+    'memory'     => UserMemory::isEnabled(),
 ]), JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) ?>;
 <?php // Suggestion de suite après une réponse (FollowUpSuggestion, Tab pour la
       // reprendre) : textes du calque ; null quand l'administrateur l'a coupée. ?>
@@ -1567,6 +1732,7 @@ window.COMPOSER_SUGGEST = <?= json_encode(FollowUpSuggestion::isEnabled() ? Comp
       // et formats de rechange viennent du catalogue serveur — generated-files.js
       // n'en recopie aucun. ?>
 window.FILE_FORMATS = <?= json_encode(FileFormats::clientCatalog(), JSON_UNESCAPED_UNICODE) ?>;
+window.FILE_UPLOAD_LIMITS = <?= json_encode(FileExtractor::clientUploadLimits(), JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP) ?>;
 <?php // Choix proposés en boutons : langages de bloc et bornes du contrat
       // (ChoiceButtons) — choice-buttons.js n'en recopie aucun. ?>
 window.CHOICE_BUTTONS = <?= json_encode(ChoiceButtons::clientConfig(), JSON_UNESCAPED_UNICODE) ?>;
@@ -1579,6 +1745,9 @@ window.FILE_NATIVE = <?= !empty($nativeForFiles) ? 'true' : 'false' ?>;
 <?php // Modèle PowerPoint de l'entreprise : la carte d'une présentation dit
       // « au modèle de … » (null = aucun modèle, la mise en page est celle de MIA). ?>
 window.FILE_DECK_TEMPLATE = <?= json_encode(CompanyProfile::templatePath() !== null ? CompanyProfile::name() : null, JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) ?>;
+<?php // Modèle PowerPoint, modèle Word et logo de l'entreprise : chaque carte de
+      // fichier propose de les embarquer ou non (cases « Embarquer »). ?>
+window.FILE_COMPANY = <?= json_encode(CompanyProfile::availableReferences(), JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) ?>;
 window.CONVERSATION_CREDITS_TOTAL = <?= json_encode((int)($conversationCreditsTotal ?? 0)) ?>;
 window.CREDIT_QUOTA_STATUS = <?= json_encode($creditQuotaStatus, JSON_UNESCAPED_UNICODE) ?>;
 </script>
@@ -1588,12 +1757,18 @@ window.CREDIT_QUOTA_STATUS = <?= json_encode($creditQuotaStatus, JSON_UNESCAPED_
       // (qui rend les messages dès son chargement). ?>
 <?php $filesJsVersion = @filemtime(ROOT . '/public/assets/js/generated-files.js') ?: time(); ?>
 <script src="/assets/js/generated-files.js?v=<?= (int)$filesJsVersion ?>"></script>
+<?php /* Carte de réalisation d'une « Version soignée » : temps, étapes, Arrêter. */ ?>
+<?php $nativeRunJsVersion = @filemtime(ROOT . '/public/assets/js/native-run.js') ?: time(); ?>
+<script src="/assets/js/native-run.js?v=<?= (int)$nativeRunJsVersion ?>"></script>
 <?php // Après generated-files.js (il en reprend la lecture d'un bloc refermé),
       // AVANT chat.js (qui rend les messages dès son chargement). ?>
 <?php $choicesJsVersion = @filemtime(ROOT . '/public/assets/js/choice-buttons.js') ?: time(); ?>
 <script src="/assets/js/choice-buttons.js?v=<?= (int)$choicesJsVersion ?>"></script>
 <?php $userMenuJsVersion = @filemtime(ROOT . '/public/assets/js/user-menu.js') ?: time(); ?>
 <script src="/assets/js/user-menu.js?v=<?= (int)$userMenuJsVersion ?>"></script>
+<?php // Info-bulles des pastilles (nouveautés, points à régler, reconnexion) : le texte n'est jamais affiché en permanence. ?>
+<?php $navSignalsJsVersion = @filemtime(ROOT . '/public/assets/js/nav-signals.js') ?: time(); ?>
+<script src="/assets/js/nav-signals.js?v=<?= (int)$navSignalsJsVersion ?>"></script>
 <?php $navDrawerJsVersion = @filemtime(ROOT . '/public/assets/js/nav-drawer.js') ?: time(); ?>
 <script src="/assets/js/nav-drawer.js?v=<?= (int)$navDrawerJsVersion ?>"></script>
 <script src="/assets/js/vendor/leaflet/leaflet.js"></script>
@@ -1609,8 +1784,19 @@ window.CREDIT_QUOTA_STATUS = <?= json_encode($creditQuotaStatus, JSON_UNESCAPED_
 <?php $wfJsVersion = @filemtime(ROOT . '/public/assets/js/workflows.js') ?: time(); ?>
 <script src="/assets/js/workflows.js?v=<?= (int)$wfJsVersion ?>"></script>
 <?php endif; ?>
+<?php // Avant chat.js : écriture fluide d'une réponse. ?>
+<?php $streamJsVersion = @filemtime(ROOT . '/public/assets/js/stream-render.js') ?: time(); ?>
+<script src="/assets/js/stream-render.js?v=<?= (int)$streamJsVersion ?>"></script>
 <?php $chatJsVersion = @filemtime(ROOT . '/public/assets/js/chat.js') ?: time(); ?>
 <script src="/assets/js/chat.js?v=<?= (int)$chatJsVersion ?>"></script>
+<?php if (Workflow::canUse(Session::currentUser())): ?>
+<?php /* Après chat.js : il s'appuie sur window.miaSyncConversation. */ ?>
+<?php $wfProgressJsVersion = @filemtime(ROOT . '/public/assets/js/workflow-progress.js') ?: time(); ?>
+<script src="/assets/js/workflow-progress.js?v=<?= (int)$wfProgressJsVersion ?>"></script>
+<?php endif; ?>
+<?php // Questions de MIA (mémoire) : la carte sous une réponse terminée. ?>
+<?php $memoryQuestionJsVersion = @filemtime(ROOT . '/public/assets/js/memory-question.js') ?: time(); ?>
+<script src="/assets/js/memory-question.js?v=<?= (int)$memoryQuestionJsVersion ?>"></script>
 <?php // Après chat.js : il lit le texte d'aide du champ, que chat.js raccourcit sur téléphone. ?>
 <?php $composerHintsJsVersion = @filemtime(ROOT . '/public/assets/js/composer-hints.js') ?: time(); ?>
 <script src="/assets/js/composer-hints.js?v=<?= (int)$composerHintsJsVersion ?>"></script>
@@ -1705,6 +1891,28 @@ window.CREDIT_QUOTA_STATUS = <?= json_encode($creditQuotaStatus, JSON_UNESCAPED_
             </div>
         </div>
     </div>
+</div>
+
+<!-- Volet « Tables de cette conversation » (panneau droit) — même coque
+     .html-viewer que la carte. Fermé par défaut : il ne s'ouvre qu'au bouton
+     « Voir » d'une réponse ou à la puce de la zone de saisie. Son contenu est
+     rendu par le serveur (GET /chat/{id}/tables), work-tables.js le pose. -->
+<div id="tablesViewer" class="html-viewer tables-viewer" data-error="<?= te('Les tables n’ont pas pu être affichées. Réessayez.') ?>">
+    <div class="html-viewer-resizer" id="tablesViewerResizer" title="<?= te('Glisser pour redimensionner · double-clic pour réinitialiser') ?>"></div>
+    <div class="html-viewer-bar">
+        <span class="tables-viewer-ico" aria-hidden="true"><?= WorkTableView::icon(15) ?></span>
+        <span class="html-viewer-title" id="tablesViewerTitle"><?= te('Tables de cette conversation') ?></span>
+        <div style="margin-left:auto;display:flex;gap:2px;align-items:center">
+            <button id="tablesViewerClose" class="html-viewer-btn" title="<?= te('Fermer le panneau') ?>" aria-label="<?= te('Fermer le panneau') ?>">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
+        </div>
+    </div>
+    <div id="tablesViewerLoading" class="html-viewer-loading" hidden>
+        <div class="html-viewer-spinner"></div>
+        <span><?= te('Chargement des tables…') ?></span>
+    </div>
+    <div id="tablesViewerBody" class="tables-viewer-body"></div>
 </div>
 
 <!-- Viewer carte / itinéraire (panneau droit) — réutilise les styles .html-viewer -->
@@ -1990,6 +2198,10 @@ window.CREDIT_QUOTA_STATUS = <?= json_encode($creditQuotaStatus, JSON_UNESCAPED_
 
 <?php $deckJsVersion = @filemtime(ROOT . '/public/assets/js/deck.js') ?: time(); ?>
 <script src="/assets/js/deck.js?v=<?= (int)$deckJsVersion ?>"></script>
+<?php // Volet des tables de travail : après chat.js (il en reprend la garde de
+      // session et l'état des volets), aucun libellé — tout vient du serveur. ?>
+<?php $workTablesJsVersion = @filemtime(ROOT . '/public/assets/js/work-tables.js') ?: time(); ?>
+<script src="/assets/js/work-tables.js?v=<?= (int)$workTablesJsVersion ?>"></script>
 
 <!-- Lightbox image : agrandissement au clic sur une image de message -->
 <div class="image-lightbox" id="imageLightbox" style="display:none">

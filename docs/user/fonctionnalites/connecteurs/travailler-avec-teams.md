@@ -2,7 +2,7 @@
 title: Travailler avec Microsoft Teams
 description: Faire résumer une conversation ou un canal Teams, retrouver un message, et publier dans Teams en votre nom après approbation.
 sidebar:
-  order: 4
+  order: 5
 ---
 
 Une fois votre Teams relié et l'interrupteur **Messages Teams** allumé, MIA cherche et lit vos
@@ -30,7 +30,7 @@ précise.
 | *« Qu'a dit Marie sur le budget dans Teams ? »* | Cherche dans tous les messages que vous pouvez lire |
 | *« Résume ma conversation avec Paul »* | Lit la conversation, du plus ancien au plus récent |
 | *« Quoi de neuf dans Projet Atlas / Général ? »* | Lit le canal ; chaque message indique combien de réponses a son fil |
-| *« Déroule le fil sur la livraison »* | Lit le message d'origine et toutes ses réponses |
+| *« Déroule le fil sur la livraison »* | Lit le message d'origine et ses réponses |
 
 Une conversation se désigne par son sujet ou le nom de la personne ; un canal par **« Équipe /
 Canal »**. Un **lien Teams** collé dans le message (« Copier le lien » d'une conversation, d'un canal
@@ -39,6 +39,13 @@ ou d'un message) fait aussi l'affaire. Un nom qui vaut pour plusieurs — « Gé
 
 Chaque message rapporté est cité avec son **auteur** et sa **date** ; les mentions (`@Marie`) et les
 pièces jointes sont nommées.
+
+- **Un fil très long** (plus de 200 réponses) se lit à partir des réponses les plus récentes ; MIA dit
+  quand les plus anciennes n'ont pas été lues.
+- **Un fil dont le premier message a été supprimé** reste lisible : ses réponses sont là, le premier
+  message apparaît comme supprimé.
+- Les messages automatiques de Teams (une personne ajoutée, une réunion qui commence) ne comptent pas
+  comme des messages à lire.
 
 ## Publier un message
 
@@ -62,7 +69,7 @@ normalement : le gras, l'italique, les listes et les liens sont mis en forme pou
 
 Le message publié apparaît dans la conversation de MIA avec un lien pour l'ouvrir dans Teams. MIA garde
 la destination : au message suivant, *« ajoute que j'apporte le dossier »* vise bien la même
-conversation.
+conversation — et, après une réponse dans un fil, le même fil.
 
 ## Limites
 
@@ -77,3 +84,5 @@ conversation.
 - [Relier un service](relier-un-service.md) — connecter votre Teams, vérifier les autorisations
 - [Utiliser un connecteur](utiliser-un-connecteur.md) — allumer, approuver, comprendre la trace
 - [Travailler avec Slack](travailler-avec-slack.md) — le même usage, côté Slack
+- [Organiser une réunion dans Outlook](organiser-une-reunion.md) — une réunion Teams dans votre
+  agenda, avec ses invités

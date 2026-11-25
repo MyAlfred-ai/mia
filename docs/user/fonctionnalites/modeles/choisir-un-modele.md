@@ -14,7 +14,9 @@ modèle et ce qui le distingue d'un autre : [Les modèles de LLM](index.md).
 2. Parcourez la liste, regroupée par éditeur. Chaque ligne porte un repère de coût, de **€** à
    **€€€€€** : le prix relatif, pas la qualité. Survolez-le pour lire le coût en clair :
    « ≈ 35 crédits par réponse, ≈ 13 par recherche Internet ».
-3. Cliquez le modèle voulu. Il s'applique à vos prochains messages dans cette conversation.
+3. Cliquez le modèle voulu. Il s'applique à vos prochains messages dans cette conversation. Pour
+   qu'il ouvre aussi vos prochaines conversations, touchez plutôt l'**étoile** au bout de sa ligne :
+   voir [Choisir son modèle par défaut](choisir-son-modele-par-defaut.md).
 
 ## Résultat
 

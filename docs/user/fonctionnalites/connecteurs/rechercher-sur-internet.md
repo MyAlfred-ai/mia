@@ -2,7 +2,7 @@
 title: Rechercher sur Internet
 description: Laisser MIA vérifier une information en ligne avant de répondre, ou l'en empêcher.
 sidebar:
-  order: 4
+  order: 6
 ---
 
 La **Recherche Internet** est un connecteur sans compte à relier : MIA cherche sur le web public avant
@@ -37,8 +37,9 @@ dit. Éteindre la Recherche Internet éteint aussi la lecture de pages.
 
 ## Cas particuliers
 
-- **Éteindre la recherche** : décochez la ligne dans le menu **+**. Le point ambre du bouton **+**
-  rappelle qu'elle est éteinte. Utile pour une question où seul le contenu de vos documents compte.
+- **Éteindre la recherche** : décochez la ligne dans le menu **+**. Allumée, elle apparaît (un
+  globe) dans la pastille des sources actives, à côté du bouton **+**, avec vos connecteurs ; éteinte,
+  le globe disparaît. Utile pour une question où seul le contenu de vos documents compte.
 - **Un modèle qui ne sait pas chercher** le dit : il indique qu'il n'a pas pu vérifier en ligne,
   plutôt que d'inventer.
 - **Regénérer** une réponse ne relance pas la recherche.

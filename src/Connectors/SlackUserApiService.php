@@ -85,6 +85,79 @@ abstract class SlackUserApiService extends ConnectorApiService
     }
 
     /**
+     * POST en FORMULAIRE : `files.getUploadURLExternal` est documentée en JSON
+     * comme en formulaire, mais le JSON y a longtemps été refusé
+     * (`invalid_arguments`) — le formulaire passe partout.
+     */
+    protected function slackForm(string $method, array $fields): array
+    {
+        $fields = array_filter($fields, static fn($v): bool => $v !== '' && $v !== null);
+        $data = json_decode($this->apiForm(static::SLACK_BASE . '/' . $method, $fields), true);
+        return $this->assertOk(is_array($data) ? $data : [], $method);
+    }
+
+    /**
+     * GET qui TOLÈRE certains refus (`users_not_found` d'une recherche par
+     * adresse : la personne n'existe pas, ce n'est pas une panne) : null pour
+     * eux, le contrôle de `ok` ordinaire pour tout le reste.
+     *
+     * @param list<string> $tolerated codes d'erreur rendus en null
+     */
+    protected function slackTry(string $method, array $query, array $tolerated): ?array
+    {
+        $query = array_filter($query, static fn($v): bool => $v !== '' && $v !== null);
+        $data  = $this->apiJson('GET', static::SLACK_BASE . '/' . $method . ($query !== [] ? '?' . http_build_query($query) : ''));
+        if (($data['ok'] ?? false) !== true && in_array((string)($data['error'] ?? ''), $tolerated, true)) {
+            return null;
+        }
+        return $this->assertOk($data, $method);
+    }
+
+    /**
+     * Octets d'un fichier vers l'adresse de téléversement que Slack vient de
+     * rendre (`files.getUploadURLExternal`). Adresse PRÉ-SIGNÉE : le jeton
+     * n'y part pas — rien ne l'exige, et une adresse n'est suivie que si elle
+     * est bien chez Slack (https, `*.slack.com`). Slack répond 200 si le
+     * fichier est reçu ; tout autre statut est un échec.
+     */
+    protected function uploadToSlack(string $url, string $bytes): void
+    {
+        if (!self::isSlackUploadUrl($url)) {
+            throw new \RuntimeException('Slack a rendu une adresse de téléversement inattendue.');
+        }
+        $ctx = stream_context_create(['http' => [
+            'method'          => 'POST',
+            'header'          => "Content-Type: application/octet-stream\r\nContent-Length: " . strlen($bytes),
+            'content'         => $bytes,
+            'timeout'         => 120,
+            'ignore_errors'   => true,
+            'follow_location' => 0,
+        ]]);
+        $response = @file_get_contents($url, false, $ctx);
+        $status = 0;
+        foreach ($http_response_header ?? [] as $h) {
+            if (preg_match('#^HTTP/\S+\s+(\d{3})#', $h, $m) === 1) {
+                $status = (int)$m[1];
+            }
+        }
+        if ($response === false || $status !== 200) {
+            error_log(static::LOG_LABEL . ' téléversement de fichier refusé (HTTP ' . $status . ')');
+            throw new \RuntimeException('Le fichier n\'a pas pu être envoyé à Slack — réessayez dans quelques instants.');
+        }
+    }
+
+    /** Adresse de téléversement de Slack : https, sur un domaine de Slack. Pure. */
+    public static function isSlackUploadUrl(string $url): bool
+    {
+        $p = parse_url(trim($url));
+        if (!is_array($p) || ($p['scheme'] ?? '') !== 'https' || isset($p['user']) || isset($p['port'])) {
+            return false;
+        }
+        $host = strtolower((string)($p['host'] ?? ''));
+        return $host === 'slack.com' || str_ends_with($host, '.slack.com');
+    }
+
+    /**
      * Rend la réponse si `ok` est vrai, lève un message FR sinon. SEUL endroit
      * qui décide qu'une réponse Slack est exploitable.
      */
@@ -250,6 +323,10 @@ abstract class SlackUserApiService extends ConnectorApiService
             'cannot_dm_bot', 'cannot_reply_to_message' =>
                 'Slack refuse de publier à cet endroit (message système, ou conversation fermée à la réponse).',
             'not_allowed_token_type' => null, // traité par isScopeFailure
+            'file_upload_size_restricted', 'file_uploads_disabled', 'file_uploads_except_images_disabled' =>
+                'Votre espace de travail Slack interdit l\'envoi de ce fichier (taille, type, ou règle posée par un administrateur).',
+            'cannot_dm_user', 'user_is_restricted', 'user_disabled' =>
+                'Slack refuse d\'ouvrir un message direct avec cette personne (compte désactivé, invité restreint, ou règle de l\'espace de travail).',
             'team_access_not_granted' =>
                 'Votre compte n\'a plus accès à cet espace de travail Slack. Reconnectez-le dans Réglages → Comptes connectés.',
             'fatal_error', 'internal_error', 'service_unavailable' =>

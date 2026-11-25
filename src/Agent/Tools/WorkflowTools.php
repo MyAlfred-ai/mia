@@ -75,15 +75,15 @@ final class WorkflowTools extends AbstractToolProvider
             . "demande et que rien ne bloque, il est même publié, prêt à lancer ; rien ne démarre jamais sans lui). Ne "
             . "l'appelle que s'il demande un workflow, un processus en plusieurs étapes ou l'automatisation d'un "
             . "enchaînement. Si le processus est flou (ce qui arrive au départ, ce qu'il veut à la fin), pose UNE "
-            . "question courte avant ; sinon propose directement, il corrigera.\n"
+            . "question courte avant ; sinon propose directement, il corrigera. Si la demande vise un service absent de "
+            . "« CE QUE L'UTILISATEUR A » (Slack, Outlook…), ne le mets pas dans le workflow : dis-le et propose un service "
+            . "qu'il a, ou une étape qui prépare le contenu.\n"
             . "Construis-le COMPLET, prêt à servir tel quel : le bon déclencheur, une fiche de départ avec les champs "
             . "utiles, chaque étape confiée à l'assistant dont c'est le métier, avec les services (reliés de préférence) "
             . "et les bases qu'elle doit consulter et des filtres précis, des pièces au nom parlant (une Fiche quand une "
             . "condition doit lire un champ), une validation là où une erreur coûte (envoi, montant, client), « essais » "
             . "et « si_erreur » sur ce qui touche un service, toute écriture dans un outil en ACTION à approuver, le "
-            . "livrable et sa livraison si la demande dit où va le résultat. Des titres courts ; pas de brique superflue. "
-            . "N'invente aucune donnée que la demande ne donne pas (adresse, dossier, canal) : laisse le champ vide, "
-            . "l'éditeur le signalera.\n"
+            . "livrable et sa livraison si la demande dit où va le résultat. Des titres courts ; pas de brique superflue.\n"
             . WorkflowDraft::schemaGuide($this->choices)
             . "Après l'appel, résume en deux phrases le déroulé (départ → étapes → livrable) sans recopier le JSON — "
             . "la carte montre le rail —, et rappelle qu'en l'approuvant il le retrouve réglé dans l'éditeur, ou qu'il "
@@ -110,6 +110,12 @@ final class WorkflowTools extends AbstractToolProvider
                 if ($source === null) {
                     return ['error' => 'Le paramètre `workflow` doit être un objet JSON valide, de la forme décrite '
                         . 'dans la consigne. Corrige l\'appel.'];
+                }
+                // Le fuseau du NAVIGATEUR : une programmation « chaque lundi à
+                // 8 h » ou une date d'évènement se lisent à son heure (vide, le
+                // serveur — UTC — s'appliquerait, une à deux heures plus tôt).
+                if (trim((string)($source['fuseau'] ?? '')) === '' && $this->turn->timeZone !== '') {
+                    $source['fuseau'] = $this->turn->timeZone;
                 }
                 $replace  = filter_var($args['remplace'] ?? false, FILTER_VALIDATE_BOOLEAN);
                 $previous = $replace

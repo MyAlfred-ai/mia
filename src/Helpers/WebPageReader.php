@@ -97,10 +97,17 @@ final class WebPageReader
         'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
         'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
         'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+        'application/msword',
+        'application/vnd.ms-excel',
         'application/vnd.oasis.opendocument.text',
         'application/vnd.oasis.opendocument.spreadsheet',
         'application/vnd.oasis.opendocument.presentation',
         'application/rtf',
+        'application/epub+zip',
+        'application/vnd.ms-powerpoint',
+        'message/rfc822',
+        'application/vnd.ms-outlook',
+        'application/zip',
     ];
 
     /**
@@ -127,23 +134,33 @@ final class WebPageReader
         $body      = (string)($resp['body'] ?? '');
         $truncated = !empty($resp['truncated']);
 
-        if ($mime === 'text/html' || $mime === 'application/xhtml+xml' || ($mime === '' && self::looksLikeHtml($body))) {
+        // Type annoncé, sinon le nom du fichier dans l'adresse (serveur qui
+        // répond `application/octet-stream`) : règle commune de FileExtractor.
+        $reader  = FileExtractor::readerFor($mime, self::fileNameOf((string)$target['url']));
+        $docMime = in_array($mime, self::DOCUMENT_MIMES, true) ? $mime
+            : (in_array((string)$reader, self::DOCUMENT_MIMES, true) ? (string)$reader : null);
+
+        if ($mime === 'text/html' || $mime === 'application/xhtml+xml'
+            || (($mime === '' || $reader === 'text/html') && self::looksLikeHtml($body))) {
             $page  = self::htmlToReadable($body, $charset);
             $titre = $page['titre'];
             $texte = $page['texte'];
             $type  = 'page web';
-        } elseif (in_array($mime, self::TEXT_MIMES, true) || str_starts_with($mime, 'text/')) {
-            $titre = '';
-            $texte = trim(self::toUtf8($body, $charset));
-            $type  = 'texte';
-        } elseif (in_array($mime, self::DOCUMENT_MIMES, true)) {
+        } elseif ($docMime !== null) {
             if ($truncated) {
                 throw new \RuntimeException('Document trop volumineux pour être lu ('
                     . (int)(self::MAX_BYTES / 1024 / 1024) . ' Mo au plus).');
             }
             $titre = '';
-            $texte = self::extractDocument($body, $mime);
-            $type  = $mime === 'application/pdf' ? 'PDF' : 'document';
+            $texte = self::extractDocument($body, $docMime);
+            $type  = $docMime === 'application/pdf' ? 'PDF' : 'document';
+        } elseif (in_array($mime, self::TEXT_MIMES, true) || FileExtractor::isTextualMime($mime)
+            || ($reader !== null && FileExtractor::isReadableText(substr($body, 0, 65536)))) {
+            // JSON, YAML, XML, code, journaux… et un type générique dont les
+            // octets sont du texte.
+            $titre = '';
+            $texte = trim(self::toUtf8($body, $charset));
+            $type  = 'texte';
         } else {
             throw new \RuntimeException('Ce lien mène à un fichier « ' . ($mime !== '' ? $mime : 'de type inconnu')
                 . ' », qui ne se lit pas comme du texte.');
@@ -601,6 +618,13 @@ final class WebPageReader
     }
 
     /** Document bureautique ou PDF → texte (FileExtractor, fichier temporaire supprimé). */
+    /** Dernier segment du chemin d'une adresse (« rapport.pdf »), sans la requête. */
+    private static function fileNameOf(string $url): string
+    {
+        $path = (string)(parse_url($url, PHP_URL_PATH) ?? '');
+        return rawurldecode(basename($path));
+    }
+
     private static function extractDocument(string $bytes, string $mime): string
     {
         $tmp = tempnam(sys_get_temp_dir(), 'mia_web_');

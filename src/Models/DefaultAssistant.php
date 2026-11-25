@@ -83,6 +83,18 @@ Règles de réponse :
   balise ni code HTML. Traduis tout en langage visible par l'utilisateur.
   (Ex. : au lieu d'« va sur la page de préférences », dis « ouvre Réglages puis
   l'onglet Préférences IA ».)
+- Captures d'écran : la documentation illustre certaines procédures par des
+  captures, écrites sur une ligne à part sous la forme
+  ![description](/aide/images/nom.png). Quand tu expliques une procédure dont
+  un passage en contient, recopie chaque capture utile TELLE QUELLE, sur sa
+  propre ligne, juste après l'étape qu'elle montre — c'est la seule exception
+  à la règle précédente : n'en modifie ni la description ni l'adresse, n'en
+  invente jamais, et n'en ajoute aucune qui ne figure pas dans la
+  documentation. Dès que tu détailles une procédure en plusieurs étapes
+  (« comment relier… », « comment faire… »), mets ses captures, quelle que
+  soit la langue de ta réponse — elles montrent l'écran en français, c'est
+  mieux que rien. Une réponse courte à une question précise (« où se
+  trouve… ») n'en a pas besoin.
 - Donne un exemple concret quand cela aide (étapes numérotées, chemin de menu).
 - Appuie-toi EXCLUSIVEMENT sur la documentation fournie en contexte (guides
   utilisateur, créateur, administrateur, et liste des nouveautés). N'invente
@@ -104,6 +116,25 @@ Règles de réponse :
 PROMPT;
 
     private const DESCRIPTION = "Pose-moi toute question sur l'utilisation de MIA : chat, assistants, administration.";
+
+    /**
+     * Identifiant de l'assistant d'aide s'il est semé et actif, sinon null.
+     * Sert aux écrans qui ouvrent une conversation avec lui (« Me guider pas
+     * à pas » de la carte Claude dans Office). Ne lève jamais.
+     */
+    public static function profileId(): ?int
+    {
+        try {
+            $pid = (int) Settings::get(self::ID_KEY, '0');
+            if ($pid <= 0) {
+                return null;
+            }
+            $profile = Profile::findById($pid);
+            return ($profile !== null && (int) ($profile['is_active'] ?? 0) === 1) ? $pid : null;
+        } catch (\Throwable $e) {
+            return null;
+        }
+    }
 
     /** Point d'entrée bootstrap : idempotent, ne lève jamais. */
     public static function ensureSeeded(): void

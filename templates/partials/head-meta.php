@@ -25,6 +25,10 @@ window.tn = function (n, un, plusieurs, v) {
 <?php /* Compte connecté (vide sur la page de connexion) : user-menu.js s'en
          sert pour qu'un navigateur ne reçoive que les notifications de CE compte. */ ?>
 <meta name="mia-user" content="<?= ($miaHeadUserId = (int)(Session::currentUser()['id'] ?? 0)) > 0 ? $miaHeadUserId : '' ?>">
+<?php /* Sections repliées du volet (Espaces, Épinglées, Historique, carte du
+         compte) : posées sur <html> avant le premier rendu, sur toutes les
+         pages qui ont un volet (chat, espaces, réglages, administration). */ ?>
+<?php if ($miaHeadUserId > 0) { require ROOT . '/templates/partials/sidebar-sections-boot.php'; } ?>
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="apple-touch-icon" href="/assets/img/icons/apple-touch-icon.png">
 <meta name="theme-color" content="<?= DisplayPreferences::themeColor(DisplayPreferences::currentTheme()) ?>">

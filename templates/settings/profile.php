@@ -42,9 +42,14 @@ $userProviders = UserIdentity::providersForUser((int)($user['id'] ?? 0));
 
 <!-- Contenu -->
 <div class="admin-content">
+    <?php require ROOT . '/templates/partials/admin-topbar.php'; ?>
     <div style="max-width:680px">
-        <h1 style="margin-bottom:6px"><?= te('Mon profil') ?></h1>
-        <p style="color:var(--text-muted);font-size:14px;margin-bottom:28px"><?= te('Gérez vos informations personnelles et votre sécurité.') ?></p>
+        <header class="page-head">
+        <div class="page-head-text">
+            <h1 style="margin-bottom:6px"><?= te('Mon profil') ?></h1>
+            <p class="page-head-sub"><?= te('Gérez vos informations personnelles et votre sécurité.') ?></p>
+        </div>
+        </header>
 
         <?php if (!empty($success)): ?>
             <div class="alert alert-success" style="margin-bottom:20px">
@@ -184,10 +189,9 @@ $userProviders = UserIdentity::providersForUser((int)($user['id'] ?? 0));
             </form>
         </div>
 
-        <!-- Ce que MIA sait de vous (votre contexte + souvenirs « MIA pour vous »)
-             vit dans Préférences IA, sous « Votre contexte » : une seule liste, une
-             seule porte. Mon profil y RENVOIE au lieu de dupliquer l'éditeur —
-             deux exemplaires obligeaient la doc à expliquer « deux portes ». -->
+        <!-- Ce que MIA sait de vous (votre contexte + vos souvenirs) a sa page,
+             Réglages → Mémoire : une seule liste, une seule porte. Mon profil y
+             RENVOIE au lieu de dupliquer l'éditeur. -->
         <div class="card profile-pointer" style="margin-bottom:20px">
             <div class="card-head">
                 <span class="card-ic" aria-hidden="true">
@@ -195,9 +199,9 @@ $userProviders = UserIdentity::providersForUser((int)($user['id'] ?? 0));
                 </span>
                 <div class="card-head-text">
                     <h3><?= te('Ce que MIA sait de vous') ?></h3>
-                    <p><?= te('Votre contexte et vos souvenirs « MIA pour vous » se règlent dans Préférences IA, avec le style des réponses et la voix.') ?></p>
+                    <p><?= te('Votre contexte et vos souvenirs ont leur page : relisez, corrigez ou retirez ce que MIA retient de vous.') ?></p>
                 </div>
-                <a href="/settings/ai#contexte" class="btn-secondary"><?= te('Ouvrir les Préférences IA') ?></a>
+                <a href="/settings/memory" class="btn-secondary"><?= te('Ouvrir la mémoire') ?></a>
             </div>
         </div>
 

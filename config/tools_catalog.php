@@ -22,6 +22,16 @@ declare(strict_types=1);
  *                                   qui priment sur celles du provider (ToolCatalog::modelOptions)
  *   [type][provider]['models'][id]['pricing']   → TARIF PUBLIC (facultatif)
  *
+ * OPTIONS D'UNE IMAGE (fond, format de fichier, orientation) — lues par
+ * ImageOptions::capabilities, SEULE lecture : l'écran d'un outil, la fiche
+ * d'un assistant et la brique Création d'un workflow ne proposent que ce que
+ * le modèle accepte, et le générateur n'envoie que cela.
+ *   'backgrounds'         => ['transparent']           fond transparent possible
+ *   'transparent_preview' => true                      … encore en aperçu chez le fournisseur
+ *   'output_formats'      => ['png', 'jpeg', 'webp']   formats de fichier acceptés
+ *   l'orientation (carré, paysage, portrait) se déduit des `sizes` (OpenAI)
+ *   ou des `aspect_ratios` (Gemini) déclarés.
+ *
  * TARIFS — repli de CreditService quand la ligne de l'outil n'est pas tarifée
  * dans Gestion crédits (écran Crédits : une ligne à 0 par outil). Un seul mode
  * par modèle, TOUJOURS avec `source_url` officielle et date de vérification
@@ -74,7 +84,7 @@ return [
         // -------- OpenAI --------
         'openai' => [
             'label'         => 'OpenAI (ChatGPT / GPT Image / DALL-E)',
-            'default_model' => 'gpt-image-2.5-flare',
+            'default_model' => 'gpt-image-2.6-flare',
             'endpoints' => [
                 'images_generations' => 'https://api.openai.com/v1/images/generations',
                 // Édition d'une image existante (image-to-image) — multipart,
@@ -92,6 +102,46 @@ return [
             'responses_sizes'     => ['auto', '1024x1024', '1024x1536', '1536x1024'],
             'responses_qualities' => ['auto', 'low', 'medium', 'high'],
             'models' => [
+                // GPT Image 2.6 — Flare et Sunburst (4 novembre 2026), fiches et
+                // guide « Image generation » relus le 2026-11-10 : mêmes tarifs
+                // au token que 2.5, mêmes tailles recommandées, qualités jusqu'à
+                // `max`, fond transparent en png/webp ; /v1/images/generations et
+                // /v1/images/edits seulement (Responses API non prise en charge).
+                // Nouveautés que MIA n'emploie pas : réglage `complexity`
+                // (défaut `high`), retouche guidée par annotations, sortie SVG
+                // et GIF animé. Remplaçants désignés de GPT Image 2, arrêté le
+                // 10/02/2027. Flare devient le modèle proposé à la CRÉATION d'un
+                // outil (même prix que 2.5 Flare) ; les outils existants gardent
+                // le leur. Sunburst, le plus capable, n'est jamais un défaut.
+                'gpt-image-2.6-flare' => [
+                    'label'   => 'GPT Image 2.6 Flare (novembre 2026)',
+                    'note'    => 'Le plus rapide : génération et retouche pour itérer vite, au tarif de GPT Image 2.5.',
+                    'routing' => 'images_generations',
+                    'default' => true,
+                    'sizes'          => ['auto', '1024x1024', '1536x1024', '1024x1536'],
+                    'qualities'      => ['auto', 'low', 'medium', 'high', 'xhigh', 'max'],
+                    'backgrounds'    => ['transparent'],
+                    'output_formats' => ['png', 'jpeg', 'webp'],
+                    'pricing' => [
+                        'tokens_usd_per_1m' => ['text_input' => 5.00, 'image_input' => 8.00, 'image_output' => 30.00],
+                        'source_url'        => 'https://developers.openai.com/api/docs/models/gpt-image-2.6-flare',
+                        'note'              => 'Tarif officiel OpenAI GPT Image 2.6 Flare (traitement standard), vérifié le 2026-11-10.',
+                    ],
+                ],
+                'gpt-image-2.6-sunburst' => [
+                    'label'   => 'GPT Image 2.6 Sunburst (novembre 2026)',
+                    'note'    => 'Le plus capable : compositions détaillées et retouches précises.',
+                    'routing' => 'images_generations',
+                    'sizes'          => ['auto', '1024x1024', '1536x1024', '1024x1536'],
+                    'qualities'      => ['auto', 'low', 'medium', 'high', 'xhigh', 'max'],
+                    'backgrounds'    => ['transparent'],
+                    'output_formats' => ['png', 'jpeg', 'webp'],
+                    'pricing' => [
+                        'tokens_usd_per_1m' => ['text_input' => 5.00, 'image_input' => 8.00, 'image_output' => 30.00],
+                        'source_url'        => 'https://developers.openai.com/api/docs/models/gpt-image-2.6-sunburst',
+                        'note'              => 'Tarif officiel OpenAI GPT Image 2.6 Sunburst (traitement standard), vérifié le 2026-11-10.',
+                    ],
+                ],
                 // GPT Image 2.5 — deux modèles annoncés le 8 septembre 2026,
                 // mêmes tarifs au token que GPT Image 2 (« Token rates match
                 // GPT Image 2 », fiche modèle) : ils n'engagent donc aucune
@@ -109,14 +159,18 @@ return [
                 // signalerait donc une qualité envoyée au mauvais modèle.
                 'gpt-image-2.5-flare' => [
                     'label'   => 'GPT Image 2.5 Flare (septembre 2026)',
-                    'note'    => 'Le plus rapide : images de haute qualité au quotidien, moitié moins de latence que GPT Image 2.',
+                    'note'    => 'Rapide : images de haute qualité au quotidien, moitié moins de latence que GPT Image 2.',
                     'routing' => 'images_generations',
-                    'default' => true,
                     // Tailles recommandées par OpenAI ; les deux modèles
                     // acceptent aussi une taille libre LARGEURxHAUTEUR
                     // (multiples de 16, ratio entre 1:3 et 3:1, 3840 px max).
                     'sizes'     => ['auto', '1024x1024', '1536x1024', '1024x1536'],
                     'qualities' => ['auto', 'low', 'medium', 'high', 'xhigh', 'max'],
+                    // Fond et format de fichier (référence de /v1/images/generations,
+                    // relue le 2026-11-03) : fond transparent avec png ou webp
+                    // seulement, jpeg plus rapide.
+                    'backgrounds'    => ['transparent'],
+                    'output_formats' => ['png', 'jpeg', 'webp'],
                     'pricing' => [
                         'tokens_usd_per_1m' => ['text_input' => 5.00, 'image_input' => 8.00, 'image_output' => 30.00],
                         'source_url'        => 'https://developers.openai.com/api/docs/pricing',
@@ -129,6 +183,11 @@ return [
                     'routing' => 'images_generations',
                     'sizes'     => ['auto', '1024x1024', '1536x1024', '1024x1536'],
                     'qualities' => ['auto', 'low', 'medium', 'high', 'xhigh', 'max'],
+                    // Fond et format de fichier (référence de /v1/images/generations,
+                    // relue le 2026-11-03) : fond transparent avec png ou webp
+                    // seulement, jpeg plus rapide.
+                    'backgrounds'    => ['transparent'],
+                    'output_formats' => ['png', 'jpeg', 'webp'],
                     'pricing' => [
                         'tokens_usd_per_1m' => ['text_input' => 5.00, 'image_input' => 8.00, 'image_output' => 30.00],
                         'source_url'        => 'https://developers.openai.com/api/docs/pricing',
@@ -141,10 +200,21 @@ return [
                     'routing' => 'images_generations',
                     'sizes'     => ['auto', '1024x1024', '1536x1024', '1024x1536', '2048x2048', '2048x1152', '3840x2160', '2160x3840'],
                     'qualities' => ['auto', 'low', 'medium', 'high'],
+                    // Fond transparent « in preview » pour gpt-image-2 (même
+                    // référence, relue le 2026-11-03) : proposé, signalé comme tel.
+                    'backgrounds'         => ['transparent'],
+                    'transparent_preview' => true,
+                    'output_formats'      => ['png', 'jpeg', 'webp'],
                     'pricing' => [
                         'tokens_usd_per_1m' => ['text_input' => 5.00, 'image_input' => 8.00, 'image_output' => 30.00],
                         'source_url'        => 'https://developers.openai.com/api/docs/pricing',
                         'note'              => 'Tarif officiel OpenAI GPT Image 2 (traitement standard), vérifié le 2026-09-10.',
+                    ],
+                    'retirement' => [
+                        'date'       => '2027-02-10',
+                        'source_url' => 'https://developers.openai.com/api/docs/deprecations',
+                        'note'       => 'OpenAI arrête GPT Image 2 le 10/02/2027. Remplaçant conseillé : GPT Image 2.6 Flare (ou Sunburst), au même tarif.',
+                        'verified'   => '2026-11-10',
                     ],
                 ],
                 // gpt-image-1 retiré : déprécié par OpenAI (coupure 2026-10-23).
@@ -176,10 +246,22 @@ return [
                     'label'   => 'GPT-5.4 (natif image)',
                     'note'    => 'Génération via Responses API (outil image_generation).',
                     'routing' => 'responses_api',
+                    // Outil `image_generation` de la Responses API : mêmes
+                    // options de fond et de format (guide « Image generation
+                    // tool », relu le 2026-11-03 : fond transparent en aperçu).
+                    'backgrounds'         => ['transparent'],
+                    'transparent_preview' => true,
+                    'output_formats'      => ['png', 'jpeg', 'webp'],
                 ],
                 'gpt-5.3-chat-latest' => [
                     'label'   => 'ChatGPT 5.3 (natif image)',
                     'routing' => 'responses_api',
+                    // Outil `image_generation` de la Responses API : mêmes
+                    // options de fond et de format (guide « Image generation
+                    // tool », relu le 2026-11-03 : fond transparent en aperçu).
+                    'backgrounds'         => ['transparent'],
+                    'transparent_preview' => true,
+                    'output_formats'      => ['png', 'jpeg', 'webp'],
                     'retirement' => [
                         'date'       => '2026-08-10',
                         'source_url' => 'https://developers.openai.com/api/docs/deprecations',
@@ -190,6 +272,19 @@ return [
                 'gpt-5-mini' => [
                     'label'   => 'GPT-5 Mini (natif image)',
                     'routing' => 'responses_api',
+                    // Outil `image_generation` de la Responses API : mêmes
+                    // options de fond et de format (guide « Image generation
+                    // tool », relu le 2026-11-03 : fond transparent en aperçu).
+                    'backgrounds'         => ['transparent'],
+                    'transparent_preview' => true,
+                    'output_formats'      => ['png', 'jpeg', 'webp'],
+                    // Même coupure que le modèle de chat (catalogue LLM).
+                    'retirement' => [
+                        'date'       => '2026-12-11',
+                        'source_url' => 'https://developers.openai.com/api/docs/deprecations',
+                        'note'       => 'OpenAI arrête GPT-5 Mini le 11/12/2026. Remplaçant conseillé : GPT Image 2.6 Flare.',
+                        'verified'   => '2026-11-10',
+                    ],
                 ],
             ],
         ],
@@ -197,7 +292,7 @@ return [
         // -------- Gemini --------
         'gemini' => [
             'label'         => 'Gemini (Nano Banana / Imagen)',
-            'default_model' => 'gemini-3.1-flash-image',
+            'default_model' => 'gemini-nano-banana-2.1',
             'endpoints' => [
                 // {model} est substitué à l'exécution
                 'generate_content' => 'https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent',
@@ -205,14 +300,31 @@ return [
             ],
             'aspect_ratios' => ['1:1', '16:9', '9:16', '4:3', '3:4'],
             'models' => [
+                // Nano Banana 2.1 (GA 6 octobre 2026, fiche et grille relues le
+                // 2026-11-10) : mise à jour de Nano Banana 2, à moitié prix,
+                // meilleure qualité et rendu du texte ; même appel
+                // `generateContent`, jusqu'à 14 images de référence. Modèle
+                // proposé à la CRÉATION d'un outil Gemini (les outils existants
+                // gardent le leur).
+                'gemini-nano-banana-2.1' => [
+                    'label'   => 'Nano Banana 2.1 (Flash)',
+                    'routing' => 'generate_content',
+                    'default' => true,
+                    'pricing' => [
+                        'per_image_usd' => 0.0336,
+                        'source_url'    => 'https://ai.google.dev/gemini-api/docs/pricing#gemini-nano-banana-2.1',
+                        'note'          => 'Tarif officiel Google, niveau payant, image 1K — la résolution que MIA demande (aucune taille envoyée). Vérifié le 2026-11-10.',
+                    ],
+                ],
                 // Ids GA depuis le 28 mai 2026. Les anciens ids preview
                 // (gemini-3.1-flash-image-preview, gemini-3-pro-image-preview)
                 // sont coupés par Google depuis le 25 juin 2026 — remappés en
-                // base par la migration 052.
+                // base par la migration 052. Nano Banana 2 est déprécié depuis
+                // le 06/10/2026 SANS date d'arrêt (remplaçant : Nano Banana
+                // 2.1) : aucun bloc `retirement` tant que Google n'en fixe pas.
                 'gemini-3.1-flash-image' => [
                     'label'   => 'Nano Banana 2 (Flash)',
                     'routing' => 'generate_content',
-                    'default' => true,
                     'pricing' => [
                         'per_image_usd' => 0.067,
                         'source_url'    => 'https://ai.google.dev/gemini-api/docs/pricing',
@@ -236,7 +348,7 @@ return [
                     'retirement' => [
                         'date'       => '2026-08-17',
                         'source_url' => 'https://ai.google.dev/gemini-api/docs/deprecations',
-                        'note'       => 'Google a arrêté Imagen 4. Remplaçant conseillé : Nano Banana 2 (Flash).',
+                        'note'       => 'Google a arrêté Imagen 4. Remplaçant conseillé : Nano Banana 2.1 (Flash).',
                         'verified'   => '2026-09-10',
                     ],
                 ],

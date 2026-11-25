@@ -9,17 +9,21 @@ declare(strict_types=1);
  * AuthController::callback() vers UserSettingsController::mscalendarCallback().
  *
  * ── SCOPES, ET POURQUOI CEUX-LÀ ────────────────────────────────────────────
- * `Calendars.ReadWrite` est le MINIMUM pour créer un évènement : Graph n'a
- * aucun droit « créer sans modifier ni supprimer ». Ce scope ouvre donc aussi,
- * côté API, la modification et la suppression d'évènements existants — même
- * situation que Google Tasks et qu'Outlook, et elle se traite pareil : ce sont
- * des garde-fous APPLICATIFS qui remplacent le demi-droit manquant.
- *   1. aucun outil de modification ni de suppression n'est exposé au modèle —
- *      `UserOutlookCalendarService` n'implémente que lister, chercher, lire et
- *      créer ;
- *   2. la création passe par la file d'approbation (rien n'est écrit pendant le
- *      stream) ;
+ * `Calendars.ReadWrite` est le MINIMUM pour créer ou modifier un évènement
+ * (doc Graph « Create event » / « Update event », relue le 2026-11-13 :
+ * permission la moins étendue, déléguée). Ce scope ouvre aussi, côté API, la
+ * suppression et l'annulation — même situation que Google Tasks et qu'Outlook,
+ * et elle se traite pareil : des garde-fous APPLICATIFS.
+ *   1. aucun outil de suppression ni d'annulation n'est exposé au modèle —
+ *      `UserOutlookCalendarService` liste, cherche, lit, crée et modifie ;
+ *   2. création et modification passent par la file d'approbation (rien n'est
+ *      écrit pendant le stream), et la carte nomme les invités à qui Outlook
+ *      écrira : inviter quelqu'un lui envoie un email, sans réglage possible ;
  *   3. la page Connexions annonce l'étendue réelle du droit accordé.
+ *
+ * Aucun scope de plus pour les invités ni pour la réunion Teams :
+ * `isOnlineMeeting` + `onlineMeetingProvider` sont des propriétés de
+ * l'évènement, créées par Exchange (pas d'`OnlineMeetings.ReadWrite`).
  *
  * `Calendars.Read` est demandé EN PLUS bien qu'il soit un sous-ensemble : si
  * l'annuaire n'accorde que la lecture (consentement administrateur restrictif),
@@ -45,7 +49,7 @@ class MicrosoftCalendarOAuth extends MicrosoftUserOAuth
         'offline_access',        // produit le refresh token
         'User.Read',             // adresse du compte connecté (affichage)
         'Calendars.Read',        // liste des agendas + consultation
-        'Calendars.ReadWrite',   // création d'évènements approuvée UNIQUEMENT
+        'Calendars.ReadWrite',   // création et modification d'évènements, approuvées UNIQUEMENT
     ];
 
     public const STATE_PREFIX   = 'mscal_';

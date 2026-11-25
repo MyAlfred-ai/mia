@@ -33,6 +33,7 @@ final class UsageSourceTest extends TestCase
             'context_summary', 'tool_condense',
             'web_search', 'html_tool', 'map_tool', 'presentation_tool', 'transcribe', 'speech',
             'kb_chunking', 'kb_vision', 'kb_embedding', 'prompt_assist', 'tool_test', 'price_refresh',
+            'memory_learn',
         ];
         foreach ($attendues as $source) {
             $this->assertTrue(UsageSource::isKnown($source), "source absente : $source");
@@ -47,9 +48,13 @@ final class UsageSourceTest extends TestCase
     {
         // Hors quota = ce qu'un gestionnaire déclenche pour la plateforme, pas pour lui.
         $this->assertSame(
-            ['kb_chunking', 'kb_vision', 'kb_embedding', 'tool_test', 'price_refresh'],
+            ['memory_learn', 'kb_chunking', 'kb_vision', 'kb_embedding', 'tool_test', 'price_refresh'],
             UsageSource::quotaExemptSources()
         );
+        // L'apprentissage de la mémoire part sans geste de la personne : hors
+        // quota (compté au budget IA), mais sa demande explicite reste dedans.
+        $this->assertTrue(UsageSource::isQuotaExempt('memory_learn'));
+        $this->assertFalse(in_array('memory_learn', UsageSource::TURN_HELPERS, true), 'Jamais rattaché à une réponse : il n\'appartient à aucun tour.');
         // Ce que l'utilisateur consomme en discutant entame son quota — y compris
         // les appels auxiliaires de son tour et ses recherches web.
         foreach (['chat', 'regenerate', 'title', 'memory', 'kb_query', 'context_summary', 'tool_condense', 'web_search', 'transcribe', 'speech', 'prompt_assist'] as $source) {

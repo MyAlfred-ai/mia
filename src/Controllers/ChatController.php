@@ -4,6 +4,27 @@ declare(strict_types=1);
 
 class ChatController
 {
+    /**
+     * Base à cocher d'office dans une conversation neuve (`/?kb=ID`) : son id
+     * si elle est parmi celles que la personne peut cocher et qu'elle est
+     * interrogeable, sinon 0. Pure.
+     *
+     * @param list<array<string, mixed>> $selectable KnowledgeBase::selectableForUser
+     */
+    public static function preselectKbId(mixed $raw, array $selectable): int
+    {
+        $id = is_scalar($raw) ? (int)$raw : 0;
+        if ($id <= 0) {
+            return 0;
+        }
+        foreach ($selectable as $kb) {
+            if ((int)$kb['id'] === $id) {
+                return KnowledgeBase::unavailableReason($kb) === null ? $id : 0;
+            }
+        }
+        return 0;
+    }
+
     public function index(): void
     {
         AuthMiddleware::requireAuth();
@@ -19,6 +40,9 @@ class ChatController
         $conversations = Conversation::allForUser($user['id']);
         $profiles      = Profile::accessibleByUser($user['id'], $user['role'], $groupIds, $hasGroupAssignments);
         $llms          = $this->filterLlmsForUserScope(LLMFactory::available(), $groupScope);
+        // Modèle par défaut de la personne (étoile du sélecteur) : il ouvre
+        // la nouvelle conversation de cette page d'accueil.
+        $llmPreference = LlmPreference::state($user, $llms);
         [$llmStars, $llmCredits, $llmSearchCredits] = self::llmCostEstimates($llms);
         $globalCredit  = CreditService::globalConfig();
         $creditValueEur = (float)($globalCredit['credit_value_eur'] ?? 0.01);
@@ -32,7 +56,14 @@ class ChatController
         [$toolStars, $toolCredits] = self::toolCostEstimates(array_merge($imageTools, $htmlTools, $videoTools, $mapTools, $presentationTools));
         $hasOpenaiKey  = !empty(ApiKey::getDecrypted('openai'));
         $micEnabled    = Settings::get('mic_enabled', '1') === '1';
+        // Moteur de la dictée (OpenAI Realtime ou Voxtral) : null = aucun micro.
+        $dictationEngine = Dictation::engine();
         $voiceChatEnabled = SpeechSynthesizer::isEnabled();
+        // Ce qui empêche la conversation vocale de marcher avec cette IA
+        // vocale : pastille rouge et raison sur le bouton onde sonore.
+        $voiceChatIssue = $voiceChatEnabled
+            ? SpeechSynthesizer::conversationIssue($dictationEngine, $hasOpenaiKey, Session::can('llms.edit'))
+            : null;
         $voicePrefs    = self::voicePrefsPayload($user);
         [$driveFeatureEnabled, $driveConnected,
          $gmailFeatureEnabled, $gmailConnected,
@@ -48,6 +79,10 @@ class ChatController
         // nomme la cause et mène à la carte ; les partials du compte (pastille
         // sur l'avatar, menu) réutilisent cette variable — une seule requête.
         $connectorsToReconnect = ConnectorRegistry::reconnectNeeded((int)$user['id'], (string)($user['role'] ?? 'user'));
+        // Connecteurs reliés depuis le dernier affichage du chat : le menu « + »
+        // les allume (chat.js). Lu une seule fois — l'affichage suivant ne les
+        // rallume pas si la personne les a éteints entre-temps.
+        $connectorsJustConnected = ConnectorRegistry::takeJustConnected($user);
 
         // Page d'accueil : pas de conversation active → pas d'outils d'assistant à afficher.
         $activeProfileTools = [];
@@ -68,6 +103,14 @@ class ChatController
         // (migration 073) : elles amorcent le brouillon d'une nouvelle
         // conversation, décochables comme les autres.
         $chatDefaultKbIds   = KnowledgeBase::defaultOnIdsForUser($user);
+        // « Interroger dans le chat » (page d'une base) : /?kb=ID ouvre une
+        // conversation neuve où la base est déjà cochée — seulement si elle se
+        // coche pour cette personne.
+        $chatPreselectKbId = self::preselectKbId($_GET['kb'] ?? null, $chatKnowledgeBases);
+
+        // Tables de travail : aucune tant que la conversation n'existe pas.
+        $workTablesChip = WorkTableView::chip(0);
+        $tableLines     = [];
 
         require ROOT . '/templates/chat/index.php';
     }
@@ -93,6 +136,8 @@ class ChatController
         // Conversation née d'une tâche programmée : bandeau en tête du fil, et
         // la pastille « nouveau résultat » s'éteint puisqu'on l'ouvre.
         $scheduledBanner = ScheduledTask::bannerFor($conversation, (int)$user['id']);
+        // Conversation d'une exécution de workflow : le volet « Avancement ».
+        $workflowRunId = self::workflowRunIdFor($conversation, (int)$user['id']);
         Conversation::markRead($convId, (int)$user['id']);
         $conversation['unread_at'] = null;
         foreach ($messages as $i => $m) {
@@ -114,6 +159,8 @@ class ChatController
             $conversation['profile_id'] = null;
         }
         $llms          = $this->filterLlmsForUserScope(LLMFactory::available(), $groupScope);
+        // Étoile du sélecteur (cf. index()) ; la conversation garde son modèle.
+        $llmPreference = LlmPreference::state($user, $llms);
         [$llmStars, $llmCredits, $llmSearchCredits] = self::llmCostEstimates($llms);
         $globalCredit  = CreditService::globalConfig();
         $creditValueEur = (float)($globalCredit['credit_value_eur'] ?? 0.01);
@@ -127,7 +174,14 @@ class ChatController
         [$toolStars, $toolCredits] = self::toolCostEstimates(array_merge($imageTools, $htmlTools, $videoTools, $mapTools, $presentationTools));
         $hasOpenaiKey  = !empty(ApiKey::getDecrypted('openai'));
         $micEnabled    = Settings::get('mic_enabled', '1') === '1';
+        // Moteur de la dictée (OpenAI Realtime ou Voxtral) : null = aucun micro.
+        $dictationEngine = Dictation::engine();
         $voiceChatEnabled = SpeechSynthesizer::isEnabled();
+        // Ce qui empêche la conversation vocale de marcher avec cette IA
+        // vocale : pastille rouge et raison sur le bouton onde sonore.
+        $voiceChatIssue = $voiceChatEnabled
+            ? SpeechSynthesizer::conversationIssue($dictationEngine, $hasOpenaiKey, Session::can('llms.edit'))
+            : null;
         $voicePrefs    = self::voicePrefsPayload($user);
         [$driveFeatureEnabled, $driveConnected,
          $gmailFeatureEnabled, $gmailConnected,
@@ -141,6 +195,8 @@ class ChatController
         $webFeatureEnabled = ConnectorRegistry::isEnabled(ConnectorRegistry::WEB);
         // Connexions révoquées par leur fournisseur (cf. index()).
         $connectorsToReconnect = ConnectorRegistry::reconnectNeeded((int)$user['id'], (string)($user['role'] ?? 'user'));
+        // Connecteurs reliés depuis le dernier affichage du chat (cf. index()).
+        $connectorsJustConnected = ConnectorRegistry::takeJustConnected($user);
 
         // Cartes d'approbation encore en attente : re-affichées au rechargement
         // (elles vivent hors messages, perdues sinon). Toujours relues — une
@@ -150,6 +206,8 @@ class ChatController
         // rechargement, comme une carte Slack. loadJson() les relit déjà sans
         // condition.
         $drivePendingActions = DrivePendingAction::pendingForConversation($convId, (int)$user['id']);
+        // Question de MIA (mémoire) restée sans réponse sous la dernière réponse.
+        $memoryQuestion = self::pendingMemoryQuestion((int)$user['id'], $convId, $messages);
 
         // Outils liés à l'assistant actif (badges de l'identité de l'assistant,
         // dans le composer). Même helper que loadJson() : le rendu initial et le
@@ -168,6 +226,10 @@ class ChatController
 
         // Liens de partage actifs des créations de la conversation (une requête)
         $sharedTokens = CreationShare::forConversation($convId);
+        // Cartes de réalisation des « Versions soignées » (message.php), relues
+        // contre la file : une réalisation dont le job ne tourne plus est
+        // « interrompue », jamais une carte qui tourne pour toujours.
+        $nativeRuns = NativeDeckRun::forMessages($messages, time());
 
         // Sélecteur de bases du composer (cf. index()). forProfile() et non
         // kbIdsForProfile() : on veut les bases ACTIVES et leurs NOMS — elles
@@ -182,6 +244,15 @@ class ChatController
         // PAS ENCORE créée (le brouillon du sélecteur) ; posées ici aussi pour que
         // le script n'ait qu'une source, quelle que soit la page d'arrivée.
         $chatDefaultKbIds   = KnowledgeBase::defaultOnIdsForUser($user);
+
+        // Tables de travail de la conversation : la puce de la zone de saisie
+        // (leur nombre) et, sous chaque réponse qui en a établi, la ligne
+        // « Voir » (message.php). Jamais la grille dans le fil : elle ne
+        // s'ouvre qu'à la demande, dans le volet. Les tables PERMANENTES
+        // engagées dans la conversation (cochées, ou portées par l'assistant)
+        // comptent dans la puce et se nomment sous les réponses qui les ont
+        // lues : la table que la personne a cochée s'ouvre aussi par « Voir ».
+        [$workTablesChip, $tableLines] = self::workTablesFor($convId, $messages, self::engagedTables($convId, $conversation, $user));
 
         require ROOT . '/templates/chat/index.php';
     }
@@ -198,10 +269,12 @@ class ChatController
         $profileId  = !empty($_POST['profile_id']) ? (int)$_POST['profile_id'] : null;
         $requestedLlm = trim((string)($_POST['llm'] ?? ''));
         $availableLlms = $this->filterLlmsForUserScope(LLMFactory::available(), $groupScope);
-        $llm        = $requestedLlm !== '' ? $requestedLlm : $this->resolveAppDefaultLlm($availableLlms);
+        // Sans modèle demandé (ou hors du périmètre) : celui que la personne a
+        // choisi comme le sien, sinon celui de l'organisation.
+        $llm        = $requestedLlm !== '' ? $requestedLlm : $this->resolveUserDefaultLlm($user, $availableLlms);
 
         if (!isset($availableLlms[$llm])) {
-            $llm = $this->resolveAppDefaultLlm($availableLlms);
+            $llm = $this->resolveUserDefaultLlm($user, $availableLlms);
         }
 
         $profilesById = [];
@@ -252,6 +325,14 @@ class ChatController
             // La conversation existe : mieux vaut un sélecteur vide qu'un écran
             // d'erreur sur un fil déjà créé.
             error_log('[KB] sélection initiale conv ' . $conv['id'] . ' : ' . $e->getMessage());
+        }
+
+        // Premier message envoyé depuis l'accueil : le chat n'a besoin que de
+        // l'identifiant. Suivre la redirection lui faisait fabriquer toute la
+        // page de la conversation pour rien, avant même de lancer la réponse.
+        if (str_contains((string)($_SERVER['HTTP_ACCEPT'] ?? ''), 'application/json')) {
+            $this->json(['id' => (int)$conv['id']]);
+            return;
         }
 
         header('Location: /chat/' . $conv['id']);
@@ -341,15 +422,16 @@ class ChatController
                 : ($convLlm !== '' ? $convLlm : $this->resolveAppDefaultLlm($availableLlms));
             $allowedLlms = $availableLlms + LLMFactory::available();
         } else {
-            $llm = $requestedLlm !== '' ? $requestedLlm : ($convLlm !== '' ? $convLlm : $this->resolveAppDefaultLlm($availableLlms));
+            $llm = $requestedLlm !== '' ? $requestedLlm : ($convLlm !== '' ? $convLlm : $this->resolveUserDefaultLlm($user, $availableLlms));
             $allowedLlms = $availableLlms;
         }
 
         // Modèle arrêté par son éditeur (LlmCatalog::retirement) : la
-        // conversation qui le portait continue sur le modèle par défaut, au
-        // lieu d'un « pas autorisé pour votre groupe » qui ne dit rien.
+        // conversation qui le portait continue sur le modèle par défaut (celui
+        // de la personne sans assistant), au lieu d'un « pas autorisé pour
+        // votre groupe » qui ne dit rien.
         if (!isset($allowedLlms[$llm]) && LLMFactory::isRetired($llm)) {
-            $llm = $this->resolveAppDefaultLlm($availableLlms);
+            $llm = $profile ? $this->resolveAppDefaultLlm($availableLlms) : $this->resolveUserDefaultLlm($user, $availableLlms);
         }
 
         if (!isset($allowedLlms[$llm])) {
@@ -440,6 +522,11 @@ class ChatController
                 'tz'              => $timeZone,
                 'needs_title'     => $needsTitleFromLlm,
                 'user_msg_id'     => (int)$userMsg['id'],
+                // Modèle et logo de l'entreprise : ce que la personne embarque
+                // (cases de la carte d'un fichier) — vaut pour une version
+                // soignée choisie avant l'écriture (PolishOffer).
+                'company_template' => (string)($_POST['company_template'] ?? '1') !== '0',
+                'company_logo'     => (string)($_POST['company_logo'] ?? '1') !== '0',
             ],
             mb_substr($content !== '' ? $content : 'Message', 0, 60)
         );
@@ -507,9 +594,34 @@ class ChatController
         // la consigne de méthode de WorkflowPrompt, `prompt` de la charge).
         $workflowStep      = is_array($payload['workflow'] ?? null) ? $payload['workflow'] : null;
         $unattended        = $scheduled !== null || $workflowStep !== null;
+        // Message ORDINAIRE dans la conversation d'une exécution de workflow
+        // (WorkflowChat) : le modèle apprend que ce qu'il écrit ne touche pas
+        // au dossier et qu'il ne mène pas les étapes lui-même ; pendant une
+        // validation, il peut mettre à jour les pièces qu'elle relit.
+        $workflowChat      = $unattended ? null : WorkflowChat::forTurn($convId, $userId);
+        // Brique Slack d'un workflow (WorkflowSlack) : qui PUBLIE voit sa
+        // destination vérifiée et résolue avant que le modèle n'écrive ; qui
+        // LIT reçoit ses messages, lus ici, comme des données (plus bas). Un
+        // échec arrête le tour avec un message pour la personne.
+        $slackRead = null;
+        $slackCfg  = is_array($workflowStep['slack'] ?? null) ? $workflowStep['slack'] : null;
+        try {
+            if (WorkflowSlack::posts($slackCfg)) {
+                $workflowStep['slack'] = WorkflowSlack::checkPost($slackCfg, $userId);
+            } elseif (WorkflowSlack::reads($slackCfg)) {
+                $slackRead = WorkflowSlack::readContext($slackCfg, $userId, (string)($payload['tz'] ?? ''), WorkflowSlack::READ_BUDGET);
+            }
+        } catch (\RuntimeException $e) {
+            throw new JobErrorException([
+                'kind'    => 'generic',
+                'title'   => WorkflowSlack::reads($slackCfg) ? t('Lecture Slack impossible') : t('Publication Slack impossible'),
+                'message' => $e->getMessage(),
+            ], 'brique Slack');
+        }
         // Filtres de la brique (déjà remplis par WorkflowEngine) : le périmètre
-        // IMPOSÉ aux recherches d'emails et de fichiers, et aux écritures.
-        $searchScope       = SearchScope::fromFilters(is_array($workflowStep['filters'] ?? null) ? $workflowStep['filters'] : []);
+        // IMPOSÉ aux recherches d'emails et de fichiers, et aux écritures —
+        // et la destination d'une brique Slack qui publie.
+        $searchScope       = SearchScope::fromFilters(is_array($workflowStep['filters'] ?? null) ? $workflowStep['filters'] : [], is_array($workflowStep['slack'] ?? null) ? $workflowStep['slack'] : null);
         $scheduledMode     = $scheduled !== null
             ? Scheduler::actionMode($scheduled, ScheduledTask::autoAllowed())
             : ($workflowStep !== null ? WorkflowPrompt::actionMode($workflowStep, Workflow::autoAllowed()) : null);
@@ -528,6 +640,16 @@ class ChatController
         }
 
         $llmProvider = LLMFactory::provider($llm);
+
+        // Étape de workflow qui lit l'email reçu par le déclencheur : ses
+        // pièces jointes, téléchargées ici (dans le job, jamais dans une
+        // requête de la personne) et jointes au message de l'étape AVANT sa
+        // relecture — un classeur se lit alors en entier et se range dans une
+        // table de travail (WorkflowEventFiles). Ne lève jamais.
+        $eventFiles = null;
+        if ($workflowStep !== null && is_array($workflowStep['event_mail'] ?? null) && $userMsgId > 0) {
+            $eventFiles = WorkflowEventFiles::attach($workflowStep['event_mail'], $userId, $userMsgId);
+        }
 
         // Fichiers joints : relus depuis le message utilisateur persisté (les
         // jetons de session, eux, sont à usage unique et déjà consommés).
@@ -588,27 +710,37 @@ class ChatController
         if (!$unattended && !$voiceMode) {
             $systemPrompt .= ChoiceButtons::promptFragment();
         }
+        // « Version soignée » proposée AVANT d'écrire un PDF, un document Word
+        // ou une présentation (PolishOffer) — ou, déjà choisie, lancée dès la
+        // réponse écrite (plus bas, après la persistance) : le fichier n'est
+        // ainsi produit qu'une fois.
+        $polishLlm   = null;
+        $polishOffer = null;
+        if (!$unattended && !$voiceMode) {
+            [$polishLlm, $polishPrompt, $polishOffer] = $this->polishOfferFor($user, $profile ?: null, $llm, $content, $history);
+            $systemPrompt .= $polishPrompt;
+        }
         $systemPrompt .= UserPreferences::promptFragment($user);
 
-        // Mémoire long terme « MIA pour vous ».
-        // 1) Capture : l'utilisateur demande explicitement de retenir quelque
-        //    chose (« souviens-toi que… ») → extraction puis enregistrement
-        //    AVANT l'injection, pour que le fait tout juste mémorisé fasse
-        //    déjà partie du contexte de la réponse.
-        // 2) Injection : les souvenirs deviennent « votre contexte » en tête de
-        //    chaque conversation.
-        $memoryCapture = !$unattended
+        // Mémoire de MIA (Réglages → Mémoire).
+        // 1) Capture : l'utilisateur demande explicitement de retenir, corriger
+        //    ou oublier quelque chose (« souviens-toi que… », « oublie que… »)
+        //    → juge puis écriture AVANT l'injection, pour que la mémoire à jour
+        //    fasse déjà partie du contexte de la réponse.
+        // 2) Injection : les souvenirs actifs, par thème. Dans un tour sans
+        //    personne (tâche programmée, étape de workflow), seuls ceux que la
+        //    personne tient : jamais ce que MIA a appris seule.
+        $memoryOn      = UserMemory::isEnabled();
+        $memoryCapture = ($memoryOn && !$unattended)
             ? $this->captureUserMemory($conv, $userId, $content, self::historyWithout($history, $userMsgId))
             : null;
         if ($memoryCapture !== null) {
             $this->sseEmit(['memory_saved' => $memoryCapture]);
-            $this->traceAction('memorizing', implode(' · ', array_map(
-                'strval', (array)($memoryCapture['faits'] ?? [])
-            )));
+            $this->traceAction('memorizing', MemoryCapture::traceDetail($memoryCapture));
         }
-        $memoryFragment = UserMemory::promptFragment((int)$user['id']);
+        $memoryFragment = $memoryOn ? UserMemory::promptFragment((int)$user['id'], $unattended) : '';
         $systemPrompt  .= $memoryFragment;
-        $systemPrompt  .= UserMemory::emptyStateNote($memoryFragment !== '', UserPreferences::hasContext($user));
+        $systemPrompt  .= UserMemory::emptyStateNote($memoryFragment !== '', UserPreferences::hasContext($user), $memoryOn);
         $systemPrompt  .= $this->memoryCaptureNote($memoryCapture);
 
         // Budget RAG commun (documents de référence + bases de connaissances),
@@ -640,14 +772,17 @@ class ChatController
         [$fittedHistory, $contextFragment, $contextPlan] = $this->fitHistory($conv, $history, $llm, $userId);
         $llmMsgs       = $this->buildLLMMessages($fittedHistory);
         $systemPrompt .= $contextFragment;
-        $filesStripped = $supportsTools && $contextPlan['strip_files_before'] > 0;
+        $filesStripped = $supportsTools && ($contextPlan['strip_files_before'] > 0 || $contextPlan['files_cut'] !== []);
         // Le message évoque un fichier retiré de la fenêtre : demande
         // EXPLICITE, comme une adresse collée. Sinon, l'outil de relecture
         // n'est exposé que si la boucle d'outils tourne déjà — le seul fait
         // d'avoir des fichiers anciens ne doit pas la forcer à chaque message
         // (chez Mistral, elle couperait la recherche Internet ; chez OpenAI,
         // elle changerait de modèle avec Internet).
-        $fileMention   = $filesStripped && ContextWindow::mentionsCompactedFile($content, $history, $contextPlan);
+        // Un fichier du message EN COURS n'a été envoyé qu'en partie : la question
+        // porte sur lui, sa suite doit pouvoir se lire.
+        $fileMention   = $filesStripped && ($contextPlan['files_cut_now']
+            || ContextWindow::mentionsCompactedFile($content, $history, $contextPlan));
 
         // RAG #1 — Documents de référence attachés à l'assistant.
         // On émet la phase AVANT la construction du contexte pour que
@@ -685,12 +820,27 @@ class ChatController
         $liveKbs    = $supportsTools
             ? array_values(array_filter(KnowledgeBase::partitionByBackend($kbs)[0], [MyBrainContext::class, 'isCallable']))
             : [];
+        // Tables PERMANENTES de ce message (bases de nature « table ») : leurs
+        // lignes restent en base. Avec un modèle à outils, WorkTableTools les
+        // lit (plus bas) — le serveur compte, le modèle n'en tient que la
+        // fiche — étape de workflow comprise (WorkflowTables). Sans outils, un
+        // aperçu part dans le prompt, avec l'avertissement qu'il n'est pas la table.
+        $tableKbs      = KnowledgeBase::partitionByBackend($kbs)[2];
+        $tablesByTools = $supportsTools && $tableKbs !== [];
         if ($kbs) {
-            $this->sseEmit(['phase' => 'searching_knowledge_bases']);
-            $this->traceAction(
-                'searching_knowledge_bases',
-                ConversationKnowledgeBase::traceDetail($profileKbs, $userKbs)
-            );
+            // Une table lue par les outils n'est pas « cherchée » ici : elle
+            // sort de la ligne de trace (ses lectures ont la leur). Sans
+            // outils, son aperçu part dans le prompt : elle y reste.
+            $searched = static fn(array $list): array => $tablesByTools
+                ? array_values(array_filter($list, static fn(array $kb): bool => !KnowledgeBase::isTable($kb)))
+                : $list;
+            if ($searched($profileKbs) !== [] || $searched($userKbs) !== []) {
+                $this->sseEmit(['phase' => 'searching_knowledge_bases']);
+                $this->traceAction(
+                    'searching_knowledge_bases',
+                    ConversationKnowledgeBase::traceDetail($searched($profileKbs), $searched($userKbs))
+                );
+            }
             $kbBudget  = max(0, $ragBudget - TextChunker::estimateTokens((string)$profileDocsContext));
             $kbContext = $this->buildKnowledgeBaseContext($kbs, $content, $kbBudget, [
                 'user_id'         => $userId,
@@ -705,6 +855,7 @@ class ChatController
                 'history' => self::summarizeCreationsForDigest(self::historyWithout($history, $userMsgId)),
                 'trace'   => true,
                 'compact' => $liveKbs !== [],
+                'tables'  => $tablesByTools ? 'tools' : 'preview',
             ]);
             if ($kbContext !== null) {
                 $systemPrompt .= "\n\nBases de connaissances :\n" . $kbContext;
@@ -823,8 +974,22 @@ class ChatController
             ? $this->resolveTaskTools((array)(($scheduled ?? $workflowStep)['tool_ids'] ?? []), $user, $groupIds, $hasGroupAssignments)
             : [];
 
-        // Outil image : celui de la tâche, sinon celui lié au profil.
-        $imageTool = $taskTools['image'] ?? $this->resolveProfileImageTool($profile, $user, $groupIds);
+        // Outil image : celui de la tâche, sinon celui lié au profil — aucun
+        // pour une étape de workflow dont la pièce est une image : son outil
+        // la fabrique après le tour, d'après la demande que le tour rédige.
+        // Étape de workflow : SEUL l'outil choisi pour l'étape, jamais celui de
+        // l'assistant. L'éditeur ne le montre pas, et un workflow fait ses
+        // images par une brique Création ou une étape qui remet une image :
+        // une étape « rédiger le post » confiée à un assistant qui sait dessiner
+        // générait une image de plus, payée, avant la brique prévue pour cela
+        // (recette du 2026-11-09).
+        if (($workflowStep['creates'] ?? '') === 'image') {
+            $imageTool = null;
+        } elseif ($workflowStep !== null) {
+            $imageTool = $taskTools['image'] ?? null;
+        } else {
+            $imageTool = $taskTools['image'] ?? $this->resolveProfileImageTool($profile, $user, $groupIds);
+        }
 
         // Connecteurs personnels : chacun n'est exposé au modèle que si TROIS
         // conditions sont réunies — option cochée dans le menu « + » du
@@ -971,6 +1136,37 @@ class ChatController
         $workflowRequest = $supportsTools && !$unattended && Workflow::allows($user, 'create')
             && (WorkflowDraft::looksLikeWorkflowRequest($content)
                 || DrivePendingAction::hasPendingForTool($convId, (int)$user['id'], WorkflowDraft::TOOL));
+        // Tables de travail (WorkTableTools) : exposées avec les connecteurs
+        // engagés (plus bas), et dès qu'une table existe déjà dans cette
+        // conversation — « et ceux de Lyon ? » doit retrouver la table, pas
+        // une réponse de mémoire ($tablesKept, après l'arbitrage Internet /
+        // outils). Sinon, seulement si le message demande un travail de table
+        // ET qu'il y a de quoi (un classeur joint) : jamais pour faire basculer
+        // un message ordinaire dans la boucle d'outils. Une étape de workflow y
+        // a droit aussi (WorkflowTables) : les tables vivent dans la
+        // conversation de l'exécution, d'une étape à l'autre ; ses pièces
+        // Tableau y sont rangées, et la pièce Tableau qu'elle remet peut être
+        // une table désignée par « TABLE : nom » (WorkflowEngine::afterWork).
+        $tablesPossible   = $supportsTools;
+        $stepTables       = $tablesPossible && $workflowStep !== null
+            ? WorkflowTables::materialize($convId, $userId, (int)($workflowStep['run_id'] ?? 0), (array)($workflowStep['tables'] ?? []))
+            : [];
+        $sheetAttachments = $tablesPossible
+            ? WorkTableCollector::sized(WorkTableCollector::sheetAttachments($history), (array)($contextPlan['files_cut'] ?? []))
+            : [];
+        $tableNames       = $tablesPossible ? SqlWorkTableStore::names($convId) : [];
+        // Un GROS classeur (plus de 100 lignes, ou coupé faute de place) n'a
+        // pas besoin de mot-clé : joint à CE message, il vaut demande de
+        // table — sans les outils, la réponse viendrait d'un texte coupé ou
+        // d'un comptage de tête. Joint plus tôt, il garde les outils comme
+        // une table déjà là ($tablesKept).
+        // Tables permanentes engagées, sous des noms qui ne heurtent ni une
+        // table de la conversation ni une autre table permanente.
+        $permanentTables = $tablesPossible ? self::permanentTablesFor($tableKbs, $user, $tableNames) : [];
+        $bigSheets    = WorkTableCollector::bigSheets($sheetAttachments);
+        $bigSheetNow  = array_filter($bigSheets, static fn(array $f): bool => (int)$f['message_id'] === (int)$userMsgId) !== [];
+        $tableRequest = $bigSheetNow || (($sheetAttachments !== [] || $tableNames !== [])
+            && WorkTableOps::looksLikeTableRequest($content, $tableNames));
         $explicitToolSources = $imageTool !== null || $liveKbs !== [] || $n8nService !== null
             || $gammaService !== null || array_filter($connectorServices) !== []
             || $pageUrlInMessage || $pastReference || $fileMention;
@@ -981,6 +1177,19 @@ class ChatController
         $explicitToolSources = $explicitToolSources || $assistantRequest;
         // « Monte-moi un workflow… » : idem pour `creer_workflow`.
         $explicitToolSources = $explicitToolSources || $workflowRequest;
+        // « Croise ce fichier avec… », « combien dans la table clients ? » :
+        // demande explicite d'un travail de table (cf. $tableRequest).
+        $explicitToolSources = $explicitToolSources || $tableRequest;
+        // Une table permanente cochée ou liée à l'assistant ne se lit QUE par
+        // les outils : elle est engagée au même titre qu'un connecteur.
+        $explicitToolSources = $explicitToolSources || $permanentTables !== [];
+        // Étape de workflow qui lit des pièces Tableau (rangées en tables) :
+        // le travail de table est sa raison d'être.
+        $explicitToolSources = $explicitToolSources || $stepTables !== [];
+        // Validation en attente dans une conversation de workflow : l'outil
+        // qui met à jour la pièce relue est sa raison d'être (WorkflowChat).
+        $workflowPieceTool = $supportsTools && WorkflowChat::updatable($workflowChat);
+        $explicitToolSources = $explicitToolSources || $workflowPieceTool;
         $webYieldedToTools = false;
         if (self::webSearchYieldsToTools(
             $nativeWebSearch,
@@ -997,6 +1206,14 @@ class ChatController
             && !LlmCatalog::supportsWebSearchWithTools($webProvider ?: $llmProvider, (string)$webModel)) {
             $autoConnectors = [];
         }
+        // Une table déjà là garde ses outils… sauf si cela écarterait la
+        // recherche Internet, restée en service, sur un modèle qui ne cumule
+        // pas (Mistral) : l'interrupteur Internet, coché par défaut, serait
+        // éteint pour toute la suite de la conversation, sans issue. Il faut
+        // alors une demande de table ($tableRequest : elle nomme une table ou
+        // un geste de table, et la recherche lui a cédé ci-dessus).
+        $tablesKept = ($tableNames !== [] || $bigSheets !== []) && (!$nativeWebSearch
+            || LlmCatalog::supportsWebSearchWithTools($webProvider ?: $llmProvider, (string)$webModel));
 
         // Connecteur demandé mais indisponible = panne MUETTE : l'outil n'est
         // pas exposé, le modèle répond « je ne peux pas » et RIEN n'est
@@ -1039,9 +1256,20 @@ class ChatController
             // Un connecteur activable par MIA elle-même n'est pas « dormant » :
             // inutile d'inviter l'utilisateur à le cocher. Sans le droit
             // « Connecteurs — Utiliser », rien à cocher : rien à suggérer.
-            $systemPrompt .= ConnectorRegistry::dormantConnectorsNote(
-                ConnectorRegistry::dormantChatConnectors((int)$user['id'], $connectorAsked + array_fill_keys(array_keys($autoConnectors), true))
-            );
+            $askedNow = $connectorAsked + array_fill_keys(array_keys($autoConnectors), true);
+            if ($workflowStep !== null || $scheduled !== null) {
+                // Étape de workflow, tâche programmée : ni menu « + » ni
+                // interrupteur — l'accès se règle dans l'éditeur ou la fiche.
+                $systemPrompt .= ConnectorRegistry::dormantSourcesNote(
+                    ConnectorRegistry::dormantSourceLabels((int)$user['id'], $askedNow),
+                    $workflowStep !== null ? ConnectorRegistry::WHERE_WORKFLOW : ConnectorRegistry::WHERE_TASK
+                );
+            } else {
+                $systemPrompt .= ConnectorRegistry::dormantConnectorsNote(
+                    ConnectorRegistry::dormantChatConnectors((int)$user['id'], $askedNow),
+                    $voiceMode
+                );
+            }
         }
 
         // Même règle pour la Recherche Internet : demandée mais impossible sur
@@ -1070,6 +1298,20 @@ class ChatController
             $systemPrompt .= Scheduler::promptNote($scheduled, $scheduledMode);
         } elseif ($workflowStep !== null) {
             $systemPrompt .= (string)($workflowStep['prompt'] ?? '') . WorkflowPrompt::modeNote((string)$scheduledMode, !empty($workflowStep['auto_send_mail']));
+            if ($slackRead !== null) {
+                // Brique Slack qui LIT : les messages, lus avant le tour.
+                $systemPrompt .= $slackRead['text'];
+                $this->traceAction('slack_read', $slackRead['label']);
+            }
+            if ($eventFiles !== null) {
+                // Pièces jointes de l'email reçu : jointes, écartées (raison), ou panne.
+                $systemPrompt .= WorkflowEventFiles::promptNote($eventFiles, (string)($workflowStep['event_mail']['piece'] ?? ''));
+                if (WorkflowEventFiles::worthTracing($eventFiles)) {
+                    $this->traceAction('email_files', WorkflowEventFiles::traceDetail($eventFiles), $eventFiles['error'] === '' && $eventFiles['files'] !== []);
+                }
+            }
+        } elseif ($workflowChat !== null) {
+            $systemPrompt .= WorkflowChat::promptNote($workflowChat, $workflowPieceTool);
         }
 
         // Conversation vocale : la réponse sera lue à voix haute, le modèle
@@ -1118,9 +1360,14 @@ class ChatController
             $preview = match (true) {
                 $tool === 'creer_brouillon_gmail'   => UserGmailService::actionPreview($tool, $args),
                 $tool === 'creer_brouillon_outlook' => UserOutlookService::actionPreview($tool, $args),
-                $tool === 'creer_evenement_agenda'  => UserCalendarService::actionPreview($tool, $args),
-                $tool === 'creer_evenement_agenda_outlook'
-                    => UserOutlookCalendarService::actionPreview($tool, $args),
+                // Agenda Google : pour une modification, le 3e paramètre porte
+                // l'évènement lu par le handler (titre, horaire, qui sera prévenu).
+                in_array($tool, [UserCalendarService::TOOL_CREATE, UserCalendarService::TOOL_UPDATE], true)
+                    => UserCalendarService::actionPreview($tool, $args, $fileRef ?? []),
+                // Calendrier Outlook : pour une modification, le 3e paramètre porte
+                // l'évènement lu par le handler (titre, horaire, qui sera prévenu).
+                in_array($tool, [UserOutlookCalendarService::TOOL_CREATE, UserOutlookCalendarService::TOOL_UPDATE], true)
+                    => UserOutlookCalendarService::actionPreview($tool, $args, $fileRef ?? []),
                 $tool === 'envoyer_message_slack'   => UserSlackService::actionPreview($tool, $args),
                 $tool === 'envoyer_message_teams'   => UserTeamsService::actionPreview($tool, $args),
                 // Microsoft To Do : même contexte résolu que Google Tasks (liste, titre visé).
@@ -1141,6 +1388,10 @@ class ChatController
                 $tool === AssistantDraft::TOOL      => (array)($fileRef['preview'] ?? []),
                 // Workflow préparé par MIA : même chemin (WorkflowTools).
                 $tool === WorkflowDraft::TOOL       => (array)($fileRef['preview'] ?? []),
+                // Opération de fond sur une table de travail (enrichissement,
+                // action par ligne) : l'aperçu vient de WorkTableTools.
+                in_array($tool, [WorkTableTools::ENRICH, WorkTableTools::ACT, WorkTableTools::PERM_WRITE], true)
+                    => (array)($fileRef['preview'] ?? []),
                 // Le 3e paramètre porte ici le NOM du cerveau, résolu par le handler.
                 $tool === 'nourrir_mybrain'         => MyBrainFeed::actionPreview(
                     MyBrainFeed::normalizeArgs($args),
@@ -1164,7 +1415,7 @@ class ChatController
             $this->turnActionIds[] = $id;
             return [$id, $preview, $mailService];
         };
-        $queueConnectorWrite = function (string $tool, array $args, ?array $fileRef) use ($depositConnectorWrite, $voiceMode, $searchScope): array {
+        $queueConnectorWrite = function (string $tool, array $args, ?array $fileRef) use ($depositConnectorWrite, $voiceMode, $searchScope, $userId): array {
             // Un email vers une adresse que les filtres ne permettent pas :
             // refusé AVANT la carte, le modèle corrige.
             $refusal = $searchScope->writeRefusal($tool, $args);
@@ -1172,6 +1423,21 @@ class ChatController
                 return ['error' => $refusal];
             }
             [$id, $preview, $mailService] = $depositConnectorWrite($tool, $args, $fileRef);
+            // Action par ligne d'une table de travail (agir_sur_table) : déposée
+            // comme toute écriture — mêmes validations, même aperçu, même
+            // provenance — mais TENUE EN RÉSERVE, sans carte : c'est la carte
+            // du groupe que la personne tranchera (cf. $tableActions).
+            if ($this->heldAction !== null) {
+                array_pop($this->turnActionIds);
+                DrivePendingAction::hold($id, $userId);
+                $this->heldAction = [
+                    'id'      => $id,
+                    'label'   => (string)($preview['fichier'] ?? ''),
+                    'example' => (string)($preview['mail']['corps'] ?? ($preview['apercu'] ?? '')),
+                    'icon'    => (string)($preview['icone'] ?? ''),
+                ];
+                return ['statut' => 'en_reserve'];
+            }
             $this->sseEmit(['drive_confirm' => ['id' => $id] + $preview]);
             return ['statut' => 'en_attente_approbation', 'message' => self::pendingWriteMessage($mailService !== null, $voiceMode)];
         };
@@ -1218,6 +1484,15 @@ class ChatController
                             $queueForLater($tool, $args, $fileRef);
                             return ['statut' => 'en_attente_approbation', 'message' => Scheduler::AUTO_HELD_NOTE];
                         }
+                        // Une réunion avec invités leur ÉCRIT (Outlook envoie
+                        // l'invitation, sans réglage ; Google l'envoie par
+                        // défaut, et l'ajoute à leur agenda dans tous les cas) :
+                        // sans le droit d'envoyer des emails, la tâche dépose une carte.
+                        if (!$autoSendMail && (UserOutlookCalendarService::notifiesAttendees($tool, $args)
+                            || UserCalendarService::notifiesAttendees($tool, $args))) {
+                            $queueForLater($tool, $args, $fileRef);
+                            return ['statut' => 'en_attente_approbation', 'message' => UserOutlookCalendarService::AUTO_HELD_NOTE];
+                        }
                         if ($this->turnAutoCount >= ScheduledTask::AUTO_ACTIONS_MAX) {
                             $queueForLater($tool, $args, $fileRef);
                             return ['statut' => 'en_attente_approbation', 'message' => Scheduler::AUTO_LIMIT_NOTE];
@@ -1256,7 +1531,14 @@ class ChatController
             // Fuseau du navigateur : heures d'agenda (recherche, créneaux
             // libres, création) lues et rendues dans celui de l'utilisateur.
             $timeZone,
-            $searchScope
+            $searchScope,
+            // Mémoire (`memoriser`) : une demande explicite de CE message
+            // enregistre directement ; sinon, ou si un contenu écrit par un
+            // tiers a été lu dans le tour, le souvenir attend une confirmation.
+            userMessage: $content,
+            externalRead: function (): bool {
+                return $this->turnSources !== [];
+            }
         );
 
         $imageTools = null;
@@ -1377,12 +1659,78 @@ class ChatController
         );
         $registry->add($intentTools);
 
+        // Tables de travail (WorkTableTools) : collecte EXHAUSTIVE d'une source
+        // en base, croisement, filtres, comptages, export — le modèle ne tient
+        // que la poignée d'une table, jamais sa liste. Avec un connecteur
+        // engagé, une table déjà là ($tablesKept), ou sur demande explicite
+        // ($tableRequest).
+        // « Laisser MIA choisir » seul ne les expose pas (elles pèseraient sur
+        // chaque message, même « merci ») : elles arrivent avec le premier
+        // connecteur activé (plus bas). Mêmes services que les outils par
+        // intention, relus à chaque appel.
+        $tableTools = null;
+        // Actions par ligne (agir_sur_table) : l'outil d'écriture visé est
+        // décliné par SON handler — mêmes validations qu'une action seule —,
+        // chaque action tenue en réserve ($this->heldAction, lu par la file
+        // d'approbation ci-dessus). Jamais dans un tour sans personne : la
+        // file y est remplacée (refus, cartes prolongées, exécution sans
+        // validation) et une action groupée n'y a pas sa place.
+        $tableActions = $unattended ? [] : [
+            'prepare' => function (string $tool, array $args) use (&$registry): array {
+                $handler = WorkTableActions::isAllowed($tool) ? $registry->handler($tool) : null;
+                if ($handler === null) {
+                    return ['error' => 'Outil indisponible pour ce message.'];
+                }
+                $this->heldAction = [];
+                try {
+                    $result = $handler($args);
+                } finally {
+                    $held = $this->heldAction;
+                    $this->heldAction = null;
+                }
+                if (is_array($result) && isset($result['error'])) {
+                    return ['error' => (string)$result['error']];
+                }
+                return !empty($held['id']) ? $held : ['error' => 'Aucune action préparée.'];
+            },
+            'discard' => function (array $ids) use ($userId): void {
+                DrivePendingAction::cancelHeld($ids, $userId, 'Préparation abandonnée.');
+            },
+        ];
+        // Étape de workflow : ni enrichissement (son opération de fond
+        // tournerait APRÈS l'étape, la suite lirait une table incomplète — la
+        // boucle « pour chaque » y pourvoit), ni action par ligne (tour sans
+        // personne) ; ses pièces Tableau et la pièce à remettre sont nommées.
+        $stepOutputTable = $workflowStep !== null ? (string)($workflowStep['output_table'] ?? '') : '';
+        $newTableTools = function () use ($turn, &$intentServices, $sheetAttachments, $llm, $tableActions, $permanentTables, $workflowStep, $stepTables, $stepOutputTable): WorkTableTools {
+            return new WorkTableTools(
+                $turn,
+                new SqlWorkTableStore(),
+                function () use (&$intentServices): array {
+                    return $intentServices;
+                },
+                $sheetAttachments,
+                // Enrichissement : chaque ligne est lue par le modèle du tour.
+                $workflowStep !== null ? '' : (string)$llm,
+                $tableActions,
+                null,
+                $permanentTables,
+                $permanentTables !== [] ? new KbTableStore() : null,
+                $workflowStep !== null ? ['pieces' => $stepTables, 'output' => $stepOutputTable] : []
+            );
+        };
+        if ($tablesPossible && ($tableRequest || $tablesKept || $permanentTables !== [] || $stepTables !== []
+            || $registry->engagedConnectors() !== [])) {
+            $tableTools = $newTableTools();
+            $registry->add($tableTools);
+        }
+
         // « Laisser MIA choisir » : un seul outil léger, activer_connecteur ;
         // le connecteur choisi rejoint le registre, ses outils partent à
         // l'aller suivant (option `tools_source` de la boucle).
         if ($autoConnectors !== []) {
             $registry->add(new ConnectorLoaderTools($turn, $autoConnectors,
-                function (string $key) use ($turn, &$registry, $user, &$intentServices, $intentTools): ?ToolProvider {
+                function (string $key) use ($turn, &$registry, $user, &$intentServices, $intentTools, &$tableTools, $newTableTools, $tablesPossible): ?ToolProvider {
                     $cls = (string)ConnectorRegistry::serviceClass($key);
                     if ($cls === '' || !ConnectorRegistry::isEnabled($key)) {
                         return null;
@@ -1399,6 +1747,12 @@ class ChatController
                     // Le connecteur activé entre dans les recherches multi-sources.
                     $intentServices[$key] = $service;
                     $registry->add($intentTools);
+                    // … et dans les sources collectables des tables de travail,
+                    // qui arrivent avec lui si elles n'étaient pas déjà là.
+                    if ($tablesPossible) {
+                        $tableTools ??= $newTableTools();
+                        $registry->add($tableTools);
+                    }
                     $this->traceAction('connecteur_active', ConnectorRegistry::label($key));
                     return $provider;
                 }
@@ -1421,7 +1775,7 @@ class ChatController
         if ($supportsTools && ($pastReference || $loopRunsAnyway || $fileReread)) {
             // `memoriser` seulement quand la boucle tourne déjà : la capture
             // historique (captureUserMemory) reste le chemin de tous les modèles.
-            $registry->add(new ConversationTools($turn, true, $loopRunsAnyway && !$unattended, $fileReread));
+            $registry->add(new ConversationTools($turn, true, $loopRunsAnyway && !$unattended && UserMemory::isEnabled(), $fileReread));
         }
         // Tâches programmées : MIA prépare la tâche, une carte demande l'accord.
         // Assistant, modèle et sources du TOUR servent de valeurs par défaut.
@@ -1485,6 +1839,16 @@ class ChatController
             ));
         }
 
+        // Pièce relue par une validation de workflow, mise à jour depuis la
+        // discussion (WorkflowChat) : relu au moment de l'appel.
+        if ($workflowPieceTool) {
+            $registry->add(new WorkflowPieceTools(
+                $turn,
+                $workflowChat,
+                static fn(array $args): array => WorkflowChat::apply($convId, $userId, $args)
+            ));
+        }
+
         // Plan de travail visible (PlanTools) : dès que des connecteurs sont
         // engagés ou activables — même condition que la méthode « agent »
         // ci-dessous. Posé APRÈS les connecteurs : sa consigne suit les leurs.
@@ -1524,7 +1888,7 @@ class ChatController
         // Conduite de la boucle (cf. LLMInterface::streamWithTools) : le cache
         // de prompt s'écrit dès le premier aller-retour quand des connecteurs
         // sont engagés (plusieurs allers-retours probables), sinon au second.
-        $loopOptions = self::toolLoopOptions($convId, $engagedConnectors) + [
+        $loopOptions = self::toolLoopOptions($convId, $engagedConnectors, $voiceMode) + [
             // Notes d'avancement du modèle entre deux outils (Claude récents,
             // `display: "updates"`) : une ligne vivante sous la trace, jamais
             // dans la réponse.
@@ -1649,7 +2013,7 @@ class ChatController
                 && AssistantDraft::looksLikeAssistantRequest($content)) {
                 $sys .= "\n\nNote : l'utilisateur semble demander un nouvel assistant. Avec ce modèle, tu ne peux pas "
                       . "le préparer toi-même : propose-lui de changer pour un modèle compatible avec les outils, ou de "
-                      . "le créer depuis Assistants → « + Nouvel assistant » ; tu peux l'aider ici à en rédiger les consignes.";
+                      . "le créer depuis Assistants → « Nouvel assistant » ; tu peux l'aider ici à en rédiger les consignes.";
             }
             // « Monte-moi un workflow » sur un modèle sans outils : même chose.
             if (!$supportsTools && !$unattended && Workflow::allows($user, 'create')
@@ -1689,7 +2053,9 @@ class ChatController
         // `stop` des jetons : longueur maximale, filtre, contexte).
         $interruption ??= LlmErrorPresenter::stopDescriptor($tokens ?? null, $llmProvider);
         if ($aborted) {
-            $fullResp = $this->markAsAborted($fullResp);
+            // Coupée là où l'écran s'est arrêté au clic Stop (après le calcul
+            // de l'usage : le fournisseur facture ce qu'il a produit).
+            $fullResp = self::markAsAborted(self::cutToSeen($fullResp, self::textSeenAtStop()));
         } elseif ($streamError !== null && trim($fullResp) === '' && empty($producedImages)) {
             // Erreur API déjà émise proprement (évènement `llm_error`). On
             // persiste un texte propre (préfixe ⚠️) au lieu du chunk brut, pour
@@ -1758,7 +2124,29 @@ class ChatController
             );
         }
         $followUp = self::followUpReason($tokens ?? [], $this->turnPlan, $streamError !== null);
-        Message::setAgent((int)$msg['id'], ['plan' => $this->turnPlan, 'suite' => $followUp]);
+        // `offer` : genre du fichier pour lequel la réponse propose « Version
+        // rapide / soignée » — l'écran y pose les cases « Modèle » et « Logo ».
+        // `tables` : tables de travail que ce tour a établies ou consultées —
+        // nommées sous la réponse, avec un bouton « Voir » (jamais la grille).
+        // Une table PERMANENTE lue, comptée ou que le tour propose de modifier
+        // s'y nomme aussi (référence « p » + identifiant de sa base).
+        $turnTableIds = $tableTools !== null ? WorkTableView::refs($tableTools->touched()) : [];
+        // Le modèle tient de la consigne le nombre de lignes et les colonnes
+        // d'une table permanente : il peut en parler sans appeler d'outil. Une
+        // réponse qui la NOMME la propose aussi par « Voir ».
+        // Seulement quand aucun outil n'a rien désigné : sinon la table nommée
+        // s'ajouterait à SA propre vue (« + 1 autre table » sous une réponse
+        // qui n'en montre qu'une).
+        if ($tableTools !== null && $permanentTables !== [] && $turnTableIds === []) {
+            $turnTableIds = WorkTableView::refs(WorkTableView::namedIn($fullResp, $permanentTables));
+        }
+        Message::setAgent((int)$msg['id'], ['plan' => $this->turnPlan, 'suite' => $followUp, 'offer' => $polishOffer, 'tables' => $turnTableIds]);
+        // Ce que l'écran reçoit en fin de tour : la puce de la zone de saisie
+        // (une table a pu naître, une table permanente vient d'être engagée)
+        // et la ligne « Voir » de cette réponse.
+        $turnTables = $tableTools !== null || $tableKbs !== []
+            ? self::turnTablesPayload($convId, $turnTableIds, $tablesPossible ? $permanentTables : null)
+            : null;
         // Télémétrie de l'agent : une ligne par réponse passée par la boucle
         // d'outils — nombres et noms d'outils seulement, jamais un contenu.
         if ($useToolLoop) {
@@ -1812,6 +2200,21 @@ class ChatController
             }
         }
 
+        // Mémoire : un message qui dit quelque chose de durable sur la personne
+        // programme la relecture de la conversation (MemoryLearner), dix
+        // minutes après le dernier échange — jamais pendant un tour, jamais
+        // sans personne, et pas pour ce qu'une demande explicite vient de régler.
+        if (!$unattended && $memoryCapture === null) {
+            MemoryLearner::markTurn($user, $convId, $userMsgId, $content);
+            // Gestes : une demande de retouche (« plus court », « en tableau »)
+            // qui suit une réponse est comptée ; répétée, elle deviendra une
+            // proposition, posée par la question de MIA plus bas. Jamais à
+            // l'oral : la longueur d'une réponse lue a son propre réglage.
+            if (!$voiceMode) {
+                MemorySignals::fromFollowUp($user, $convId, $userMsgId, $content, self::historyWithout($history, $userMsgId));
+            }
+        }
+
         // Arrêt demandé : pas de titre auto (rien de complet à résumer) et une
         // charge minimale. La sauvegarde DB ci-dessus suffit à afficher la
         // réponse partielle au rechargement de la conversation.
@@ -1827,6 +2230,7 @@ class ChatController
                 'msg_id'                     => (int)$msg['id'],
                 'quota_status'               => $quotaStatus,
                 'conversation_credits_total' => $conversationCreditsTotal,
+                'tables'                     => $turnTables,
             ];
         }
 
@@ -1851,12 +2255,46 @@ class ChatController
         // rechargement retrouvera (avant, le titre n'y était pas encore).
         UsageLog::attachTurn($convId, (int)$user['id'], (int)$msg['id'], $turnLedgerStart);
         $turnCredits = max($turnCredits, UsageLog::creditsForMessage((int)$msg['id']));
+
+        // Version soignée choisie avant la rédaction : le fichier que la
+        // réponse vient d'écrire part aussitôt chez le modèle choisi.
+        [$nativeRuns, $nativeError] = $polishLlm !== null && $streamError === null && $interruption === null
+            ? $this->launchPolishedFile($user, $convId, $llm, $polishLlm, $fullResp, (int)$msg['id'],
+                ($payload['company_template'] ?? true) !== false, ($payload['company_logo'] ?? true) !== false)
+            : [[], null];
+
         $quotaStatus = $this->currentCreditQuotaStatus($user);
         $conversationCreditsTotal = UsageLog::conversationCreditsTotal($convId, (int)$user['id']);
+
+        // Question de MIA (mémoire) : de temps en temps, une carte discrète sous
+        // une réponse terminée — écrite par le serveur, répondue sans appel au
+        // modèle. Jamais quand la personne a déjà autre chose à décider.
+        $memoryQuestion = MemoryQuestions::forTurn($user, $convId, (int)$msg['id'], [
+            'voice'         => $voiceMode,
+            'unattended'    => $unattended,
+            'error'         => $streamError !== null,
+            'interrupted'   => $interruption !== null,
+            'empty'         => trim($fullResp) === '',
+            'cards'         => count($this->turnActionIds) - $this->turnAutoCount,
+            'choice_block'  => ChoiceButtons::hasBlock($fullResp),
+            'polish_offer'  => $polishOffer !== null || $polishLlm !== null,
+            'captured'      => $memoryCapture !== null,
+            'prior_replies' => count(array_filter($history, static fn(array $m): bool => ($m['role'] ?? '') === 'assistant')),
+        ]);
 
         return [
             'done' => true,
             'msg_id' => (int)$msg['id'],
+            // Question de MIA à poser sous cette réponse (MemoryQuestions), ou null.
+            'memory_question' => $memoryQuestion,
+            // Réalisation lancée depuis cette réponse (version soignée choisie
+            // avant la rédaction) : message d'attente et job à suivre.
+            'native_runs' => $nativeRuns,
+            'native_error' => $nativeError,
+            'polish_offer' => $polishOffer,
+            // Tables de travail du tour : puce de la zone de saisie et ligne
+            // « Voir » sous la réponse (null si les outils n'étaient pas là).
+            'tables' => $turnTables,
             'tokens' => $tokens,
             // Coût complet du tour (tokens, recherches web, images, appels
             // auxiliaires, titre) : exactement ce que le badge du message
@@ -2000,6 +2438,21 @@ class ChatController
             http_response_code(403); exit;
         }
 
+        // Conversation d'une exécution de workflow : regénérer supprimerait
+        // les messages écrits par le moteur depuis le dernier message d'étape
+        // (réponse de l'étape, condition, validation, livrable) et répondrait
+        // en chat ordinaire, hors du dossier. On refait une étape depuis la
+        // page de l'exécution (le bouton est masqué dans ces conversations).
+        $convRow = Conversation::findById($convId);
+        if (!empty($convRow['workflow_run_id'])) {
+            http_response_code(409);
+            header('Content-Type: application/json');
+            echo json_encode([
+                'error' => t('Cette conversation est celle d’un workflow : pour refaire une étape, ouvrez le suivi détaillé de l’exécution.'),
+            ], JSON_UNESCAPED_UNICODE);
+            return;
+        }
+
         $quotaStatus = $this->currentCreditQuotaStatus($user);
         if ($this->isCreditQuotaExceeded($quotaStatus)) {
             $this->respondCreditQuotaExceeded($quotaStatus);
@@ -2049,15 +2502,16 @@ class ChatController
                 : ($convLlm !== '' ? $convLlm : $this->resolveAppDefaultLlm($availableLlms));
             $allowedLlms = $availableLlms + LLMFactory::available();
         } else {
-            $llm = $requestedLlm !== '' ? $requestedLlm : ($convLlm !== '' ? $convLlm : $this->resolveAppDefaultLlm($availableLlms));
+            $llm = $requestedLlm !== '' ? $requestedLlm : ($convLlm !== '' ? $convLlm : $this->resolveUserDefaultLlm($user, $availableLlms));
             $allowedLlms = $availableLlms;
         }
 
         // Modèle arrêté par son éditeur (LlmCatalog::retirement) : la
-        // conversation qui le portait continue sur le modèle par défaut, au
-        // lieu d'un « pas autorisé pour votre groupe » qui ne dit rien.
+        // conversation qui le portait continue sur le modèle par défaut (celui
+        // de la personne sans assistant), au lieu d'un « pas autorisé pour
+        // votre groupe » qui ne dit rien.
         if (!isset($allowedLlms[$llm]) && LLMFactory::isRetired($llm)) {
-            $llm = $this->resolveAppDefaultLlm($availableLlms);
+            $llm = $profile ? $this->resolveAppDefaultLlm($availableLlms) : $this->resolveUserDefaultLlm($user, $availableLlms);
         }
 
         if (!isset($allowedLlms[$llm])) {
@@ -2105,14 +2559,16 @@ class ChatController
         // Choix en boutons : la régénération rejoue une réponse lue à l'écran.
         $systemPrompt .= ChoiceButtons::promptFragment();
         $systemPrompt .= UserPreferences::promptFragment(Session::currentUser());
-        // Mémoire long terme : injectée comme dans send(). Pas de CAPTURE ici —
+        // Mémoire : injectée comme dans send(). Pas de CAPTURE ici —
         // regenerate() rejoue une demande déjà traitée, mémoriser une 2e fois
         // le même fait n'aurait aucun sens (parité avec web_access/connecteurs).
-        $memoryFragment = UserMemory::promptFragment((int)$user['id']);
+        $memoryOn       = UserMemory::isEnabled();
+        $memoryFragment = $memoryOn ? UserMemory::promptFragment((int)$user['id']) : '';
         $systemPrompt  .= $memoryFragment;
         $systemPrompt  .= UserMemory::emptyStateNote(
             $memoryFragment !== '',
-            UserPreferences::hasContext(Session::currentUser())
+            UserPreferences::hasContext(Session::currentUser()),
+            $memoryOn
         );
         // Résumé du début d'une longue conversation (vide tant que tout tient),
         // à la même place qu'à l'envoi : après la mémoire, avant les documents.
@@ -2227,7 +2683,7 @@ class ChatController
         // vide », note sous une réponse coupée en route.
         $interruption ??= LlmErrorPresenter::stopDescriptor($tokens ?? null, LLMFactory::provider($llm));
         if ($aborted) {
-            $fullResp = $this->markAsAborted($fullResp);
+            $fullResp = self::markAsAborted($fullResp);
         } elseif ($streamError !== null && trim($fullResp) === '') {
             $fullResp = LlmErrorPresenter::toPlainText($streamError);
         } elseif (trim($fullResp) === '') {
@@ -2545,12 +3001,18 @@ class ChatController
         // jamais de la conversation, dont les messages sont ceux des étapes
         // précédentes ; ni assistant, ni retouche de la dernière image.
         $workflow = is_array($payload['workflow'] ?? null) ? $payload['workflow'] : null;
-        if ($workflow !== null) {
-            $tool = ImageGenerator::orientedTool($tool, (string)($workflow['format'] ?? ''));
-        }
-
         $conv    = Conversation::findById($convId);
         $profile = $workflow === null && !empty($conv['profile_id']) ? Profile::findById((int)$conv['profile_id']) : null;
+
+        // Options de l'image (ImageOptions) par-dessus celles de l'outil : la
+        // brique du workflow, sinon l'assistant de la conversation.
+        $tool = ImageOptions::applyTo($tool, $workflow !== null
+            ? [
+                'format'        => (string)($workflow['format'] ?? ''),
+                'background'    => (string)($workflow['background'] ?? ''),
+                'output_format' => (string)($workflow['output_format'] ?? ''),
+            ]
+            : ImageOptions::ofProfile($profile));
         $canEdit = ImageGenerator::supportsImageEdit($tool);
 
         if ($workflow !== null) {
@@ -4835,7 +5297,12 @@ class ChatController
         }
 
         if (empty($_FILES['file'])) {
-            $this->json(['error' => 'Aucun fichier'], 400);
+            // Un envoi plus lourd que post_max_size arrive VIDE : PHP l'a jeté
+            // avant nous. Le dire, plutôt que « Aucun fichier ».
+            $sent = (int)($_SERVER['CONTENT_LENGTH'] ?? 0);
+            $this->json(['error' => $sent > FileExtractor::largestUploadLimit()
+                ? FileExtractor::tooLargeMessage(t('Ce fichier'), '', $sent)
+                : 'Aucun fichier'], 400);
             return;
         }
 
@@ -4844,7 +5311,7 @@ class ChatController
         // Vérifier l'erreur PHP avant tout (upload_max_filesize, etc.)
         if ($file['error'] !== UPLOAD_ERR_OK) {
             $msg = match($file['error']) {
-                UPLOAD_ERR_INI_SIZE, UPLOAD_ERR_FORM_SIZE => 'Fichier trop lourd (limite serveur : ' . ini_get('upload_max_filesize') . ')',
+                UPLOAD_ERR_INI_SIZE, UPLOAD_ERR_FORM_SIZE => FileExtractor::tooLargeMessage((string)$file['name'], '', null),
                 UPLOAD_ERR_NO_FILE  => 'Aucun fichier reçu',
                 default             => 'Erreur upload (' . $file['error'] . ')',
             };
@@ -4857,13 +5324,29 @@ class ChatController
         // distinguer Word, Excel et force text/markdown pour les .md.
         $mime = FileExtractor::detectMime($file['tmp_name'], (string)$file['name']);
 
-        if ($file['size'] > UPLOAD_MAX_SIZE) {
-            $this->json(['error' => 'Fichier trop lourd (max 10Mo)'], 400);
+        // Un format que MIA ne lit pas se refuse pour CE motif, quel que soit
+        // son poids (une vidéo de 30 Mo n'est pas « trop lourde », elle n'est
+        // pas lue). Les images passent : HEIC, TIFF… sont converties plus bas.
+        if (!in_array($mime, UPLOAD_ALLOWED_TYPES, true) && !str_starts_with($mime, 'image/')) {
+            $this->json(['error' => FileExtractor::unsupportedMessage((string)$file['name'], $mime)], 400);
             return;
         }
 
-        if (!in_array($mime, UPLOAD_ALLOWED_TYPES)) {
-            $this->json(['error' => 'Type de fichier non supporté'], 400);
+        if ((int)$file['size'] > FileExtractor::uploadLimit($mime)) {
+            $this->json(['error' => FileExtractor::tooLargeMessage((string)$file['name'], $mime, (int)$file['size'])], 400);
+            return;
+        }
+
+        // HEIC, AVIF, TIFF, BMP : convertis en JPEG avant tout (sur place).
+        [$mime, $convertedName, $convertError] = ImageConvert::forUpload((string)$file['tmp_name'], (string)$file['name'], $mime);
+        if ($convertError !== null) {
+            $this->json(['error' => $convertError], 400);
+            return;
+        }
+        $file['name'] = $convertedName;
+
+        if (!in_array($mime, UPLOAD_ALLOWED_TYPES, true)) {
+            $this->json(['error' => FileExtractor::unsupportedMessage((string)$file['name'], $mime)], 400);
             return;
         }
 
@@ -4931,8 +5414,9 @@ class ChatController
         }
 
         try {
-            $args = MailDraftReview::applyEdit($action['args'], $_POST);
-            $note = MailDraftReview::revisionNote(!empty($_POST['restore']) ? 'restore' : 'edit');
+            $args   = MailDraftReview::applyEdit($action['args'], $_POST);
+            $edited = $args;
+            $note   = MailDraftReview::revisionNote(!empty($_POST['restore']) ? 'restore' : 'edit');
             if ($mode === 'improve') {
                 $consigne    = MailDraftReview::instruction($_POST);
                 // Quota AVANT l'appel payant, comme pour toute opération IA. Le
@@ -4972,6 +5456,10 @@ class ChatController
             $this->json(['error' => t('Action introuvable, déjà traitée ou expirée.')], 409);
             return;
         }
+        // Mémoire : ce que la personne fait de ses brouillons (raccourcis,
+        // passés au vouvoiement, « Plus formel » choisi encore et encore) est
+        // compté — sans texte gardé ; répété, il deviendra une proposition.
+        MemorySignals::fromMailRevision($user, $convId, $actionId, $action['args'], $edited, $mode, $_POST);
         $reply = ['ok' => true, 'preview' => ['id' => $actionId] + $preview];
         // Réécriture par MIA : elle a coûté quelques crédits, le total de la
         // conversation et le solde affichés le disent aussitôt.
@@ -5140,6 +5628,12 @@ class ChatController
     private const NON_CONNECTOR_ACTION_TOOLS = [
         'programmer_tache', 'creer_assistant', 'workflow_gate', 'creer_workflow',
         'executer_workflow_n8n', 'generer_presentation_gamma', 'nourrir_mybrain',
+        // Enrichir une table : des appels au modèle, rien chez un tiers.
+        WorkTableTools::ENRICH,
+        // Écrire dans une table permanente : une base de connaissances de
+        // MIA, pas un service relié — le droit « Bases — Modifier » est
+        // revérifié à l'accord (approvePermanentWrite).
+        WorkTableTools::PERM_WRITE,
     ];
 
     private function decideAction(int $convId, array $user, int $actionId, string $decision): void
@@ -5169,6 +5663,15 @@ class ChatController
 
         if ($decision === 'cancel') {
             DrivePendingAction::resolve($actionId, 'cancelled');
+            // Action groupée sur une table : ses actions tenues en réserve
+            // tombent avec elle — aucune n'a jamais eu de carte.
+            if ((string)$action['tool'] === WorkTableTools::ACT) {
+                DrivePendingAction::cancelHeld(
+                    array_map(static fn($it): int => (int)($it[1] ?? 0), (array)($action['args']['items'] ?? [])),
+                    (int)$user['id'],
+                    'Action groupée refusée.'
+                );
+            }
             $this->driveOutcome($convId, '🚫 ' . ($fichier !== ''
                 ? t('Action annulée : {action} — « {objet} ».', ['action' => $label, 'objet' => $fichier])
                 : t('Action annulée : {action}.', ['action' => $label])));
@@ -5191,6 +5694,20 @@ class ChatController
         $mailService = MailDraftReview::serviceForTool((string)$action['tool']);
         if ($mailService !== null) {
             $this->resolveMailAction($mailService, $decision, $actionId, $convId, $user, $action, $label);
+            return;
+        }
+
+        // Opération de fond sur une table de travail (enrichissement, action
+        // par ligne) : l'accord la LANCE — le worker la mène (TableMissionJob).
+        if (in_array((string)$action['tool'], [WorkTableTools::ENRICH, WorkTableTools::ACT], true)) {
+            $this->approveTableMission($convId, $user, $actionId, $action);
+            return;
+        }
+
+        // Écriture dans une table permanente : calculée à nouveau sur la table
+        // du moment, écrite comme un nouvel état de son historique.
+        if ((string)$action['tool'] === WorkTableTools::PERM_WRITE) {
+            $this->approvePermanentWrite($convId, $user, $actionId, $action);
             return;
         }
 
@@ -5221,7 +5738,8 @@ class ChatController
             return;
         }
 
-        if ((string)$action['tool'] === 'creer_evenement_agenda') {
+        if (in_array((string)$action['tool'], [UserCalendarService::TOOL_CREATE, UserCalendarService::TOOL_UPDATE], true)) {
+            $isUpdate = (string)$action['tool'] === UserCalendarService::TOOL_UPDATE;
             if (!UserCalendarService::isGloballyEnabled()) {
                 DrivePendingAction::resolve($actionId, 'failed', 'Fonctionnalité désactivée par l\'administrateur.');
                 $this->driveJson(['ok' => false, 'error' => t('Fonctionnalité {service} désactivée par l\'administrateur.', ['service' => t('Google Agenda')])]);
@@ -5234,7 +5752,7 @@ class ChatController
                 return;
             }
             try {
-                $result = $calendar->createEvent($action['args']);
+                $result = $isUpdate ? $calendar->updateEvent($action['args']) : $calendar->createEvent($action['args']);
             } catch (\RuntimeException $e) {
                 DrivePendingAction::resolve($actionId, 'failed', $e->getMessage());
                 $this->driveOutcome($convId, '⚠️ ' . t("Échec de l'action {service} ({action}) : {erreur}", ['service' => t('Google Agenda'), 'action' => $label, 'erreur' => $e->getMessage()]));
@@ -5244,22 +5762,61 @@ class ChatController
             DrivePendingAction::resolve($actionId, 'executed', null, null, (string)($result['url'] ?? ''));
             $quand = (string)($result['quand'] ?? '') !== '' ? ' — ' . $result['quand'] : '';
             ConnectorContext::record($convId, 'gcal_event', (string)($result['id'] ?? ''), (string)$result['titre'], (string)($result['quand'] ?? ''));
-            $this->driveOutcome($convId, '✅ ' . t("Évènement Google Agenda créé : [« {titre} »]({url}){quand}. Aucune invitation n'a été envoyée automatiquement.", [
+
+            // Ce que Google a fait de plus que l'écriture : invitations, répétition.
+            $invites = array_values(array_filter((array)($result['invites'] ?? []), 'is_string'));
+            $suite   = [];
+            if ($isUpdate) {
+                if (!empty($result['ajoutes'])) {
+                    $suite[] = t('Invités ajoutés : {invites}.', ['invites' => implode(', ', (array)$result['ajoutes'])]);
+                }
+                if (!empty($result['retires'])) {
+                    $suite[] = t('Invités retirés : {invites}.', ['invites' => implode(', ', (array)$result['retires'])]);
+                }
+                $suite[] = !empty($result['previent'])
+                    ? t('Google Agenda a prévenu les invités par email.')
+                    : t('Aucun invité n\'a été prévenu.');
+            } else {
+                $suite[] = $invites === []
+                    ? t("Aucun participant n'a été ajouté, donc aucune invitation n'a été envoyée.")
+                    : (!empty($result['invitations_envoyees'])
+                        ? t('Invitation envoyée par Google Agenda à : {invites}.', ['invites' => implode(', ', $invites)])
+                        : t('Invités ajoutés sans email d\'invitation : {invites}.', ['invites' => implode(', ', $invites)]));
+                if (!empty($result['recurrent'])) {
+                    $recurrence = UserCalendarService::recurrenceLabel($action['args']);
+                    if ($recurrence !== '') {
+                        $suite[] = t('Évènement récurrent : {recurrence}.', ['recurrence' => $recurrence]);
+                    }
+                }
+            }
+            $vars = [
                 'titre' => (string)$result['titre'],
                 'url'   => (string)$result['url'],
                 'quand' => $quand,
-            ]));
+                'suite' => implode(' ', $suite),
+            ];
+            $this->driveOutcome($convId, '✅ ' . ($isUpdate
+                ? t('Évènement Google Agenda modifié : [« {titre} »]({url}){quand}. {suite}', $vars)
+                : t('Évènement Google Agenda créé : [« {titre} »]({url}){quand}. {suite}', $vars)));
+            $extra = $isUpdate
+                ? (!empty($result['previent']) ? t('invités prévenus') : t('aucun invité prévenu'))
+                : ($invites === []
+                    ? t('aucune invitation envoyée')
+                    : (!empty($result['invitations_envoyees'])
+                        ? I18n::plural(count($invites), '{n} invitation envoyée', '{n} invitations envoyées')
+                        : t('invités ajoutés sans email')));
             $this->driveJson(['ok' => true, 'statut' => 'executed', 'resultat' => [
                 'nom'   => $result['titre'],
                 'url'   => $result['url'],
                 'type'  => t('Évènement Google Agenda'),
-                'verbe' => t('créé'),
-                'extra' => $quand . ' — ' . t('aucune invitation envoyée'),
+                'verbe' => $isUpdate ? t('modifié') : t('créé'),
+                'extra' => $quand . ' — ' . $extra,
             ]]);
             return;
         }
 
-        if ((string)$action['tool'] === 'creer_evenement_agenda_outlook') {
+        if (in_array((string)$action['tool'], [UserOutlookCalendarService::TOOL_CREATE, UserOutlookCalendarService::TOOL_UPDATE], true)) {
+            $isUpdate = (string)$action['tool'] === UserOutlookCalendarService::TOOL_UPDATE;
             if (!UserOutlookCalendarService::isGloballyEnabled()) {
                 DrivePendingAction::resolve($actionId, 'failed', 'Fonctionnalité désactivée par l\'administrateur.');
                 $this->driveJson(['ok' => false, 'error' => t('Fonctionnalité {service} désactivée par l\'administrateur.', ['service' => t('Calendrier Outlook')])]);
@@ -5272,7 +5829,7 @@ class ChatController
                 return;
             }
             try {
-                $result = $msCalendar->createEvent($action['args']);
+                $result = $isUpdate ? $msCalendar->updateEvent($action['args']) : $msCalendar->createEvent($action['args']);
             } catch (\RuntimeException $e) {
                 DrivePendingAction::resolve($actionId, 'failed', $e->getMessage());
                 $this->driveOutcome($convId, '⚠️ ' . t("Échec de l'action {service} ({action}) : {erreur}", ['service' => t('Calendrier Outlook'), 'action' => $label, 'erreur' => $e->getMessage()]));
@@ -5282,17 +5839,64 @@ class ChatController
             DrivePendingAction::resolve($actionId, 'executed', null, null, (string)($result['url'] ?? ''));
             $quand = (string)($result['quand'] ?? '') !== '' ? ' — ' . $result['quand'] : '';
             ConnectorContext::record($convId, 'mscal_event', (string)($result['id'] ?? ''), (string)$result['titre'], (string)($result['quand'] ?? ''));
-            $this->driveOutcome($convId, '✅ ' . t("Évènement Outlook créé : [« {titre} »]({url}){quand}. Aucun participant n'a été ajouté, donc aucune invitation n'a été envoyée.", [
+
+            // Ce qu'Outlook a fait de plus que l'écriture : invitations, réunion Teams.
+            $invites = array_values(array_filter((array)($result['invites'] ?? []), 'is_string'));
+            $suite   = [];
+            if ($isUpdate) {
+                if (!empty($result['ajoutes'])) {
+                    $suite[] = t('Invités ajoutés : {invites}.', ['invites' => implode(', ', (array)$result['ajoutes'])]);
+                }
+                if (!empty($result['retires'])) {
+                    $suite[] = t('Invités retirés : {invites}.', ['invites' => implode(', ', (array)$result['retires'])]);
+                }
+                $suite[] = !empty($result['previent'])
+                    ? t('Outlook a prévenu les invités concernés par email.')
+                    : t('Aucun invité n\'a été prévenu.');
+            } else {
+                $suite[] = $invites !== []
+                    ? t('Invitation envoyée par Outlook à : {invites}.', ['invites' => implode(', ', $invites)])
+                    : ((string)($result['salle'] ?? '') !== ''
+                        ? t('Aucune personne n\'a été invitée.')
+                        : t("Aucun participant n'a été ajouté, donc aucune invitation n'a été envoyée."));
+            }
+            // Salle : c'est elle qui accepte ou refuse — jamais « réservée » d'office.
+            if ((string)($result['salle_retiree'] ?? '') !== '') {
+                $suite[] = t('Salle libérée : {salle}.', ['salle' => (string)$result['salle_retiree']]);
+            }
+            if ((string)($result['salle'] ?? '') !== '') {
+                $suite[] = t('Demande de réservation envoyée à la salle {salle} : elle l\'accepte ou la refuse d\'elle-même — sa réponse apparaîtra dans Outlook.', ['salle' => (string)$result['salle']]);
+            }
+            $visio = (string)($result['visio'] ?? '');
+            if (preg_match('#^https://#i', $visio) === 1) {
+                $suite[] = t('[Lien de la réunion Teams]({url}).', ['url' => $visio]);
+            } elseif (!$isUpdate && !empty($result['visio_demandee'])) {
+                $suite[] = t('La réunion Teams n\'a pas été créée : ce compte Microsoft ne le permet pas.');
+            }
+
+            $vars = [
                 'titre' => (string)$result['titre'],
                 'url'   => (string)$result['url'],
                 'quand' => $quand,
-            ]));
+                'suite' => implode(' ', $suite),
+            ];
+            $this->driveOutcome($convId, '✅ ' . ($isUpdate
+                ? t('Évènement Outlook modifié : [« {titre} »]({url}){quand}. {suite}', $vars)
+                : t('Évènement Outlook créé : [« {titre} »]({url}){quand}. {suite}', $vars)));
+            $extra = $isUpdate
+                ? (!empty($result['previent']) ? t('invités prévenus') : t('aucun invité prévenu'))
+                : ($invites !== []
+                    ? I18n::plural(count($invites), '{n} invitation envoyée', '{n} invitations envoyées')
+                    : t('aucune invitation envoyée'));
+            if ((string)($result['salle'] ?? '') !== '') {
+                $extra .= ', ' . t('salle demandée');
+            }
             $this->driveJson(['ok' => true, 'statut' => 'executed', 'resultat' => [
                 'nom'   => $result['titre'],
                 'url'   => $result['url'],
                 'type'  => t('Évènement Outlook'),
-                'verbe' => t('créé'),
-                'extra' => $quand . ' — ' . t('aucune invitation envoyée'),
+                'verbe' => $isUpdate ? t('modifié') : t('créé'),
+                'extra' => $quand . ' — ' . $extra,
             ]]);
             return;
         }
@@ -5310,7 +5914,10 @@ class ChatController
                 return;
             }
             try {
-                $result = $slack->postMessage($action['args']);
+                // Fichiers d'une brique de workflow : relus depuis le dossier de
+                // l'exécution de CETTE conversation (jamais un chemin reçu).
+                $files = WorkflowDeliveries::attachmentsFor($action['args'], $user, $convId, WorkflowDeliveries::FOR_SLACK);
+                $result = $slack->postMessage($action['args'], $files);
             } catch (\RuntimeException $e) {
                 DrivePendingAction::resolve($actionId, 'failed', $e->getMessage());
                 $this->driveOutcome($convId, '⚠️ ' . t("Échec de l'action {service} ({action}) : {erreur}", ['service' => 'Slack', 'action' => $label, 'erreur' => $e->getMessage()]));
@@ -5321,15 +5928,37 @@ class ChatController
             // Le message publié devient l'objet dont on parlera au tour suivant
             // (« ajoute un mot dans ce fil ») : l'identifiant porte le canal ET
             // l'horodatage, les deux étant nécessaires pour y répondre.
-            ConnectorContext::record(
-                $convId,
-                'slack_msg',
-                (string)$result['canal_id'] . '/' . (string)$result['ts'],
-                t('votre message dans #{canal}', ['canal' => (string)$result['canal']]),
-                UserSlackService::formatTs((string)$result['ts'])
-            );
-            $canalTxt = '#' . ltrim((string)$result['canal'], '#');
+            if ((string)$result['ts'] !== '') {
+                ConnectorContext::record(
+                    $convId,
+                    'slack_msg',
+                    (string)$result['canal_id'] . '/' . (string)$result['ts'],
+                    !empty($result['direct'])
+                        ? t('votre message à {personne}', ['personne' => (string)$result['canal']])
+                        : t('votre message dans #{canal}', ['canal' => (string)$result['canal']]),
+                    UserSlackService::formatTs((string)$result['ts'])
+                );
+            }
             $lien     = (string)($result['url'] ?? '');
+            $fichiers = (array)($result['fichiers'] ?? []);
+            $avecFichiers = $fichiers !== []
+                ? ' ' . t('Fichiers joints : {fichiers}.', ['fichiers' => implode(', ', array_map(static fn(string $n): string => '« ' . $n . ' »', $fichiers))])
+                : '';
+            if (!empty($result['direct'])) {
+                $personneTxt = (string)$result['canal'];
+                $this->driveOutcome($convId, '✅ ' . ($lien !== ''
+                    ? t('Message direct envoyé à {personne} : [voir le message]({url}).', ['personne' => $personneTxt, 'url' => $lien])
+                    : t('Message direct envoyé à {personne}.', ['personne' => $personneTxt])) . $avecFichiers);
+                $this->driveJson(['ok' => true, 'statut' => 'executed', 'resultat' => [
+                    'nom'   => $personneTxt,
+                    'url'   => $lien,
+                    'type'  => t('Message direct Slack'),
+                    'verbe' => t('envoyé'),
+                    'extra' => ' — ' . t('visible par cette personne'),
+                ]]);
+                return;
+            }
+            $canalTxt = '#' . ltrim((string)$result['canal'], '#');
             $varsSlack = ['canal' => $canalTxt, 'url' => $lien];
             $this->driveOutcome($convId, '✅ ' . (!empty($result['fil'])
                 ? ($lien !== ''
@@ -5337,7 +5966,7 @@ class ChatController
                     : t('Réponse publiée dans un fil de {canal}. Elle est visible par les membres du canal.', ['canal' => $canalTxt]))
                 : ($lien !== ''
                     ? t('Message publié dans {canal} : [voir le message]({url}). Il est visible par les membres du canal.', $varsSlack)
-                    : t('Message publié dans {canal}. Il est visible par les membres du canal.', ['canal' => $canalTxt]))));
+                    : t('Message publié dans {canal}. Il est visible par les membres du canal.', ['canal' => $canalTxt]))) . $avecFichiers);
             $this->driveJson(['ok' => true, 'statut' => 'executed', 'resultat' => [
                 'nom'   => $canalTxt,
                 'url'   => $lien,
@@ -5375,7 +6004,9 @@ class ChatController
             ConnectorContext::record(
                 $convId,
                 'teams_conv',
-                (string)$result['ref'] . (!empty($result['fil']) ? UserTeamsService::REF_SEPARATOR . (string)$result['message'] : ''),
+                // `fil_id` = message d'ORIGINE du fil (pas la réponse créée).
+                (string)$result['ref'] . (!empty($result['fil']) && (string)($result['fil_id'] ?? '') !== ''
+                    ? UserTeamsService::REF_SEPARATOR . (string)$result['fil_id'] : ''),
                 (string)$result['conversation'],
                 ''
             );
@@ -5962,6 +6593,247 @@ class ChatController
      * de tâches actives revérifié — atteint, la carte RESTE en attente
      * (l'utilisateur peut mettre une tâche en pause puis réessayer).
      */
+    /**
+     * Tables PERMANENTES engagées pour un tour : la fiche de chaque base de
+     * nature « table » (KbTableStore), sous un nom court UNIQUE — ni celui
+     * d'une table de la conversation (`$taken`), ni celui d'une autre table
+     * permanente — et `writable` : MIA peut-elle PROPOSER d'y écrire pour
+     * cette personne (réglage de la table, droit « Bases — Modifier », base
+     * qu'elle gère). L'écriture reste sous carte ; l'accord revérifie tout.
+     * Ne lève jamais : une lecture en échec rend une liste vide.
+     *
+     * @param list<array>  $tableKbs lignes `knowledge_bases` de nature « table »
+     * @param list<string> $taken    noms des tables de la conversation
+     * @return list<array>
+     */
+    public static function permanentTablesFor(array $tableKbs, ?array $user, array $taken = []): array
+    {
+        if ($tableKbs === []) {
+            return [];
+        }
+        try {
+            $records = (new KbTableStore())->findMany(array_map(static fn(array $kb): int => (int)$kb['id'], $tableKbs));
+            $names   = array_fill_keys(array_map('strval', $taken), true);
+            $canEdit = $user !== null && Role::userCan($user, 'knowledge_bases.edit');
+            $out     = [];
+            foreach ($tableKbs as $kb) {
+                $table = $records[(int)$kb['id']] ?? null;
+                if ($table === null) {
+                    continue;
+                }
+                $base = (string)$table['name'];
+                $name = $base;
+                for ($n = 2; isset($names[$name]); $n++) {
+                    $name = substr($base, 0, WorkTableOps::NAME_MAX - 3) . '_' . $n;
+                }
+                $names[$name]      = true;
+                $table['name']     = $name;
+                $table['writable'] = $canEdit && !empty($table['mia_write'])
+                    && KnowledgeBase::manageableBy((int)$kb['id'], $user);
+                $shares = $table['writable'] ? KnowledgeBase::sharesFor((int)$kb['id']) : ['users' => [], 'groups' => []];
+                $table['shared'] = count($shares['users'] ?? []) + count($shares['groups'] ?? []);
+                $out[] = $table;
+            }
+            return $out;
+        } catch (\Throwable $e) {
+            error_log('[Tables] tables permanentes illisibles : ' . $e->getMessage());
+            return [];
+        }
+    }
+
+    /**
+     * Accord donné à une écriture dans une table permanente (carte de
+     * `modifier_table_permanente`). Tout est revérifié au moment T : la table
+     * existe, la personne peut la modifier, son propriétaire autorise encore
+     * MIA à y écrire, la table de la conversation n'a pas changé depuis la
+     * carte. Le changement est RECALCULÉ sur la table du moment
+     * (KbTableWrite::plan) et écrit comme un nouvel état de son historique —
+     * « MIA, après accord de … », ou le workflow dont la conversation est
+     * l'exécution (KbTableHistory).
+     */
+    private function approvePermanentWrite(int $convId, array $user, int $actionId, array $action): void
+    {
+        $args  = (array)$action['args'];
+        $kbId  = (int)($args['kb_id'] ?? 0);
+        $spec  = (array)($args['spec'] ?? []);
+        $fail  = function (string $log, string $message) use ($actionId, $convId): void {
+            DrivePendingAction::resolve($actionId, 'failed', $log);
+            $this->driveOutcome($convId, '⚠️ ' . t('Table non modifiée : {erreur}', ['erreur' => $message]));
+            $this->driveJson(['ok' => false, 'error' => $message]);
+        };
+
+        $store = new KbTableStore();
+        $kb    = $kbId > 0 ? KnowledgeBase::findById($kbId) : null;
+        $table = $kb !== null && KnowledgeBase::isTable($kb) ? $store->find($kbId) : null;
+        if ($table === null) {
+            $fail('Table disparue.', t('cette table n’existe plus.'));
+            return;
+        }
+        if (!Role::userCan($user, 'knowledge_bases.edit') || !KnowledgeBase::manageableBy($kbId, $user)) {
+            $fail('Droit de modifier la table retiré.', t('vous ne pouvez plus modifier cette table.'));
+            return;
+        }
+        if (empty($table['mia_write'])) {
+            $fail('Table passée en lecture seule.', t('elle est passée en lecture seule pour MIA (réglage de sa fiche).'));
+            return;
+        }
+        // Valeurs calculées sur les lignes de la table elle-même (enrichissement
+        // sans copie) : chaque ligne est désignée par sa POSITION. La table ne
+        // doit pas avoir changé depuis le calcul — une ligne ajoutée ou
+        // supprimée décalerait tout.
+        if (KbTableWrite::byLine($spec) && (string)($args['target_stamp'] ?? '') !== KbTableStore::stamp($table)) {
+            $fail('Table changée depuis le calcul.', t('« {nom} » a changé depuis le calcul : ses lignes ne sont peut-être plus à la même place. Redemandez l’opération.', [
+                'nom' => (string)$table['title'],
+            ]));
+            return;
+        }
+        // Mode direct (définir, ajouter des lignes données, supprimer, colonne) :
+        // aucune table de la conversation à relire. Sinon, la table source
+        // doit être restée telle que la carte l'a montrée.
+        $sourceColumns = [];
+        $sourceRows    = [];
+        $sourceId      = (int)($args['source_id'] ?? 0);
+        if ($sourceId > 0) {
+            $work   = new SqlWorkTableStore();
+            $source = $work->findById($convId, $sourceId);
+            if ($source === null || WorkTableOps::stateStamp($source) !== (string)($args['source_stamp'] ?? '')) {
+                $fail('Table source changée ou disparue.', t('la liste « {nom} » a changé depuis la préparation. Redemandez la modification.', [
+                    'nom' => (string)($args['source'] ?? ''),
+                ]));
+                return;
+            }
+            $sourceColumns = (array)$source['columns'];
+            $sourceRows    = $work->rows($sourceId);
+        } elseif (KbTableWrite::usesSource((string)($spec['mode'] ?? ''), ['lignes' => $spec['inline']['rows'] ?? null])) {
+            $fail('Table source absente de la carte.', t('la liste préparée a disparu depuis la carte. Redemandez la modification.'));
+            return;
+        }
+
+        try {
+            $plan = KbTableWrite::plan((array)$table['columns'], $store->rows($kbId), $sourceColumns, $sourceRows, $spec);
+            if (!KbTableWrite::changes($plan)) {
+                DrivePendingAction::resolve($actionId, 'executed');
+                $this->driveOutcome($convId, '✅ ' . t('Table « {nom} » : rien à écrire, elle porte déjà ces valeurs.', ['nom' => (string)$table['title']]));
+                $this->driveJson(['ok' => true, 'statut' => 'executed', 'resultat' => ['nom' => (string)$table['title'], 'type' => t('Table'), 'verbe' => t('inchangée')]]);
+                return;
+            }
+            $reason  = KbTableWrite::reason($spec, $plan);
+            $written = $store->replace($kbId, $plan['columns'], $plan['rows'], null, (int)$user['id'],
+                self::permanentWriteChange($convId, $spec, $plan), KbTableStore::stamp($table));
+        } catch (KbTableTooLargeException | \InvalidArgumentException $e) {
+            $fail($e->getMessage(), $e->getMessage());
+            return;
+        }
+        if ($written === null || !empty($written['stale'])) {
+            DrivePendingAction::release($actionId);
+            $this->driveJson(['ok' => false, 'retryable' => true, 'error' => t('La table vient d’être modifiée par quelqu’un d’autre. Approuvez à nouveau : le changement sera recalculé.')]);
+            return;
+        }
+        $url = '/admin/knowledge-bases/' . $kbId . '?historique=1';
+        DrivePendingAction::resolve($actionId, 'executed', null, null, $url);
+        error_log('[Tables] table permanente #' . $kbId . ' modifiée par MIA (' . $reason . ') — accord de #' . (int)$user['id'] . ', conversation #' . $convId);
+        $this->driveOutcome($convId, '✅ ' . t('Table « {nom} » modifiée : {quoi}. On peut revenir en arrière depuis [son historique]({url}).', [
+            'nom'  => (string)$table['title'],
+            'quoi' => mb_strtolower(mb_substr($reason, 0, 1)) . mb_substr($reason, 1),
+            'url'  => $url,
+        ]));
+        $this->driveJson(['ok' => true, 'statut' => 'executed', 'resultat' => [
+            'nom'   => (string)$table['title'],
+            'url'   => $url,
+            'type'  => t('Table'),
+            'verbe' => t('modifiée'),
+        ]]);
+    }
+
+    /**
+     * Fin d'un enrichissement de fond fait SANS COPIE sur une table
+     * permanente : les valeurs calculées (brouillon interne) sont proposées
+     * dans une carte `modifier_table_permanente`, rattachée au bilan. Rien
+     * n'est écrit avant l'accord, qui revérifie tout (approvePermanentWrite).
+     * Carte gardée une semaine : la personne n'était peut-être pas là.
+     * Ne lève jamais ; rend l'identifiant de la carte, ou 0.
+     *
+     * @param array{kb_id:int, stamp:string, title:string} $report
+     * @param list<string> $newKeys colonnes remplies
+     */
+    public static function depositTableReport(int $convId, array $user, int $draftId, array $report, array $newKeys, int $messageId = 0): int
+    {
+        try {
+            $store = new KbTableStore();
+            $kbId  = (int)($report['kb_id'] ?? 0);
+            $perm  = $kbId > 0 ? $store->find($kbId) : null;
+            $work  = new SqlWorkTableStore();
+            $draft = $work->findById($convId, $draftId);
+            if ($perm === null || $draft === null || $newKeys === []) {
+                return 0;
+            }
+            $spec = KbTableWrite::lineUpdateSpec($newKeys);
+            $plan = KbTableWrite::plan((array)$perm['columns'], $store->rows($kbId), (array)$draft['columns'], $work->rows($draftId), $spec);
+            if (!KbTableWrite::changes($plan)) {
+                return 0;
+            }
+            $shares = KnowledgeBase::sharesFor($kbId);
+            $id = DrivePendingAction::create((int)$user['id'], $convId, WorkTableTools::PERM_WRITE, [
+                'kb_id'        => $kbId,
+                'table'        => (string)$perm['title'],
+                'source_id'    => $draftId,
+                'source'       => (string)$draft['name'],
+                'source_stamp' => WorkTableOps::stateStamp($draft),
+                'target_stamp' => (string)($report['stamp'] ?? ''),
+                'spec'         => $spec,
+            ], KbTableWrite::preview($perm, $spec, $plan, t('le calcul de MIA'), count($shares['users'] ?? []) + count($shares['groups'] ?? [])));
+            DrivePendingAction::extend($id, (int)$user['id'], ScheduledTask::ACTION_TTL_MINUTES);
+            if ($messageId > 0) {
+                DrivePendingAction::attachToMessage([$id], $messageId, (int)$user['id']);
+            }
+            return $id;
+        } catch (\Throwable $e) {
+            error_log('[Tables] carte d\'écriture après enrichissement impossible (conversation ' . $convId . ') : ' . $e->getMessage());
+            return 0;
+        }
+    }
+
+    /**
+     * Ce que l'historique de la table retient d'une écriture approuvée : MIA
+     * (et la conversation) ou le workflow dont cette conversation est une
+     * exécution, avec le mode et les compteurs du plan (KbTableWrite) — la
+     * phrase est écrite à l'affichage, dans la langue de l'écran.
+     */
+    private static function permanentWriteChange(int $convId, array $spec, array $plan): array
+    {
+        $stats  = (array)($plan['stats'] ?? []);
+        $detail = ['mode' => (string)($spec['mode'] ?? '')];
+        foreach (['touched', 'added', 'deleted', 'after'] as $k) {
+            $detail[$k] = (int)($stats[$k] ?? 0);
+        }
+        foreach (['columns_added', 'columns_dropped', 'columns_renamed'] as $k) {
+            $detail[$k] = array_values(array_map('strval', (array)($stats[$k] ?? [])));
+        }
+        try {
+            $stmt = Database::getInstance()->prepare(
+                'SELECT c.title, r.id AS run_id, w.name AS workflow
+                   FROM conversations c
+                   LEFT JOIN workflow_runs r ON r.id = c.workflow_run_id
+                   LEFT JOIN workflows w ON w.id = r.workflow_id
+                  WHERE c.id = ?'
+            );
+            $stmt->execute([$convId]);
+            $conv = $stmt->fetch(\PDO::FETCH_ASSOC) ?: [];
+        } catch (\Throwable $e) {
+            $conv = [];
+        }
+        if (!empty($conv['run_id'])) {
+            return KbTableHistory::change(KbTableHistory::KIND_WORKFLOW, $detail + [
+                'workflow' => (string)($conv['workflow'] ?? ''),
+                'run'      => (int)$conv['run_id'],
+            ]);
+        }
+        return KbTableHistory::change(KbTableHistory::KIND_MIA, $detail + [
+            'conversation' => $convId,
+            'title'        => mb_substr((string)($conv['title'] ?? ''), 0, 120),
+        ]);
+    }
+
     private function approveScheduledTask(int $convId, array $user, int $actionId, array $action): void
     {
         $userId = (int)$user['id'];
@@ -6178,6 +7050,13 @@ class ChatController
 
     private function driveOutcome(int $convId, string $content): array
     {
+        // Action d'une opération de fond sur une table : son issue est notée
+        // dans la table (une ligne = un résultat), pas dans le fil — deux
+        // cents messages « ✅ Brouillon créé » le rendraient illisible.
+        if ($this->silentOutcome) {
+            $this->driveOutcome = ['id' => 0, 'content' => $content];
+            return $this->driveOutcome;
+        }
         // Action exécutée sans validation (tâche programmée) : l'issue rejoint
         // le relevé du tour — UN message tenu à jour, au lieu d'un par action.
         $row = $this->autoRecording
@@ -6329,6 +7208,125 @@ class ChatController
             DrivePendingAction::abandon($actionId, (string)($data['error'] ?? ''));
         }
         return $data;
+    }
+
+    /**
+     * UNE action d'une action groupée sur une table de travail, exécutée par
+     * l'opération de fond (TableMissionJob) : rendue à l'attente puis décidée
+     * par le chemin d'un clic « Approuver » (decideAction : réservation,
+     * fonctionnalité, connexion et droits re-vérifiés au moment T). La
+     * personne a approuvé le groupe ; l'issue ne va pas dans le fil
+     * (silentOutcome) mais dans la table. Un email reste un BROUILLON :
+     * jamais `send`. Rend la réponse de la décision ; une action qui n'est
+     * plus en réserve (déjà faite par une opération rejouée, écartée) rend
+     * `skipped`.
+     */
+    public function decideForTable(int $convId, array $user, int $actionId): array
+    {
+        if (!DrivePendingAction::releaseHeld($actionId, (int)$user['id'], $convId)) {
+            return ['ok' => false, 'skipped' => true, 'error' => t('Action déjà traitée ou écartée.')];
+        }
+        $this->silentOutcome = true;
+        try {
+            $data = $this->decideKept($convId, $user, $actionId, 'approve', false);
+        } finally {
+            $this->silentOutcome = false;
+        }
+        if (!empty($data['retryable'])) {
+            DrivePendingAction::abandon($actionId, (string)($data['error'] ?? ''));
+        }
+        return $data;
+    }
+
+    /**
+     * Accord donné à une opération de fond sur une table de travail : elle
+     * part dans la file (job `table_mission`), le message ⏳ reste dans la
+     * conversation et le bilan y arrivera. Une seule opération à la fois par
+     * conversation : la carte attend si une autre tourne encore.
+     */
+    private function approveTableMission(int $convId, array $user, int $actionId, array $action): void
+    {
+        $tool  = (string)$action['tool'];
+        $args  = (array)$action['args'];
+        $table = (new SqlWorkTableStore())->findById($convId, (int)($args['table_id'] ?? 0));
+        $heldIds = array_map(static fn($it): int => (int)($it[1] ?? 0), (array)($args['items'] ?? []));
+        if ($table === null) {
+            DrivePendingAction::resolve($actionId, 'failed', 'Table de travail disparue.');
+            DrivePendingAction::cancelHeld($heldIds, (int)$user['id'], 'Table de travail disparue.');
+            $this->driveJson(['ok' => false, 'error' => t('Cette table n’existe plus : l’opération n’a pas été lancée.')]);
+            return;
+        }
+        $dedup = 'table_mission:' . $convId;
+        if (JobQueue::activeByDedupKey($dedup) !== null) {
+            DrivePendingAction::release($actionId);
+            $this->driveJson(['ok' => false, 'retryable' => true, 'error' => t('Une opération est déjà en cours sur les tables de cette conversation. Attendez sa fin, puis approuvez celle-ci.')]);
+            return;
+        }
+
+        if ($tool === WorkTableTools::ENRICH) {
+            $llm = (string)($args['llm'] ?? '');
+            if ($llm === '' || !isset(LLMFactory::available()[$llm])) {
+                DrivePendingAction::resolve($actionId, 'failed', 'Modèle indisponible.');
+                $this->driveJson(['ok' => false, 'error' => t('Le modèle prévu pour cet enrichissement n’est plus disponible. Redemandez l’enrichissement.')]);
+                return;
+            }
+            $rows    = (int)($args['rows'] ?? 0);
+            $started = WorkTableEnricher::startedMessage($rows, (string)$table['title']);
+            $label   = t('Enrichissement de « {table} »', ['table' => (string)$table['title']]);
+            $payload = [
+                'op'       => 'enrich',
+                'table_id' => (int)$table['id'],
+                'spec'     => (array)($args['spec'] ?? []),
+                'llm'      => $llm,
+                'cap'      => isset($args['cap']) && is_numeric($args['cap']) ? (int)$args['cap'] : null,
+                // Table permanente enrichie sans copie : à la fin, une carte propose d'y écrire les valeurs.
+                'report'   => is_array($args['report'] ?? null) ? (array)$args['report'] : null,
+            ];
+            $resultat = [
+                'nom'   => (string)$table['title'],
+                'url'   => '',
+                'type'  => t('Enrichissement'),
+                'verbe' => t('lancé'),
+                'extra' => ' — ' . t('en cours, le bilan sera ajouté à la conversation'),
+            ];
+        } else {
+            $target = (string)($args['tool'] ?? '');
+            $items  = array_values(array_filter(
+                array_map(static fn($it): array => [(int)($it[0] ?? -1), (int)($it[1] ?? 0)], (array)($args['items'] ?? [])),
+                static fn(array $it): bool => $it[0] >= 0 && $it[1] > 0
+            ));
+            if (!WorkTableActions::isAllowed($target) || $items === []) {
+                DrivePendingAction::resolve($actionId, 'failed', 'Action groupée illisible.');
+                DrivePendingAction::cancelHeld($heldIds, (int)$user['id'], 'Action groupée illisible.');
+                $this->driveJson(['ok' => false, 'error' => t('Cette action groupée ne peut pas être lancée. Redemandez-la.')]);
+                return;
+            }
+            $started = WorkTableActions::startedMessage($target, count($items), (string)$table['title']);
+            $label   = WorkTableActions::countLabel($target, count($items)) . ' — ' . (string)$table['title'];
+            $payload = [
+                'op'       => 'act',
+                'table_id' => (int)$table['id'],
+                'tool'     => $target,
+                'items'    => $items,
+            ];
+            $resultat = [
+                'nom'   => (string)$table['title'],
+                'url'   => '',
+                'type'  => WorkTableActions::countLabel($target, count($items)),
+                'verbe' => t('en préparation'),
+                'extra' => ' — ' . t('création en cours, le bilan sera ajouté à la conversation'),
+            ];
+        }
+
+        DrivePendingAction::resolve($actionId, 'executed');
+        // Visible au rechargement même si l'opération n'a pas commencé.
+        $status = $this->driveOutcome($convId, $started);
+        $jobId  = JobQueue::enqueue('table_mission', (int)$user['id'], $convId, $payload + [
+            'status_msg_id' => (int)($status['id'] ?? 0),
+            // La table à montrer sous le bilan : celle de la personne, jamais un brouillon interne.
+            'ref'           => WorkTableView::displayRef($table),
+        ], $label, $dedup);
+        $this->driveRespondAndDispatch(['ok' => true, 'statut' => 'executed', 'job_id' => $jobId, 'job_type' => 'table_mission', 'resultat' => $resultat], $jobId);
     }
 
     /** Réponse d'une décision : au navigateur, ou gardée pour le lot. */
@@ -6751,7 +7749,86 @@ class ChatController
                 continue; // modèle live : pas de détection de tour, donc pas de tour à envoyer
             }
             $out[] = [$model, ['type' => 'semantic_vad', 'eagerness' => 'medium']];
-            $out[] = [$model, ['type' => 'server_vad', 'silence_duration_ms' => 900, 'prefix_padding_ms' => 300]];
+            // Seuil écrit en toutes lettres (c'est le défaut d'OpenAI) : la
+            // détection de la lecture le relève, et un `session.update` ne
+            // remet pas à sa valeur un champ qu'il ne nomme pas.
+            $out[] = [$model, ['type' => 'server_vad', 'threshold' => 0.5, 'silence_duration_ms' => 900, 'prefix_padding_ms' => 300]];
+        }
+        return $out;
+    }
+
+    /**
+     * Détection de fin de tour PENDANT QUE MIA LIT (interruption à la voix),
+     * pour une session ouverte avec la détection `$base`.
+     *
+     * La détection de la session est faite pour écouter une DEMANDE, et elle y
+     * est bonne (mesuré contre l'API le 2026-11-13, voix synthétique envoyée au
+     * rythme réel : une question complète est rendue ~1 s après sa fin, une
+     * phrase hésitante attend ~4 s). Mais un ordre court — « Stop. »,
+     * « Attends. » — n'« a pas l'air fini » : la sémantique `medium` attendait
+     * son délai maximal, et le texte n'arrivait que ~5 s après le mot, pendant
+     * que MIA continuait de parler. Le navigateur pose donc cette détection-ci
+     * le temps de la lecture (`session.update`, cf. setTurnDetection de
+     * chat.js), puis revient à celle de la session pour écouter.
+     *
+     * C'est le REPLI : la conversation ouvre d'abord une seconde session, au
+     * silence court dès sa création (interruptionSessionCandidates), et ne
+     * change la détection de la session d'écoute que si cette seconde session
+     * n'a pas pu s'ouvrir.
+     *
+     * TOUJOURS DU MÊME TYPE que `$base` — constaté contre l'API : une session
+     * passée en sémantique IGNORE un retour à la détection au silence (le
+     * `session.updated` rendu garde l'ancienne, sans erreur), alors qu'un
+     * réglage du même type s'applique.
+     *   - sémantique → empressement `high` : texte ~2,9 s après le mot (au lieu
+     *     de ~5 s) ; la voix, elle, baisse dès la parole détectée (~0,45 s) ;
+     *   - au silence → 350 ms, seuil 0,6 : texte 0,6 à 1 s après le mot. Seuil
+     *     relevé : le micro entend aussi un reste de la voix de MIA, qui ne
+     *     doit pas ouvrir un tour à lui seul.
+     *
+     * @param  array<string,mixed> $base détection de la session (un candidat de conversationSessionCandidates)
+     * @return array<string,mixed>
+     */
+    public static function interruptionTurnDetection(array $base): array
+    {
+        if (($base['type'] ?? '') === 'semantic_vad') {
+            return ['type' => 'semantic_vad', 'eagerness' => 'high'];
+        }
+        return ['type' => 'server_vad', 'threshold' => 0.6, 'silence_duration_ms' => 350, 'prefix_padding_ms' => 300];
+    }
+
+    /**
+     * Candidats de la session d'INTERRUPTION : la SECONDE session Realtime
+     * que la conversation vocale ouvre pour entendre un « stop » pendant que
+     * MIA lit (`purpose=interruption`, cf. l'IIFE « Conversation vocale » de
+     * chat.js).
+     *
+     * Pourquoi une session à part : la session d'écoute est sémantique (elle
+     * laisse finir une phrase, et c'est ce qu'il faut pour une demande), et
+     * OpenAI IGNORE un passage à la détection au silence en cours de session
+     * (cf. interruptionTurnDetection). Le mieux qu'elle sache faire pour un
+     * ordre court est ~2,9 s après le mot. Une session OUVERTE au silence
+     * court (350 ms) le rend 0,6 à 1 s après (mesuré contre l'API le
+     * 2026-11-13). Le micro n'y part que pendant la lecture, et n'est alors
+     * plus envoyé à la session d'écoute : les minutes écoutées sont les
+     * mêmes, seules deux sessions sont ouvertes.
+     *
+     * Modèles PAR TOUR seulement, comme la conversation ; la détection est
+     * celle d'interruptionTurnDetection pour une session au silence — une
+     * seule définition du « silence court ». Pure, dérivée de
+     * TRANSCRIPTION_MODELS.
+     *
+     * @return list<array{0:string, 1:array}> [modèle, turn_detection]
+     */
+    public static function interruptionSessionCandidates(): array
+    {
+        $court = self::interruptionTurnDetection(['type' => 'server_vad']);
+        $out = [];
+        foreach (self::TRANSCRIPTION_MODELS as $model => $turnDetection) {
+            if ($turnDetection === null) {
+                continue; // modèle live : aucune détection de tour, donc aucun tour à lire
+            }
+            $out[] = [$model, $court];
         }
         return $out;
     }
@@ -6864,19 +7941,25 @@ class ChatController
         AuthMiddleware::refreshUser();
         $user = Session::currentUser();
 
-        // Deux usages de la même session : la DICTÉE (texte dans le champ) et
-        // la CONVERSATION vocale (tours envoyés, réponse lue). Chacun a son
-        // interrupteur d'administration (cartes de la page Outils) et sa
-        // chaîne de candidats — le client dit lequel il ouvre.
-        $conversation = (($_POST['purpose'] ?? '') === 'conversation');
+        // Trois usages de la même session : la DICTÉE (texte dans le champ),
+        // la CONVERSATION vocale (tours envoyés, réponse lue) et son
+        // INTERRUPTION (seconde session, au silence court, où le micro part
+        // pendant que MIA lit — cf. interruptionSessionCandidates). Dictée et
+        // conversation ont chacune leur interrupteur d'administration (cartes
+        // de la page Outils) ; l'interruption suit celui de la conversation.
+        // Chaque usage a sa chaîne de candidats — le client dit lequel il ouvre.
+        $purpose      = (string)($_POST['purpose'] ?? '');
+        $conversation = ($purpose === 'conversation');
+        $interruption = ($purpose === 'interruption');
+        $voiceChat    = $conversation || $interruption;
 
         // Réglage coupé par l'administrateur : le bouton disparaît du chat,
         // mais la route restait ouverte à qui l'appelait.
-        if ($conversation && !SpeechSynthesizer::isEnabled()) {
+        if ($voiceChat && !SpeechSynthesizer::isEnabled()) {
             $this->json(['error' => t('La conversation vocale est désactivée par l\'administrateur.')], 403);
             return;
         }
-        if (!$conversation && Settings::get('mic_enabled', '1') !== '1') {
+        if (!$voiceChat && Settings::get('mic_enabled', '1') !== '1') {
             $this->json(['error' => t('La dictée vocale est désactivée par l\'administrateur.')], 403);
             return;
         }
@@ -6911,9 +7994,12 @@ class ChatController
         $expires    = null;
 
         // Dictée : la chaîne historique (live d'abord). Conversation : les
-        // modèles par tour, en VAD sémantique puis serveur.
+        // modèles par tour, en VAD sémantique puis serveur. Interruption : les
+        // mêmes modèles, au silence court.
         $candidates = [];
-        if ($conversation) {
+        if ($interruption) {
+            $candidates = self::interruptionSessionCandidates();
+        } elseif ($conversation) {
             $candidates = self::conversationSessionCandidates();
         } else {
             foreach (self::TRANSCRIPTION_MODELS as $model => $turnDetection) {
@@ -6924,6 +8010,12 @@ class ChatController
         // anglophone qui dicte en anglais n'a rien à faire d'un décodage
         // forcé en français.
         $language = I18n::isSupported(I18n::locale()) ? I18n::locale() : 'fr';
+
+        // Session PHP rendue AVANT les appels à OpenAI (jusqu'à 15 s par
+        // candidat) : la conversation vocale ouvre sa seconde session pendant
+        // que l'on parle déjà — verrou gardé, l'envoi du premier message
+        // attendrait derrière elle. Plus rien n'y est écrit ensuite.
+        session_write_close();
 
         foreach ($candidates as [$model, $turnDetection]) {
             $body = json_encode([
@@ -7014,7 +8106,84 @@ class ChatController
             // Sert au message d'attente côté client, pas à la mécanique.
             'live'          => $usedVad === null,
             'turn_detection' => $usedVad['type'] ?? null,
+            // Conversation : la détection de la session et celle, courte, que
+            // le navigateur pose pendant la lecture (interruption à la voix).
+            // Servies d'ici : aucun réglage de détection recopié en JavaScript.
+            'turn_detections' => ($conversation && is_array($usedVad))
+                ? ['base' => $usedVad, 'fast' => self::interruptionTurnDetection($usedVad)]
+                : null,
         ]);
+    }
+
+    /**
+     * Dictée avec Voxtral (moteur `mistral`, cf. Dictation) : le navigateur
+     * envoie UNE phrase — un court WAV 16 kHz mono découpé à la pause — et
+     * reçoit son texte. Le serveur relaie à Mistral avec la clé de
+     * l'instance (jamais exposée au navigateur) et facture la durée que
+     * MISTRAL a mesurée, pas une durée rapportée par le client.
+     *
+     * Mêmes gardes que l'ouverture d'une session OpenAI : réglage de
+     * l'administrateur, moteur en vigueur, quota AVANT l'appel payant.
+     */
+    public function dictationTranscribe(): void
+    {
+        AuthMiddleware::requireAuth();
+        $user = Session::currentUser();
+
+        if (Settings::get('mic_enabled', '1') !== '1') {
+            $this->json(['error' => t('La dictée vocale est désactivée par l\'administrateur.')], 403);
+            return;
+        }
+        if (Dictation::engine() !== Dictation::ENGINE_MISTRAL) {
+            $this->json(['error' => t('La dictée ne passe pas par Voxtral sur cette instance. Rechargez la page.')], 409);
+            return;
+        }
+        $quotaStatus = $this->currentCreditQuotaStatus($user);
+        if ($this->isCreditQuotaExceeded($quotaStatus)) {
+            $this->json(['quota_exceeded' => true, 'quota_status' => $quotaStatus], 429);
+            return;
+        }
+
+        $file = $_FILES['audio'] ?? null;
+        if (!is_array($file) || (int)($file['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_OK
+            || (int)($file['size'] ?? 0) > Dictation::MAX_UPLOAD_BYTES) {
+            $this->json(['error' => t('Enregistrement illisible ou trop long.')], 422);
+            return;
+        }
+        $audio = (string)@file_get_contents((string)$file['tmp_name']);
+        if (!Dictation::looksLikeWav($audio) || strlen($audio) > Dictation::MAX_UPLOAD_BYTES) {
+            $this->json(['error' => t('Enregistrement illisible ou trop long.')], 422);
+            return;
+        }
+        if (strlen($audio) < Dictation::MIN_AUDIO_BYTES) {
+            $this->json(['ok' => true, 'text' => '']);
+            return;
+        }
+        $convId = (int)($_POST['conversation_id'] ?? 0);
+        if ($convId > 0 && !Conversation::belongsToUser($convId, (int)$user['id'])) {
+            $convId = 0;
+        }
+
+        // L'appel dure une à deux secondes : la session ne bloque pas les
+        // autres requêtes de la personne (la phrase suivante, le chat).
+        session_write_close();
+        try {
+            $result = Dictation::transcribeMistral(
+                $audio,
+                (string)(ApiKey::getDecrypted('mistral') ?? ''),
+                Dictation::languageFor(I18n::locale())
+            );
+        } catch (\RuntimeException $e) {
+            $this->jsonSpeechError($e);
+            return;
+        }
+
+        UsageMeter::transcription($result['model'], $result['seconds'], [
+            'user_id'         => (int)$user['id'],
+            'conversation_id' => $convId > 0 ? $convId : null,
+        ], 'mistral');
+
+        $this->json(['ok' => true, 'text' => $result['text'], 'model' => $result['model']]);
     }
 
     /**
@@ -7061,6 +8230,11 @@ class ChatController
         'vc_restored'         => 'Version précédente rétablie.',
         'vc_ok'               => 'D\'accord.',
         'vc_bye'              => 'À bientôt.',
+        // Connecteur allumé ou éteint à la voix (« active Gmail »).
+        'vc_connector_on'       => 'C\'est activé.',
+        'vc_connector_off'      => 'C\'est désactivé.',
+        'vc_connector_unlinked' => 'Ce service n\'est pas relié à votre compte. Reliez-le dans les réglages, comptes connectés.',
+        'vc_connector_model'    => 'Le modèle choisi ne sait pas utiliser les connecteurs. Changez de modèle, puis redemandez.',
     ];
 
     /** Phrase d'un retour d'ordre vocal, dans la langue courante ; '' si le type est inconnu. */
@@ -7140,7 +8314,7 @@ class ChatController
     public static function voiceCardWords(bool $mail): string
     {
         return $mail
-            ? "« envoyer », « créer le brouillon », une retouche (« plus court », « plus formel »…) ou « abandonner »"
+            ? "« envoyer », « créer le brouillon », « lis-le » pour l'entendre, une retouche (« plus court », « plus formel »…) ou « abandonner »"
             : "« approuver » ou « annuler »";
     }
 
@@ -7196,8 +8370,13 @@ class ChatController
             return;
         }
         $locale = I18n::locale();
+        [$engine, $apiKey] = $this->speechEngineAndKey();
+        if ($engine === null) {
+            $this->json(['error' => t('Aucune voix de lecture n\'est disponible : la clé de son fournisseur manque.')], 503);
+            return;
+        }
 
-        $audio  = SpeechSynthesizer::readCachedCue($phrase, $locale);
+        $audio  = SpeechSynthesizer::readCachedCue($engine, $phrase, $locale);
         $cached = $audio !== null;
         if (!$cached) {
             $quotaStatus = $this->currentCreditQuotaStatus($user);
@@ -7205,14 +8384,9 @@ class ChatController
                 $this->json(['quota_exceeded' => true, 'quota_status' => $quotaStatus], 429);
                 return;
             }
-            $apiKey = ApiKey::getDecrypted('openai');
-            if (!$apiKey) {
-                $this->json(['error' => 'Clé OpenAI absente'], 503);
-                return;
-            }
             session_write_close();
             try {
-                $result = SpeechSynthesizer::synthesizeCached($phrase, $apiKey, $locale);
+                $result = SpeechSynthesizer::synthesizeCached($engine, $phrase, $apiKey, $locale);
             } catch (\RuntimeException $e) {
                 error_log('[speech] annonce « ' . $type . ' » : ' . $e->getMessage());
                 $this->jsonSpeechError($e);
@@ -7220,16 +8394,83 @@ class ChatController
             }
             $audio = $result['audio'];
             if (!$result['cached']) {
-                UsageMeter::speech($result['model'], (float)$result['seconds'], ['user_id' => (int)$user['id']]);
+                UsageMeter::speech($result['model'], (float)$result['seconds'], ['user_id' => (int)$user['id']], $result['provider'], (int)$result['chars']);
             }
         }
 
         http_response_code(200);
-        header('Content-Type: audio/mpeg');
+        header('Content-Type: ' . SpeechSynthesizer::mimeOf($engine));
         header('Cache-Control: private, max-age=604800');
         header('X-Speech-Cached: ' . ($cached ? '1' : '0'));
         header('Content-Length: ' . strlen($audio));
         echo $audio;
+    }
+
+    /**
+     * Lecture à voix haute d'une carte en attente (`POST /chat/{id}/voice/card`,
+     * conversation vocale, « lis-le ») : l'audio de ce que la carte affiche —
+     * pour un email, à qui il part, son objet et son texte.
+     *
+     * Le texte est RELU EN BASE, dans l'aperçu de l'action en attente
+     * (SpeechSynthesizer::cardText) : jamais reçu du navigateur, même règle
+     * que la lecture d'une réponse. Mêmes gardes, dans le même ordre :
+     * réglage → conversation de la personne → action en attente → quota AVANT
+     * l'appel payant → synthèse → facturation de l'audio reçu. 204 : rien à
+     * lire (carte déjà tranchée ou expirée, aperçu vide).
+     */
+    public function voiceCard(string $id): void
+    {
+        AuthMiddleware::requireAuth();
+        AuthMiddleware::refreshUser();
+        $user   = Session::currentUser();
+        $convId = (int)$id;
+
+        if (!SpeechSynthesizer::isEnabled()) {
+            $this->json(['error' => t('La conversation vocale est désactivée par l\'administrateur.')], 403);
+            return;
+        }
+        if (!Conversation::belongsToUser($convId, (int)$user['id'])) {
+            $this->json(['error' => 'Accès refusé'], 403);
+            return;
+        }
+
+        $action = DrivePendingAction::findPending((int)($_POST['action_id'] ?? 0), (int)$user['id'], $convId);
+        $text   = $action ? SpeechSynthesizer::cardText((array)$action['preview']) : '';
+        if ($text === '') {
+            http_response_code(204);
+            return;
+        }
+
+        $quotaStatus = $this->currentCreditQuotaStatus($user);
+        if ($this->isCreditQuotaExceeded($quotaStatus)) {
+            $this->json(['quota_exceeded' => true, 'quota_status' => $quotaStatus], 429);
+            return;
+        }
+        [$engine, $apiKey] = $this->speechEngineAndKey();
+        if ($engine === null) {
+            $this->json(['error' => t('Aucune voix de lecture n\'est disponible : la clé de son fournisseur manque.')], 503);
+            return;
+        }
+
+        session_write_close();
+        try {
+            $result = SpeechSynthesizer::speak($engine, mb_substr($text, 0, SpeechSynthesizer::MAX_INPUT_CHARS), $apiKey, I18n::locale());
+        } catch (\RuntimeException $e) {
+            error_log('[speech] carte ' . (int)$action['id'] . ' : ' . $e->getMessage());
+            $this->jsonSpeechError($e);
+            return;
+        }
+
+        UsageMeter::speech($result['model'], (float)$result['seconds'], [
+            'user_id'         => (int)$user['id'],
+            'conversation_id' => $convId,
+        ], $result['provider'], (int)$result['chars']);
+
+        http_response_code(200);
+        header('Content-Type: ' . $result['mime']);
+        header('Cache-Control: no-store');
+        header('Content-Length: ' . strlen($result['audio']));
+        echo $result['audio'];
     }
 
     /**
@@ -7384,9 +8625,9 @@ class ChatController
             return;
         }
 
-        $apiKey = ApiKey::getDecrypted('openai');
-        if (!$apiKey) {
-            $this->json(['error' => 'Clé OpenAI absente'], 503);
+        [$engine, $apiKey] = $this->speechEngineAndKey();
+        if ($engine === null) {
+            $this->json(['error' => t('Aucune voix de lecture n\'est disponible : la clé de son fournisseur manque.')], 503);
             return;
         }
 
@@ -7411,7 +8652,7 @@ class ChatController
         // l'onglet puisse continuer à converser (envoi, jeton Realtime…).
         session_write_close();
         try {
-            $result = SpeechSynthesizer::synthesize($parts[$part], $apiKey);
+            $result = SpeechSynthesizer::speak($engine, $parts[$part], $apiKey, I18n::locale());
         } catch (\RuntimeException $e) {
             error_log('[speech] message ' . (int)$msg['id'] . ' partie ' . $part . ' : ' . $e->getMessage());
             $this->jsonSpeechError($e);
@@ -7422,10 +8663,10 @@ class ChatController
             'user_id'         => (int)$user['id'],
             'conversation_id' => (int)$msg['conversation_id'],
             'message_id'      => (int)$msg['id'],
-        ]);
+        ], $result['provider'], (int)$result['chars']);
 
         http_response_code(200);
-        header('Content-Type: audio/mpeg');
+        header('Content-Type: ' . $result['mime']);
         header('Cache-Control: no-store');
         header('X-Speech-Part: ' . $part);
         header('X-Speech-Parts: ' . count($parts));
@@ -7499,9 +8740,9 @@ class ChatController
             return;
         }
 
-        $apiKey = ApiKey::getDecrypted('openai');
-        if (!$apiKey) {
-            $this->json(['error' => 'Clé OpenAI absente'], 503);
+        [$engine, $apiKey] = $this->speechEngineAndKey();
+        if ($engine === null) {
+            $this->json(['error' => t('Aucune voix de lecture n\'est disponible : la clé de son fournisseur manque.')], 503);
             return;
         }
 
@@ -7509,7 +8750,7 @@ class ChatController
         // continue d'écouter le flux, de demander le passage suivant…).
         session_write_close();
         try {
-            $result = SpeechSynthesizer::synthesize($segment['text'], $apiKey);
+            $result = SpeechSynthesizer::speak($engine, $segment['text'], $apiKey, I18n::locale());
         } catch (\RuntimeException $e) {
             error_log('[speech] réponse en direct, génération ' . (int)$job['id'] . ' : ' . $e->getMessage());
             $this->jsonSpeechError($e);
@@ -7520,10 +8761,10 @@ class ChatController
             'user_id'         => (int)$user['id'],
             'conversation_id' => $convId,
             'message_id'      => $reply['msg_id'],
-        ]);
+        ], $result['provider'], (int)$result['chars']);
 
         http_response_code(200);
-        header('Content-Type: audio/mpeg');
+        header('Content-Type: ' . $result['mime']);
         header('Cache-Control: no-store');
         header('X-Speech-Next: ' . $segment['to']);
         header('X-Speech-Final: ' . ($final && $segment['to'] >= strlen($reply['text']) ? '1' : '0'));
@@ -7532,6 +8773,22 @@ class ChatController
         header('X-Speech-Credits: ' . (int)$usage['total_credits']);
         header('Content-Length: ' . strlen($result['audio']));
         echo $result['audio'];
+    }
+
+    /**
+     * Voix de lecture en vigueur (SpeechSynthesizer::engine) et la clé de
+     * son fournisseur — [null, ''] quand aucune voix ne peut parler.
+     *
+     * @return array{0:?string, 1:string}
+     */
+    private function speechEngineAndKey(): array
+    {
+        $engine = SpeechSynthesizer::engine();
+        if ($engine === null) {
+            return [null, ''];
+        }
+        $apiKey = (string)(ApiKey::getDecrypted(SpeechSynthesizer::providerOf($engine)) ?? '');
+        return $apiKey === '' ? [null, ''] : [$engine, $apiKey];
     }
 
     /**
@@ -7633,9 +8890,19 @@ class ChatController
         $budget  = ContextWindow::budget(LlmCatalog::contextWindow($provider ?: LLMFactory::provider($llm), (string)$model));
         $convId  = (int)($conv['id'] ?? 0);
         $summary = ConversationSummary::forConversation($convId);
+        // Une pièce jointe texte démesurée (journal, export, code source) ne
+        // part qu'en partie : sans borne, un seul fichier dépasserait toute
+        // fenêtre — même joint au message en cours, que le plan garde intact.
+        [$history, $filesCut, $filesCutNow] = ContextWindow::boundFiles($history, $budget);
         $plan    = ContextWindow::plan($history, $budget, $summary);
+        $plan['files_cut']     = $filesCut;
+        $plan['files_cut_now'] = $filesCutNow;
+        $cutNote = $filesCut !== [] ? ContextWindow::cutNote() : '';
+        if ($filesCut !== []) {
+            error_log('[Contexte] conv ' . $convId . ' : ' . count($filesCut) . ' fichier(s) envoyé(s) en partie (budget ' . $budget . ' jetons)');
+        }
         if ($plan['cutoff'] === 0 && $plan['strip_files_before'] === 0) {
-            return [$history, '', $plan];
+            return [$history, $cutNote, $plan];
         }
 
         $text = null;
@@ -7657,7 +8924,8 @@ class ChatController
         return [
             ContextWindow::apply($history, $plan),
             ContextWindow::summaryFragment($text, $plan['dropped'])
-                . ($plan['strip_files_before'] > 0 ? ContextWindow::filesNote() : ''),
+                . ($plan['strip_files_before'] > 0 ? ContextWindow::filesNote() : '')
+                . $cutNote,
             $plan,
         ];
     }
@@ -8037,16 +9305,15 @@ class ChatController
         $origin   = FileFactory::resolveExtension(mb_substr((string)($_POST['origin'] ?? ''), 0, 300), $language);
         $kind     = NativeDeck::kindFor($origin, $language);
         if ($kind === null) {
-            $this->json(['ok' => false, 'error' => t('Seule une présentation ou un classeur peut être réalisé par le modèle.')], 422);
+            $this->json(['ok' => false, 'error' => self::nativeDeckKindRefusal()], 422);
             return;
         }
-        $xlsx = $kind === NativeDeck::KIND_XLSX;
 
         $conversation = Conversation::findById($convId);
         $profile      = !empty($conversation['profile_id']) ? Profile::findById((int)$conversation['profile_id']) : null;
         $choice       = $this->nativeDeckChoice($user, $profile ?: null, trim((string)($_POST['llm'] ?? '')));
         if ($choice['candidates'] === []) {
-            $this->json(['ok' => false, 'error' => self::nativeDeckNoModelMessage($xlsx)], 422);
+            $this->json(['ok' => false, 'error' => NativeDeck::label($kind, 'no_model')], 422);
             return;
         }
 
@@ -8060,7 +9327,7 @@ class ChatController
             return $rank($a) <=> $rank($b);
         });
         foreach ($ordered as $slug) {
-            $estimate = NativeDeck::estimate(NativeDeck::historyCredits((int)$user['id'], $slug, $kind), NativeDeck::tariffCredits($slug, $kind));
+            $estimate = NativeDeck::estimateFor((int)$user['id'], $slug, $kind);
             $models[] = ['slug' => $slug, 'label' => $labelOf($slug), 'estimate' => $estimate];
         }
         // « Le plus économique » : seulement s'il y a un choix, et un seul moins cher que les autres.
@@ -8083,6 +9350,8 @@ class ChatController
                 $notes[] = t('Le plus économique');
             }
             $credits = $m['estimate']['credits'];
+            // Le plafond ne vaut que pour Claude (reprises de la boucle d'exécution de code).
+            $cap     = NativeDeck::split($m['slug'])[0] === 'anthropic' ? NativeDeck::capCredits($credits) : null;
             $out[] = [
                 'slug'     => $m['slug'],
                 'label'    => $m['label'],
@@ -8092,6 +9361,7 @@ class ChatController
                 'credits'  => $credits,
                 'estimate' => $credits !== null ? t('≈ {n} crédits', ['n' => Format::credits($credits)]) : '',
                 'basis'    => self::nativeDeckBasisLabel($m['estimate'], $m['label']),
+                'cap'      => $cap !== null ? t('arrêt au-delà de {n} crédits', ['n' => Format::credits($cap)]) : '',
             ];
         }
 
@@ -8099,15 +9369,7 @@ class ChatController
         $notice  = '';
         if ($current !== '' && !in_array($current, $choice['candidates'], true)) {
             $params = ['current' => $labelOf($current), 'model' => $choice['selected'] !== null ? $labelOf($choice['selected']) : ''];
-            if ($choice['selected'] !== null) {
-                $notice = $xlsx
-                    ? t('{current}, le modèle de la conversation, ne sait pas fabriquer de classeur Excel. MIA a choisi {model} pour ce classeur ; la conversation garde son modèle.', $params)
-                    : t('{current}, le modèle de la conversation, ne sait pas fabriquer de fichier PowerPoint. MIA a choisi {model} pour cette mise en page ; la conversation garde son modèle.', $params);
-            } else {
-                $notice = $xlsx
-                    ? t('{current}, le modèle de la conversation, ne sait pas fabriquer de classeur Excel. Choisissez le modèle qui réalisera le classeur ; la conversation garde son modèle.', $params)
-                    : t('{current}, le modèle de la conversation, ne sait pas fabriquer de fichier PowerPoint. Choisissez le modèle qui réalisera la présentation ; la conversation garde son modèle.', $params);
-            }
+            $notice = NativeDeck::label($kind, $choice['selected'] !== null ? 'unable_by' : 'pick_by', $params);
         } elseif ($choice['selected'] === null) {
             $notice = t('Seuls des modèles haut de gamme savent réaliser ce fichier : choisissez celui qui s’en chargera.');
         }
@@ -8131,22 +9393,31 @@ class ChatController
             ];
         }
 
-        $company = NativeDeck::companySummary($kind);
-        $companyRow = null;
+        // Modèle et logo de l'entreprise : une ligne CHACUN, décochable (la
+        // fenêtre part du choix fait sur la carte, generated-files.js).
+        $company     = NativeDeck::companySummary($kind);
+        $companyRows = [];
         if ($company !== null) {
             $name = trim($company['name']);
-            $companyRow = [
-                'label' => $company['template']
-                    ? ($name !== '' ? t('Modèle PowerPoint de {name}', ['name' => $name]) : t('Modèle PowerPoint de votre entreprise'))
-                    : ($name !== '' ? t('Logo de {name}', ['name' => $name]) : t('Logo de votre entreprise')),
-                'note'  => $company['template']
-                    ? ($company['examples'] > 0
-                        ? I18n::plural($company['examples'], 'Sa slide d’exemple montre le style maison, sans se retrouver dans le fichier',
-                            'Ses {n} slides d’exemple montrent le style maison, sans se retrouver dans le fichier')
-                        : t('Ses masques et ses mises en page donnent le style maison'))
-                        . ($company['logo'] ? ' · ' . t('avec le logo') : '')
-                    : t('Posé sur la couverture, et en petit sur les autres slides'),
-            ];
+            if ($company['template']) {
+                $companyRows[] = $kind === NativeDeck::KIND_DOCX
+                    ? ['ref' => 'template',
+                        'label' => $name !== '' ? t('Modèle Word de {name}', ['name' => $name]) : t('Modèle Word de votre entreprise'),
+                        'note'  => t('Envoyé en premier : le document est construit dans ce modèle, avec ses styles, ses en-têtes et ses pieds de page')]
+                    : ['ref' => 'template',
+                        'label' => $name !== '' ? t('Modèle PowerPoint de {name}', ['name' => $name]) : t('Modèle PowerPoint de votre entreprise'),
+                        'note'  => $company['examples'] > 0
+                            ? I18n::plural($company['examples'], 'Sa slide d’exemple montre le style maison, sans se retrouver dans le fichier',
+                                'Ses {n} slides d’exemple montrent le style maison, sans se retrouver dans le fichier')
+                            : t('Ses masques et ses mises en page donnent le style maison')];
+            }
+            if ($company['logo']) {
+                $companyRows[] = ['ref' => 'logo',
+                    'label' => $name !== '' ? t('Logo de {name}', ['name' => $name]) : t('Logo de votre entreprise'),
+                    'note'  => NativeDeck::isDocument($kind)
+                        ? t('Posé en tête du document, avec la mention de pied de page')
+                        : t('Posé sur la couverture, et en petit sur les autres slides')];
+            }
         }
 
         // Ce que le modèle reçoit, en une ligne (menu de la carte) : « Votre demande, vos fichiers joints, … ».
@@ -8158,9 +9429,13 @@ class ChatController
             $parts[] = t('vos fichiers joints');
         }
         if ($company !== null && $company['template']) {
-            $parts[] = trim($company['name']) !== ''
-                ? t('le modèle PowerPoint de {name}', ['name' => trim($company['name'])])
-                : t('le modèle PowerPoint de votre entreprise');
+            $parts[] = $kind === NativeDeck::KIND_DOCX
+                ? (trim($company['name']) !== ''
+                    ? t('le modèle Word de {name}', ['name' => trim($company['name'])])
+                    : t('le modèle Word de votre entreprise'))
+                : (trim($company['name']) !== ''
+                    ? t('le modèle PowerPoint de {name}', ['name' => trim($company['name'])])
+                    : t('le modèle PowerPoint de votre entreprise'));
         }
         $summary = $parts !== [] ? implode(', ', $parts) : t('le texte de la carte');
         $summary = mb_strtoupper(mb_substr($summary, 0, 1)) . mb_substr($summary, 1);
@@ -8174,7 +9449,7 @@ class ChatController
             'models'   => $out,
             'request'  => $request,
             'files'    => $files,
-            'company'  => $companyRow,
+            'company'  => $companyRows,
             'summary'  => $summary,
             'days'     => NativeDeckStore::RETENTION_DAYS,
         ]);
@@ -8213,8 +9488,9 @@ class ChatController
     }
 
     /**
-     * D'où vient l'estimation d'un modèle (NativeDeck::estimate) : la moyenne
-     * des dernières réalisations de la personne, sinon le tarif du modèle.
+     * D'où vient l'estimation d'un modèle (NativeDeck::estimateFor) : la
+     * moyenne des dernières réalisations de la personne, sinon celle de
+     * l'organisation, sinon le tarif du modèle.
      *
      * @param array{credits: ?int, basis: string, count: int} $estimate
      */
@@ -8223,6 +9499,10 @@ class ChatController
         if ($estimate['basis'] === 'history') {
             return I18n::plural($estimate['count'], 'D’après votre dernière réalisation avec {model}',
                 'D’après vos {n} dernières réalisations avec {model}', ['model' => $model]);
+        }
+        if ($estimate['basis'] === 'instance') {
+            return I18n::plural($estimate['count'], 'D’après la dernière réalisation de votre organisation avec {model}',
+                'D’après les {n} dernières réalisations de votre organisation avec {model}', ['model' => $model]);
         }
         if ($estimate['basis'] === 'tariff') {
             return t('Estimation d’après le tarif de {model}', ['model' => $model]);
@@ -8237,12 +9517,10 @@ class ChatController
         return NativeDeck::candidates('', $this->filterLlmsForUserScope(LLMFactory::available(), $this->groupScope($user))) !== [];
     }
 
-    /** Aucun modèle permis au compte ne sait fabriquer le fichier. */
-    private static function nativeDeckNoModelMessage(bool $xlsx): string
+    /** Carte qu'aucun modèle ne réalise (ni présentation, ni classeur, ni document PDF ou Word). */
+    private static function nativeDeckKindRefusal(): string
     {
-        return $xlsx
-            ? t('Aucun modèle de votre organisation ne sait fabriquer de classeur Excel : il faut un modèle Claude ou GPT récent. Prévenez un administrateur.')
-            : t('Aucun modèle de votre organisation ne sait fabriquer de fichier PowerPoint : il faut un modèle Claude ou GPT récent. Prévenez un administrateur.');
+        return t('Seuls une présentation, un classeur ou un document PDF ou Word peuvent être réalisés par le modèle.');
     }
 
     /**
@@ -8276,55 +9554,17 @@ class ChatController
         $language = mb_substr(strtolower(trim((string)($_POST['language'] ?? ''))), 0, 40);
         $origin   = FileFactory::resolveExtension(mb_substr((string)($_POST['origin'] ?? ''), 0, 300), $language);
         $kind     = NativeDeck::kindFor($origin, $language);
-        $xlsx     = $kind === NativeDeck::KIND_XLSX;
-        $tooLong  = $xlsx
-            ? t('Ce classeur est trop long pour être réalisé par le modèle : raccourcissez-le.')
-            : t('Cette présentation est trop longue pour être réalisée par le modèle : raccourcissez-la.');
 
         $length = (int)($_SERVER['CONTENT_LENGTH'] ?? 0);
         if ($length > NativeDeck::MAX_SOURCE_CHARS * 4 || ($length > 0 && $_POST === [])) {
-            $this->json(['ok' => false, 'error' => $tooLong], 413);
+            $this->json(['ok' => false, 'error' => NativeDeck::label((string)$kind, 'too_long')], 413);
             return;
         }
         if ($kind === null) {
-            $this->json(['ok' => false, 'error' => t('Seule une présentation ou un classeur peut être réalisé par le modèle.')], 422);
+            $this->json(['ok' => false, 'error' => self::nativeDeckKindRefusal()], 422);
             return;
         }
 
-        $conversation = Conversation::findById($convId);
-        $profile      = !empty($conversation['profile_id']) ? Profile::findById((int)$conversation['profile_id']) : null;
-        $choice       = $this->nativeDeckChoice($user, $profile ?: null, trim((string)($_POST['llm'] ?? '')));
-        $asked        = mb_substr(trim((string)($_POST['model'] ?? '')), 0, 200);
-        $llm          = $asked !== '' ? $asked : (string)($choice['selected'] ?? '');
-        if ($choice['candidates'] === []) {
-            $this->json(['ok' => false, 'error' => self::nativeDeckNoModelMessage($xlsx)], 422);
-            return;
-        }
-        if ($llm === '') {
-            $this->json(['ok' => false, 'error' => t('Choisissez le modèle qui réalisera le fichier.')], 422);
-            return;
-        }
-        if (!in_array($llm, $choice['candidates'], true)) {
-            $this->json(['ok' => false, 'error' => t('Ce modèle ne peut pas réaliser ce fichier pour vous : choisissez-en un autre.')], 422);
-            return;
-        }
-        $label = LLMFactory::available()[$llm] ?? $llm;
-
-        $quotaStatus = $this->currentCreditQuotaStatus($user);
-        if ($this->isCreditQuotaExceeded($quotaStatus)) {
-            $this->json(['ok' => false, 'quota_exceeded' => true, 'quota_status' => $quotaStatus], 429);
-            return;
-        }
-
-        $source = FileFactory::cleanSource((string)($_POST['source'] ?? ''));
-        if (trim($source) === '' || mb_strlen($source) > NativeDeck::MAX_SOURCE_CHARS) {
-            $this->json(['ok' => false, 'error' => $tooLong], 422);
-            return;
-        }
-        $name   = mb_substr((string)($_POST['name'] ?? ($xlsx ? 'classeur.xlsx' : 'presentation.pptx')), 0, 200);
-        $title  = $xlsx ? FileNaming::stem($name) : MarkdownDeck::sourceCards($source, FileNaming::stem($name))['title'];
-        // Message qui porte la carte : la demande et les pièces jointes lues sont celles d'AVANT lui.
-        $before = max(0, (int)($_POST['message_id'] ?? 0));
         // Ce que la personne a retiré ou précisé dans la fenêtre « Version soignée ».
         $exclude = [];
         foreach (array_slice((array)($_POST['exclude'] ?? []), 0, 20) as $excluded) {
@@ -8333,42 +9573,244 @@ class ChatController
                 $exclude[] = $excluded;
             }
         }
-        sort($exclude);
-        $company = (string)($_POST['company'] ?? '1') !== '0';
-        $note    = NativeDeck::cleanNote((string)($_POST['note'] ?? ''));
 
-        $dedupKey = 'native_deck:' . $convId . ':' . sha1($kind . "\n" . $llm . "\n" . $source . "\n" . $note
-            . "\n" . ($company ? '1' : '0') . "\n" . implode("\n", $exclude));
-        $running  = JobQueue::activeByDedupKey($dedupKey);
-        if ($running !== null) {
-            $this->json(['ok' => true, 'already' => true, 'job_type' => 'native_deck', 'job_id' => (int)$running['id']]);
+        $result = $this->launchNativeDeck($user, $convId, $kind, [
+            'hint'     => trim((string)($_POST['llm'] ?? '')),
+            'model'    => mb_substr(trim((string)($_POST['model'] ?? '')), 0, 200),
+            'source'   => (string)($_POST['source'] ?? ''),
+            'name'     => mb_substr((string)($_POST['name'] ?? NativeDeck::filename('', $kind)), 0, 200),
+            'language' => $language,
+            // Message qui porte la carte : la demande et les pièces jointes lues sont celles d'AVANT lui.
+            'before'   => max(0, (int)($_POST['message_id'] ?? 0)),
+            'exclude'  => $exclude,
+            // Modèle et logo de l'entreprise, chacun décochable (`company` = 0 :
+            // les deux, forme d'avant).
+            'template' => (string)($_POST['company'] ?? '1') !== '0' && (string)($_POST['company_template'] ?? '1') !== '0',
+            'logo'     => (string)($_POST['company'] ?? '1') !== '0' && (string)($_POST['company_logo'] ?? '1') !== '0',
+            'note'     => (string)($_POST['note'] ?? ''),
+        ]);
+        if (!$result['ok']) {
+            $this->json($result['body'], $result['status']);
+            return;
+        }
+        if (!empty($result['body']['already'])) {
+            $this->json($result['body']);
             return;
         }
 
-        $titre   = $title !== '' ? $title : ($xlsx ? t('Classeur') : t('Présentation'));
-        $content = '⏳ ' . ($xlsx
-            ? t('{model} réalise le classeur « {title} »… Comptez une à trois minutes : le fichier arrivera ici.', ['model' => $label, 'title' => $titre])
-            : t('{model} réalise la présentation « {title} »… Comptez une à trois minutes : le fichier arrivera ici.', ['model' => $label, 'title' => $titre]));
-        $message = Message::create($convId, 'assistant', $content);
-        $jobId   = JobQueue::enqueue('native_deck', (int)$user['id'], $convId, [
-            'kind'   => $kind,
-            'llm'    => $llm,
-            'label'  => $label,
-            'source' => $source,
-            'name'   => $name,
-            'title'  => $titre,
-            'before' => $before,
-            'exclude' => $exclude,
-            'company' => $company,
-            'note'    => $note,
-        ], ($xlsx ? 'Classeur par ' : 'Présentation par ') . $label . ' : ' . $titre, $dedupKey);
+        JobQueue::respondAndDispatch($result['body'], (int)$result['body']['job_id']);
+    }
 
-        JobQueue::respondAndDispatch([
+    /**
+     * Consigne « version soignée » d'un tour, et le modèle qui réalisera le
+     * fichier quand elle est déjà choisie (PolishOffer). Seulement si un
+     * modèle du compte sait le faire (jamais un haut de gamme d'office :
+     * nativeDeckChoice) ; ne lève jamais — une offre manquée laisse la carte
+     * et son bouton, comme avant.
+     *
+     * @param list<array<string, mixed>> $history
+     * @return array{0: ?string, 1: string, 2: ?string} modèle de la réalisation (choix
+     *         fait), consigne, genre du fichier offert (l'écran y pose « Modèle » et « Logo »)
+     */
+    private function polishOfferFor(array $user, ?array $profile, string $llm, string $content, array $history): array
+    {
+        try {
+            $choice = PolishOffer::choiceIn($content);
+            if ($choice === PolishOffer::QUICK) {
+                return [null, '', null];
+            }
+            $kind = PolishOffer::requestedKind($content);
+            if ($choice === null && ($kind === null || PolishOffer::alreadyHandled($history))) {
+                return [null, '', null];
+            }
+            $picked = $this->nativeDeckChoice($user, $profile, $llm)['selected'];
+            if ($picked === null) {
+                return [null, '', null];
+            }
+            $label = (string)(LLMFactory::available()[$picked] ?? $picked);
+            if ($choice === PolishOffer::POLISH) {
+                return [$picked, PolishOffer::chosenFragment($label), null];
+            }
+            $estimate = NativeDeck::estimateFor((int)$user['id'], $picked, (string)$kind);
+
+            return [null, PolishOffer::offerFragment((string)$kind, $label, $estimate['credits']), (string)$kind];
+        } catch (\Throwable $e) {
+            error_log('[Fichier par le modèle] Offre de version soignée impossible : ' . $e->getMessage());
+
+            return [null, '', null];
+        }
+    }
+
+    /**
+     * Le fichier que la réponse vient d'écrire, confié au modèle choisi
+     * (version soignée choisie AVANT la rédaction) : même lancement que le
+     * bouton de la carte (launchNativeDeck), sans fenêtre — la personne a
+     * choisi dans le message précédent, le coût lui était annoncé. Rend les
+     * réalisations lancées (pour le navigateur) et un refus présentable.
+     *
+     * @return array{0: list<array<string, mixed>>, 1: ?string}
+     */
+    private function launchPolishedFile(array $user, int $convId, string $hint, string $model, string $reply, int $messageId, bool $template = true, bool $logo = true): array
+    {
+        try {
+            $file = PolishOffer::firstFile($reply);
+            if ($file === null) {
+                return [[], null];
+            }
+            $kind = NativeDeck::kindFor(FileFactory::resolveExtension($file['name'], $file['language']), $file['language']);
+            if ($kind === null) {
+                return [[], null];
+            }
+            $result = $this->launchNativeDeck($user, $convId, $kind, [
+                'hint'     => $hint,
+                'model'    => $model,
+                'source'   => $file['source'],
+                'name'     => mb_substr($file['name'], 0, 200),
+                'language' => $file['language'],
+                'before'   => $messageId,
+                'template' => $template,
+                'logo'     => $logo,
+            ]);
+            if (!$result['ok']) {
+                if (!empty($result['body']['quota_exceeded'])) {
+                    return [[], CreditQuota::refusal((array)$result['body']['quota_status'])['message'] ?? null];
+                }
+
+                return [[], (string)($result['body']['error'] ?? '') ?: null];
+            }
+            if (empty($result['body']['already'])) {
+                // Depuis le worker : le job part par un autre worker, ou par un
+                // processus à part — jamais dans ce tour, déjà long.
+                JobQueue::dispatch((int)$result['body']['job_id'], false);
+            }
+
+            return [[$result['body']], null];
+        } catch (\Throwable $e) {
+            error_log('[Fichier par le modèle] Version soignée non lancée : ' . $e->getMessage());
+
+            return [[], t('La version soignée n’a pas pu être lancée : téléchargez la version rapide, ou utilisez le bouton « Version soignée » de la carte.')];
+        }
+    }
+
+    /**
+     * Lance la réalisation d'un fichier par un modèle — chemin COMMUN au clic
+     * sur « Version soignée » (nativeDeckFromFile) et à la version soignée
+     * choisie AVANT la rédaction (runSend, PolishOffer) : même choix du
+     * modèle, mêmes gardes (quota, longueur), même message d'attente, même
+     * job. N'envoie rien au navigateur : rend `ok`, la charge `body` et le
+     * statut HTTP d'un refus. Le job est enfilé, pas lancé : l'appelant le
+     * déclenche (réponse HTTP envoyée d'abord, ou depuis le worker).
+     *
+     * @param array{hint?: string, model?: string, source: string, name: string, language?: string, before?: int,
+     *              exclude?: list<string>, template?: bool, logo?: bool, note?: string} $o
+     * @return array{ok: bool, status: int, body: array<string, mixed>}
+     */
+    private function launchNativeDeck(array $user, int $convId, string $kind, array $o): array
+    {
+        $refuse = static fn (int $status, array $body): array => ['ok' => false, 'status' => $status, 'body' => ['ok' => false] + $body];
+
+        $conversation = Conversation::findById($convId);
+        $profile      = !empty($conversation['profile_id']) ? Profile::findById((int)$conversation['profile_id']) : null;
+        $choice       = $this->nativeDeckChoice($user, $profile ?: null, (string)($o['hint'] ?? ''));
+        $asked        = trim((string)($o['model'] ?? ''));
+        $llm          = $asked !== '' ? $asked : (string)($choice['selected'] ?? '');
+        if ($choice['candidates'] === []) {
+            return $refuse(422, ['error' => NativeDeck::label($kind, 'no_model')]);
+        }
+        if ($llm === '') {
+            return $refuse(422, ['error' => t('Choisissez le modèle qui réalisera le fichier.')]);
+        }
+        if (!in_array($llm, $choice['candidates'], true)) {
+            return $refuse(422, ['error' => t('Ce modèle ne peut pas réaliser ce fichier pour vous : choisissez-en un autre.')]);
+        }
+        $label = LLMFactory::available()[$llm] ?? $llm;
+
+        $quotaStatus = $this->currentCreditQuotaStatus($user);
+        if ($this->isCreditQuotaExceeded($quotaStatus)) {
+            return $refuse(429, ['quota_exceeded' => true, 'quota_status' => $quotaStatus]);
+        }
+
+        $source = FileFactory::cleanSource((string)$o['source']);
+        if (trim($source) === '' || mb_strlen($source) > NativeDeck::MAX_SOURCE_CHARS) {
+            return $refuse(422, ['error' => NativeDeck::label($kind, 'too_long')]);
+        }
+        $name   = (string)$o['name'];
+        $title  = match ($kind) {
+            NativeDeck::KIND_PPTX => MarkdownDeck::sourceCards($source, FileNaming::stem($name))['title'],
+            NativeDeck::KIND_PDF, NativeDeck::KIND_DOCX => self::documentTitle($source, FileNaming::stem($name)),
+            default => FileNaming::stem($name),
+        };
+        $before  = max(0, (int)($o['before'] ?? 0));
+        $exclude = array_values((array)($o['exclude'] ?? []));
+        sort($exclude);
+        $template = ($o['template'] ?? true) !== false;
+        $logo     = ($o['logo'] ?? true) !== false;
+        $note     = NativeDeck::cleanNote((string)($o['note'] ?? ''));
+
+        $dedupKey = 'native_deck:' . $convId . ':' . sha1($kind . "\n" . $llm . "\n" . $source . "\n" . $note
+            . "\n" . ($template ? '1' : '0') . ($logo ? '1' : '0') . "\n" . implode("\n", $exclude));
+        $running  = JobQueue::activeByDedupKey($dedupKey);
+        if ($running !== null) {
+            return ['ok' => true, 'status' => 200, 'body' => ['ok' => true, 'already' => true, 'job_type' => 'native_deck', 'job_id' => (int)$running['id']]];
+        }
+
+        $titre   = $title !== '' ? $title : NativeDeck::label($kind, 'noun');
+        $content = '⏳ ' . NativeDeck::label($kind, 'waiting', ['model' => $label, 'title' => $titre]);
+        $message = Message::create($convId, 'assistant', $content);
+        $msgId   = (int)($message['id'] ?? 0);
+        // Le message d'attente porte la carte de réalisation (NativeDeckRun) :
+        // posée AVANT l'enfilage, le job la réécrit à la fin (prête, arrêtée).
+        $run = NativeDeckRun::start($kind, $llm, $label, $titre, 0, time());
+        if ($msgId > 0) {
+            Message::setRun($msgId, $run);
+        }
+        $jobId   = JobQueue::enqueue('native_deck', (int)$user['id'], $convId, [
+            'kind'     => $kind,
+            'llm'      => $llm,
+            'label'    => $label,
+            'source'   => $source,
+            'name'     => $name,
+            'language' => (string)($o['language'] ?? ''),
+            'title'    => $titre,
+            'before'   => $before,
+            'exclude'  => $exclude,
+            'template' => $template,
+            'logo'     => $logo,
+            'note'     => $note,
+            // Plafond en crédits : au-delà, la réalisation n'est pas relancée.
+            'cap'      => NativeDeck::capCredits(NativeDeck::estimateFor((int)$user['id'], $llm, $kind)['credits']),
+            'message_id' => $msgId,
+        ], NativeDeck::label($kind, 'noun') . ' — ' . $label . ' : ' . $titre, $dedupKey);
+        $run['job_id'] = $jobId;
+        if ($msgId > 0) {
+            Message::setRunJob($msgId, $jobId);
+        }
+
+        return ['ok' => true, 'status' => 200, 'body' => [
             'ok'       => true,
             'job_id'   => $jobId,
             'job_type' => 'native_deck',
-            'message'  => ['id' => (int)($message['id'] ?? 0), 'content' => $content],
-        ], $jobId);
+            'message'  => [
+                'id'       => $msgId,
+                'content'  => $content,
+                'run_html' => $msgId > 0 ? NativeDeckRun::html(NativeDeckRun::view($run, $msgId, time())) : '',
+            ],
+        ]];
+    }
+
+    /** Titre d'un document : son premier titre Markdown, sinon le nom du fichier (pure). */
+    private static function documentTitle(string $source, string $fallback): string
+    {
+        foreach (MarkdownDocument::parse($source) as $block) {
+            if (($block['type'] ?? '') === 'heading') {
+                $text = trim(implode('', array_map(static fn (array $r): string => (string)($r['text'] ?? ''), (array)($block['inlines'] ?? []))));
+                if ($text !== '') {
+                    return mb_substr($text, 0, 120);
+                }
+            }
+        }
+
+        return $fallback;
     }
 
     /**
@@ -8551,7 +9993,9 @@ class ChatController
             if (ChatTool::isRetired($t)) {
                 continue; // modèle arrêté par son fournisseur : l'assistant ne le propose plus
             }
-            return $t; // v1 : un seul outil image par assistant
+            // v1 : un seul outil image par assistant, avec les options
+            // d'image de l'assistant par-dessus celles de l'outil.
+            return ImageOptions::applyTo($t, ImageOptions::ofProfile($profile));
         }
         return null;
     }
@@ -8849,32 +10293,37 @@ class ChatController
     }
 
     // -----------------------------------------------------------------------
-    // Mémoire long terme « MIA pour vous »
+    // Mémoire de MIA (Réglages → Mémoire)
     // -----------------------------------------------------------------------
 
     /**
-     * Enregistre ce que l'utilisateur demande explicitement de retenir
-     * (« souviens-toi que je préfère les réunions du matin »).
+     * Applique ce que l'utilisateur demande EXPLICITEMENT à sa mémoire :
+     * retenir (« souviens-toi que je préfère les réunions du matin »),
+     * corriger (« corrige ta mémoire : je ne suis plus chez Durand ») ou
+     * oublier (« oublie que je travaille le vendredi »), en français et en
+     * anglais.
      *
      * Volontairement HORS function-calling : la mémoire doit marcher sur TOUS
      * les modèles, y compris ceux sans tool use — et ajouter un outil à chaque
      * message ferait payer la boucle `streamWithTools` (et son surcoût de
      * contexte) à la moindre phrase.
      *
-     * Gate lexical bon marché puis juge LLM : le premier évite un appel API sur
-     * la quasi-totalité des messages, le second tranche réellement (« rappelle-
-     * moi demain » n'est pas une demande de mémorisation).
+     * Porte lexicale bon marché (MemoryCapture::looksLikeRequest) puis juge
+     * LLM : la première évite un appel sur la quasi-totalité des messages, le
+     * second tranche réellement (« rappelle-moi demain » n'est pas une demande
+     * de mémorisation). Le juge reçoit la liste numérotée des souvenirs et les
+     * désigne par leur rang, jamais par leur id.
      *
      * Aucune dépendance dure : pas de correspondance lexicale, pas de LLM
-     * disponible, erreur API ou JSON illisible → on ne mémorise rien et le
-     * message suit son cours normal.
+     * disponible, erreur API ou JSON illisible → rien ne change et le message
+     * suit son cours normal.
      *
      * @param  list<array> $priorHistory messages ANTÉRIEURS à la demande courante
-     * @return array{faits:list<string>, doublons:int, plein:bool}|null
+     * @return array{faits:list<string>, modifies:list<string>, oublies:list<array>, doublons:int, plein:bool, refuses:int, tout?:bool}|null
      */
     private function captureUserMemory(array $conv, int $userId, string $content, array $priorHistory): ?array
     {
-        if (!self::looksLikeMemoryRequest($content)) {
+        if (!MemoryCapture::looksLikeRequest($content)) {
             return null;
         }
 
@@ -8885,65 +10334,41 @@ class ChatController
 
         $this->sseEmit(['phase' => 'memorizing']);
 
-        $sys = "Tu gères la mémoire long terme d'un utilisateur dans un assistant conversationnel.\n"
-            . "Analyse SON dernier message et détermine s'il demande explicitement de retenir une "
-            . "information durable le concernant.\n\n"
-            . "- `memoriser` : true UNIQUEMENT en cas de demande explicite (« souviens-toi que… », "
-            . "« retiens que… », « garde en mémoire que… »). false sinon — notamment pour un simple "
-            . "rappel d'agenda (« rappelle-moi demain »), une question, ou une information éphémère.\n"
-            . "- `faits` : 1 à 3 phrases COURTES (≤ 200 caractères), autoportantes, compréhensibles "
-            . "hors de cette conversation. Décrivent l'utilisateur dans la durée : rôle, service, "
-            . "préférences, contraintes, habitudes de travail. Style déclaratif sans pronom initial, "
-            . "ex. « Préfère les réunions du matin », « Travaille au département marketing ».\n"
-            . "- Résous les références implicites (« ça », « ce point ») grâce à la conversation.\n"
-            . "- Aucun méta-commentaire, aucune date ponctuelle, aucune information sensible non "
-            . "explicitement confiée.\n"
-            . "- Si rien de durable n'est identifiable : memoriser=false et faits=[].\n\n"
-            . "Réponds UNIQUEMENT par un objet JSON : {\"memoriser\": true|false, \"faits\": [\"…\"]}";
-
+        $listed  = UserMemory::forCapture($userId);
         $digest  = self::buildImageContextDigest($priorHistory, 6, 300, 2000);
-        $userMsg = ($digest !== '' ? "Conversation en cours :\n" . $digest . "\n\n" : '')
-            . "Dernier message de l'utilisateur :\n" . mb_substr($content, 0, 1500)
-            . "\n\nJSON :";
+        $userMsg = MemoryCapture::userPrompt($digest, $content, $listed);
 
         $raw = '';
         try {
             $tokens = LLMFactory::make($llm)->stream(
                 [['role' => 'user', 'content' => $userMsg]],
-                $sys,
+                MemoryCapture::systemPrompt(),
                 function (string $chunk) use (&$raw) { $raw .= $chunk; },
                 0.2,
                 false
             );
         } catch (\Throwable $e) {
-            error_log('[Mémoire] extraction échouée (' . $e->getMessage() . ') — rien mémorisé');
+            error_log('[Mémoire] demande explicite non traitée (' . $e->getMessage() . ') — rien changé');
             return null;
         }
         UsageMeter::llm($llm, is_array($tokens) ? $tokens : [], UsageSource::MEMORY, self::helperBillingContext($conv, $userId));
 
-        $parsed = self::parseMemoryExtractionJson($raw);
-        if ($parsed === null || !$parsed['memoriser'] || $parsed['faits'] === []) {
+        $parsed = MemoryCapture::parseOps($raw, count($listed));
+        if ($parsed === null) {
             return null;
         }
 
-        $saved = [];
-        $dupes = 0;
-        $full  = false;
-        foreach ($parsed['faits'] as $fait) {
-            $result = UserMemory::add($userId, $fait, UserMemory::SOURCE_CHAT);
-            match ($result['status']) {
-                'ok'        => $saved[] = $result['content'],
-                'duplicate' => $dupes++,
-                'full'      => $full = true,
-                default     => null,
-            };
-        }
-
-        if ($saved === [] && $dupes === 0 && !$full) {
+        try {
+            $result = UserMemory::applyExplicit($userId, $parsed['ops'], $listed, isset($conv['id']) ? (int)$conv['id'] : null);
+        } catch (\Throwable $e) {
+            error_log('[Mémoire] écriture impossible (user ' . $userId . ') : ' . $e->getMessage());
             return null;
         }
+        if ($parsed['wipe']) {
+            $result['tout'] = true;
+        }
 
-        return ['faits' => $saved, 'doublons' => $dupes, 'plein' => $full];
+        return MemoryCapture::isEmptyResult($result) ? null : $result;
     }
 
     /**
@@ -8974,7 +10399,7 @@ class ChatController
      *   - elle ne tourne QUE si le connecteur Tasks est engagé sur ce message
      *     (l'appelant le garantit) : zéro coût pour qui ne s'en sert pas ;
      *   - la règle n'est injectée que quand le connecteur est actif, là où un
-     *     souvenir « MIA pour vous » pèse sur toutes les conversations.
+     *     souvenir de la mémoire pèse sur toutes les conversations.
      *
      * @param string $lastAssistant Dernier message de l'assistant — c'est lui
      *        qui rend « oui » interprétable après une proposition de retenir.
@@ -9188,113 +10613,77 @@ class ChatController
      * confirme lui-même ce qu'il vient d'enregistrer (ou l'échec) au lieu de
      * laisser la seule pastille d'interface parler.
      *
-     * @param array{faits:list<string>, doublons:int, plein:bool}|null $capture
+     * @param array<string, mixed>|null $capture résultat de captureUserMemory
      */
     private function memoryCaptureNote(?array $capture): string
+    {
+        return self::memoryCaptureNoteFor($capture);
+    }
+
+    /**
+     * Forme pure de la note de capture (testable sans contrôleur).
+     *
+     * @param array<string, mixed>|null $capture
+     */
+    /**
+     * Question de MIA (mémoire) restée sans réponse, à reposer au rechargement
+     * SEULEMENT si la réponse qu'elle suit est encore la dernière du fil : une
+     * question dépassée par la suite de la conversation ne revient pas.
+     *
+     * @param list<array> $messages messages de la conversation, dans l'ordre
+     * @return array<string, mixed>|null
+     */
+    private static function pendingMemoryQuestion(int $userId, int $convId, array $messages): ?array
+    {
+        if ($messages === []) {
+            return null;
+        }
+        $question = MemoryQuestions::pendingFor($userId, $convId);
+        $last     = end($messages);
+        if ($question === null || (int)($last['id'] ?? 0) !== (int)$question['message_id']) {
+            return null;
+        }
+        return $question;
+    }
+
+    public static function memoryCaptureNoteFor(?array $capture): string
     {
         if ($capture === null) {
             return '';
         }
 
-        $note = "\n\n" . t('Mémoire — ce qui vient de se passer sur CE message :');
-        if ($capture['faits'] !== []) {
-            $note .= "\n" . t('Tu viens d\'enregistrer dans « MIA pour vous » :') . "\n- " . implode("\n- ", $capture['faits'])
-                . "\n" . t('Confirme-le en une phrase courte, puis réponds normalement à la demande.');
+        $note    = "\n\n" . t('Mémoire — ce qui vient de se passer sur CE message :');
+        $changed = false;
+        if (($capture['faits'] ?? []) !== []) {
+            $note   .= "\n" . t('Tu viens d\'enregistrer dans sa mémoire :') . "\n- " . implode("\n- ", array_map('strval', $capture['faits']));
+            $changed = true;
         }
-        if ($capture['doublons'] > 0 && $capture['faits'] === []) {
-            $note .= "\n" . t('Cette information était déjà mémorisée : dis-le simplement, sans la réenregistrer.');
+        if (($capture['modifies'] ?? []) !== []) {
+            $note   .= "\n" . t('Tu viens de corriger dans sa mémoire :') . "\n- " . implode("\n- ", array_map('strval', $capture['modifies']));
+            $changed = true;
         }
-        if ($capture['plein']) {
-            $note .= "\n" . t("La mémoire est pleine ({n} souvenirs) : préviens l'utilisateur et invite-le à en supprimer dans Réglages → Préférences IA → « MIA pour vous ».", ['n' => (string) UserMemory::MAX_ENTRIES]);
+        if (($capture['oublies'] ?? []) !== []) {
+            $removed = array_map(static fn($o): string => (string)(is_array($o) ? ($o['content'] ?? '') : $o), $capture['oublies']);
+            $note   .= "\n" . t('Tu viens de retirer de sa mémoire :') . "\n- " . implode("\n- ", $removed);
+            $changed = true;
+        }
+        if ($changed) {
+            $note .= "\n" . t('Confirme-le en une phrase courte, puis réponds normalement à la demande.');
+        }
+        if ((int)($capture['doublons'] ?? 0) > 0 && !$changed) {
+            $note .= "\n" . t('Cette information était déjà dans sa mémoire : dis-le simplement, sans la réenregistrer.');
+        }
+        if (!empty($capture['plein'])) {
+            $note .= "\n" . t("La mémoire est pleine ({n} souvenirs) : préviens l'utilisateur et invite-le à en retirer dans Réglages → Mémoire.", ['n' => (string) UserMemory::MAX_ENTRIES]);
+        }
+        if ((int)($capture['refuses'] ?? 0) > 0) {
+            $note .= "\n" . t('Une information n\'a pas été retenue : elle ressemble à une donnée sensible (mot de passe, code, numéro de carte, IBAN). Explique-le à l\'utilisateur.');
+        }
+        if (!empty($capture['tout'])) {
+            $note .= "\n" . t('Rien n\'a été effacé : pour vider toute sa mémoire, l\'utilisateur passe par Réglages → Mémoire, bouton « Tout effacer ». Dis-le-lui.');
         }
 
         return $note;
-    }
-
-    /**
-     * Gate lexical d'une demande de mémorisation. Large mais explicite : il faut
-     * un verbe de mémorisation adressé à l'assistant — « rappelle-moi » (rappel
-     * d'agenda) ou « note » seul ne suffisent pas.
-     *
-     * Statique et pure → testable sans LLM.
-     */
-    public static function looksLikeMemoryRequest(string $text): bool
-    {
-        $t = trim($text);
-        if ($t === '' || mb_strlen($t) > 2000) {
-            return false;
-        }
-
-        $patterns = [
-            '/\bsouvien(?:s|ne|nes|nent|drai|dras)\b/iu',       // souviens-toi, que tu te souviennes
-            '/\b(?:se|te|t\')\s*souvenir\b/iu',
-            '/\brappell?e[- ]?toi\b/iu',
-            '/\b(?:te|t\')\s*rappeler\b/iu',
-            '/\breti(?:ens|ent|enne|ennes)\b/iu',
-            '/\bretenir\b/iu',
-            '/\bm[ée]moris\w*/iu',                              // mémorise, mémoriser
-            '/\bgarde[- ]?(?:le|la|les)?\s*(?:bien\s+)?en\s+(?:t[êe]te|m[ée]moire)\b/iu',
-            '/\ben\s+m[ée]moire\b/iu',
-            '/\bn[\'’]?oublie\s+pas\s+que\b/iu',
-            '/\bprends?\s+note\b/iu',
-        ];
-
-        foreach ($patterns as $pattern) {
-            if (preg_match($pattern, $t) === 1) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    /**
-     * Extrait {"memoriser": bool, "faits": [...]} de la réponse du LLM,
-     * tolérant aux enveloppes markdown et au texte parasite autour du JSON.
-     * Renvoie null si rien d'exploitable (le caller ne mémorise alors rien).
-     *
-     * Statique et pure → testable sans LLM.
-     *
-     * @return array{memoriser:bool, faits:list<string>}|null
-     */
-    public static function parseMemoryExtractionJson(string $raw): ?array
-    {
-        $txt = trim($raw);
-        if ($txt === '') {
-            return null;
-        }
-        if (preg_match('/```(?:json)?\s*(.+?)\s*```/s', $txt, $m) === 1) {
-            $txt = trim($m[1]);
-        }
-
-        $start = strpos($txt, '{');
-        $end   = strrpos($txt, '}');
-        if ($start === false || $end === false || $end <= $start) {
-            return null;
-        }
-
-        $data = json_decode(substr($txt, $start, $end - $start + 1), true);
-        if (!is_array($data)) {
-            return null;
-        }
-
-        $faits = [];
-        foreach ((array)($data['faits'] ?? []) as $fait) {
-            if (!is_scalar($fait)) {
-                continue;
-            }
-            $clean = UserMemory::sanitize((string)$fait);
-            if ($clean !== '') {
-                $faits[] = $clean;
-            }
-            if (count($faits) >= 3) {
-                break; // borne dure : un message ne peut pas noyer la mémoire
-            }
-        }
-
-        return [
-            'memoriser' => filter_var($data['memoriser'] ?? false, FILTER_VALIDATE_BOOLEAN),
-            'faits'     => $faits,
-        ];
     }
 
     /**
@@ -9659,6 +11048,16 @@ class ChatController
      *        le modèle a les outils du cerveau (envoi seulement) : un extrait
      *        de MyBrainContext::COMPACT_CHARS au plus, il creusera s'il le faut
      */
+    /**
+     * Les extraits des bases pour une question posée HORS d'un tour de chat
+     * (la question d'une condition ou d'une décision de workflow) : même
+     * recherche, même facturation, même repli lexical que le chat.
+     */
+    public static function knowledgeContextFor(array $kbs, string $query, int $tokenBudget, array $billingCtx = []): ?string
+    {
+        return (new self())->buildKnowledgeBaseContext($kbs, $query, $tokenBudget, $billingCtx, []);
+    }
+
     private function buildKnowledgeBaseContext(
         array $kbs,
         string $query,
@@ -9670,7 +11069,25 @@ class ChatController
             return null;
         }
 
-        [$remoteKbs, $kbs] = KnowledgeBase::partitionByBackend($kbs);
+        [$remoteKbs, $kbs, $tableKbs] = KnowledgeBase::partitionByBackend($kbs);
+        // Tables permanentes : avec les outils de tables (`tables` = tools),
+        // rien ici — leur consigne les nomme et le serveur les lit. Sinon, un
+        // APERÇU, dit comme tel : un début de table n'est pas la table.
+        $tableText = null;
+        if ($tableKbs !== [] && ($opts['tables'] ?? 'preview') !== 'tools') {
+            $tableText = KbTablePrompt::preview(
+                self::permanentTablesFor($tableKbs, null),
+                new KbTableStore(),
+                max(2000, min(KbTablePrompt::MAX_CHARS, intdiv($tokenBudget, 3) * 4)),
+                // Une table plus longue que l'aperçu montre d'abord les lignes
+                // qui citent la question (condition, décision, modèle sans outils).
+                $query
+            );
+            if ($tableText !== null) {
+                KnowledgeBase::markUsed(array_map(static fn(array $kb): int => (int)$kb['id'], $tableKbs));
+                $tokenBudget = max(0, $tokenBudget - TextChunker::estimateTokens($tableText));
+            }
+        }
         $remoteBlocks = [];
         if ($remoteKbs !== []) {
             // Part du budget : tout, s'il n'y a qu'elles ; la moitié sinon —
@@ -9711,14 +11128,11 @@ class ChatController
             $tokenBudget = max(0, $tokenBudget - $used);
         }
         $remoteText = $remoteBlocks === [] ? null : implode("\n\n", $remoteBlocks);
-        if ($kbs === [] || $tokenBudget <= 0) {
-            return $remoteText;
-        }
-        $localText = $this->buildLocalKnowledgeBaseContext($kbs, $query, $tokenBudget, $billingCtx);
-        if ($remoteText === null) {
-            return $localText;
-        }
-        return $localText === null ? $remoteText : $remoteText . "\n\n" . $localText;
+        $localText  = $kbs === [] || $tokenBudget <= 0
+            ? null
+            : $this->buildLocalKnowledgeBaseContext($kbs, $query, $tokenBudget, $billingCtx);
+        $parts = array_values(array_filter([$remoteText, $tableText, $localText], static fn(?string $t): bool => $t !== null && $t !== ''));
+        return $parts === [] ? null : implode("\n\n", $parts);
     }
 
     /**
@@ -9749,7 +11163,8 @@ class ChatController
                     $embedded = EmbeddingService::embedOneWithUsage(
                         (string)$kb['embedding_provider'],
                         (string)$kb['embedding_model'],
-                        $query
+                        $query,
+                        EmbeddingService::KIND_QUERY
                     );
                     $queryVectors[$groupKey] = $embedded['vector'];
                     UsageMeter::embeddings(
@@ -9851,7 +11266,7 @@ class ChatController
         // (ContextWindow), et un fichier ancien relu à la demande.
         'context_summary'           => 'Résumé du début de la conversation',
         'conversation_file'         => 'Relecture d\'un fichier de la conversation',
-        'memorizing'                => 'Mise à jour de la mémoire « MIA pour vous »',
+        'memorizing'                => 'Mise à jour de votre mémoire',
         'generating_image'          => 'Génération d\'une image',
         'reference_images_search'   => 'Recherche d\'images de référence',
         'drive_search'              => 'Recherche dans Google Drive',
@@ -9863,12 +11278,14 @@ class ChatController
         'outlook_search'            => 'Recherche dans Outlook',
         'outlook_read'              => 'Lecture d\'un email Outlook',
         'outlook_attachment'        => 'Lecture d\'une pièce jointe Outlook',
+        'email_files'               => 'Pièces jointes de l\'email reçu',
         'calendar_search'           => 'Consultation de l\'agenda Google',
         'calendar_read'             => 'Lecture d\'un évènement Google Agenda',
         'calendar_slots'            => 'Recherche de créneaux libres (Google Agenda)',
         'mscalendar_search'         => 'Consultation du calendrier Outlook',
         'mscalendar_read'           => 'Lecture d\'un évènement Outlook',
         'mscalendar_slots'          => 'Recherche de créneaux libres (Outlook)',
+        'mscalendar_rooms'          => 'Recherche de salles de réunion (Outlook)',
         'tasks_read'                => 'Consultation des tâches Google',
         'mstodo_read'               => 'Consultation des tâches Microsoft To Do',
         'slack_search'              => 'Recherche dans Slack',
@@ -9889,7 +11306,9 @@ class ChatController
         'creer_brouillon_gmail'     => 'Préparation d\'un brouillon Gmail',
         'creer_brouillon_outlook'   => 'Préparation d\'un brouillon Outlook',
         'creer_evenement_agenda'    => 'Préparation d\'un évènement Google Agenda',
+        'modifier_evenement_agenda' => 'Préparation d\'une modification d\'évènement Google Agenda',
         'creer_evenement_agenda_outlook' => 'Préparation d\'un évènement Outlook',
+        'modifier_evenement_agenda_outlook' => 'Préparation d\'une modification d\'évènement Outlook',
         'envoyer_message_slack'     => 'Préparation d\'un message Slack',
         'envoyer_message_teams'     => 'Préparation d\'un message Teams',
         'creer_tache'               => 'Préparation d\'une tâche Google',
@@ -9912,10 +11331,27 @@ class ChatController
         AssistantDraft::TOOL        => 'Préparation d\'un assistant',
         // Workflow préparé par MIA (carte à approuver) : le détail le nomme.
         WorkflowDraft::TOOL         => 'Préparation d\'un workflow',
+        // Pièce d'une exécution mise à jour depuis la discussion, pendant sa
+        // validation (WorkflowChat). Le détail la nomme.
+        WorkflowChat::TOOL          => 'Mise à jour d\'une pièce du workflow',
         // Tâche programmée « sans validation » : l'action préparée a été
         // exécutée aussitôt (cf. runAutoAction). Le détail dit ce qui a eu
         // lieu, ou pourquoi pas.
         'action_auto'               => 'Exécution sans validation',
+        // Tables de travail (WorkTableTools) : la liste vit en base, le détail
+        // dit ce qui a été collecté, croisé ou remis, et combien de lignes.
+        'table_collect'             => 'Collecte dans une liste',
+        'table_write'               => 'Écriture d\'une liste',
+        'table_join'                => 'Croisement de deux tables',
+        'table_transform'           => 'Liste tirée d\'une table',
+        // Un total ou un compte rendu sans créer de table (transformer_table sans `vers`).
+        'table_compute'             => 'Calcul sur une table',
+        'table_filter'              => 'Vue filtrée d\'une table',
+        'table_view'                => 'Lecture d\'une table',
+        'table_export'              => 'Export d\'une table',
+        'table_enrich'              => 'Enrichissement d\'une table',
+        'table_act'                 => 'Préparation d\'actions sur une table',
+        'table_perm_write'          => 'Préparation d\'une modification de table',
     ];
 
     /**
@@ -9957,12 +11393,14 @@ class ChatController
         'outlook_search'            => 'mail',
         'outlook_read'              => 'mail',
         'outlook_attachment'        => 'doc',
+        'email_files'               => 'doc',
         'calendar_search'           => 'calendar',
         'calendar_read'             => 'calendar',
         'calendar_slots'            => 'calendar',
         'mscalendar_search'         => 'calendar',
         'mscalendar_read'           => 'calendar',
         'mscalendar_slots'          => 'calendar',
+        'mscalendar_rooms'          => 'calendar',
         'tasks_read'                => 'tasks',
         'mstodo_read'               => 'tasks',
         // Slack partage la famille « conversation » avec tout ce qui est
@@ -9987,7 +11425,9 @@ class ChatController
         'creer_brouillon_gmail'     => 'mail',
         'creer_brouillon_outlook'   => 'mail',
         'creer_evenement_agenda'    => 'calendar',
+        'modifier_evenement_agenda' => 'calendar',
         'creer_evenement_agenda_outlook' => 'calendar',
+        'modifier_evenement_agenda_outlook' => 'calendar',
         'creer_tache'               => 'tasks',
         'modifier_tache'            => 'tasks',
         'supprimer_tache'           => 'tasks',
@@ -10001,7 +11441,19 @@ class ChatController
         'programmer_tache'          => 'routine',
         AssistantDraft::TOOL        => 'assistant',
         WorkflowDraft::TOOL         => 'workflow',
+        WorkflowChat::TOOL          => 'workflow',
         'action_auto'               => 'executed',
+        'table_collect'             => 'sheet',
+        'table_write'               => 'sheet',
+        'table_filter'              => 'sheet',
+        'table_join'                => 'sheet',
+        'table_transform'           => 'sheet',
+        'table_compute'             => 'sheet',
+        'table_view'                => 'sheet',
+        'table_export'              => 'sheet',
+        'table_enrich'              => 'sheet',
+        'table_act'                 => 'sheet',
+        'table_perm_write'          => 'sheet',
     ];
 
     /**
@@ -10170,6 +11622,16 @@ class ChatController
     /** Décision prise par le serveur (runAutoAction) : l'issue va au relevé. */
     private bool $autoRecording = false;
 
+    /**
+     * Action par ligne d'une table de travail en cours de préparation
+     * (agir_sur_table) : non null = la file d'approbation TIENT EN RÉSERVE ce
+     * qu'on y dépose, sans carte, et y range l'action déposée.
+     * @var array{id?: int, label?: string, example?: string, icon?: string}|null
+     */
+    private ?array $heldAction = null;
+    /** Décision d'une opération de fond sur une table : aucune issue dans le fil. */
+    private bool $silentOutcome = false;
+
     /** Approbation groupée en cours : les réponses sont gardées, pas envoyées. */
     private bool $batchMode = false;
     private ?array $batchResult = null;
@@ -10240,13 +11702,17 @@ class ChatController
             // dire), puis la consigne. Une image refusée n'en porte aucune.
             'generer_image'            => ['t' => 'generating_image', 'd' => self::imageTraceDetail($args, $result)],
             'chercher_images_reference' => ['t' => 'reference_images_search', 'd' => $arg('requete')],
-            // Tâche préparée (carte à approuver) : son nom, sinon le début de sa consigne.
-            'programmer_tache'         => ['t' => 'programmer_tache', 'd' => $arg('nom') ?? $arg('consigne')],
+            // Tâche préparée (carte à approuver) : son nom, sinon le début de sa
+            // consigne ; une retouche (« plutôt à 9 h ») ne les repasse pas — le
+            // nom de la tâche retouchée revient dans le résultat.
+            'programmer_tache'         => ['t' => 'programmer_tache', 'd' => ($arg('nom') ?: null) ?? ($arg('consigne') ?: null) ?? $res('tache')],
             // Assistant préparé (carte à approuver) : son nom, s'il est donné
             // (une proposition révisée peut ne porter que ce qui change).
             AssistantDraft::TOOL       => ['t' => AssistantDraft::TOOL, 'd' => $arg('nom')],
             // Workflow préparé : son nom, lu dans le JSON de la proposition.
             WorkflowDraft::TOOL        => ['t' => WorkflowDraft::TOOL, 'd' => (string)((WorkflowTools::decode($args['workflow'] ?? null) ?? [])['nom'] ?? '') ?: null],
+            // Pièce de workflow mise à jour : son nom RÉSOLU.
+            WorkflowChat::TOOL         => ['t' => WorkflowChat::TOOL, 'd' => $res('piece') ?? $arg('piece')],
             'rechercher_google_drive'  => ['t' => 'drive_search',
                 'd' => trim(($arg('requete') ?? '')
                     . (($arg('type') ?? '') !== '' ? ' [' . $arg('type') . ']' : '')
@@ -10270,6 +11736,7 @@ class ChatController
             'rechercher_agenda_outlook' => ['t' => 'mscalendar_search', 'd' => $arg('requete')],
             'lire_evenement_agenda_outlook' => ['t' => 'mscalendar_read', 'd' => $res('titre')],
             'trouver_creneaux_outlook' => ['t' => 'mscalendar_slots', 'd' => self::slotsTraceDetail($args)],
+            'lister_salles_outlook'    => ['t' => 'mscalendar_rooms', 'd' => $arg('requete')],
             // Slack : le détail dit la requête, puis le canal RÉELLEMENT atteint
             // (le modèle a pu passer un nom, un identifiant ou un lien).
             'lister_canaux_slack'      => ['t' => 'slack_search',     'd' => $arg('recherche')],
@@ -10317,6 +11784,8 @@ class ChatController
             'creer_evenement_agenda', 'creer_evenement_agenda_outlook',
             'creer_tache', 'modifier_tache',
             'creer_tache_todo', 'modifier_tache_todo' => ['t' => $name, 'd' => $arg('titre')],
+            // Modification d'un évènement : le titre vient du contexte lu (résultat), sinon du nouveau titre.
+            'modifier_evenement_agenda', 'modifier_evenement_agenda_outlook' => ['t' => $name, 'd' => $arg('titre')],
             'modifier_google_doc', 'modifier_google_sheet' => ['t' => $name, 'd' => $arg('fichier')],
             // Rangement : le détail dit la CIBLE (nouveau nom, dossier de
             // destination) — l'id du fichier source ne se lit pas.
@@ -10326,9 +11795,17 @@ class ChatController
             'mettre_en_forme_google_sheet' => ['t' => $name, 'd' => $arg('plage')],
             'dupliquer_google_drive'   => ['t' => $name, 'd' => $arg('nom')],
             'creer_brouillon_gmail', 'creer_brouillon_outlook' => ['t' => $name, 'd' => $arg('objet')],
-            'envoyer_message_slack'    => ['t' => $name, 'd' => $arg('canal')],
+            'envoyer_message_slack'    => ['t' => $name, 'd' => ($arg('canal') ?? '') !== ''
+                ? $arg('canal')
+                : (($arg('personne') ?? '') !== '' ? UserSlackService::personDisplay((string)$arg('personne')) : null)],
             'envoyer_message_teams'    => ['t' => $name, 'd' => $arg('conversation_nom') ?? $arg('conversation')],
             'supprimer_tache'          => ['t' => $name, 'd' => null],
+            // Tables de travail : ce qui a été collecté, croisé, transformé ou
+            // remis, et le nombre de lignes une fois connu (résultat).
+            WorkTableTools::COLLECT, WorkTableTools::WRITE, WorkTableTools::JOIN,
+            WorkTableTools::TRANSFORM, WorkTableTools::VIEW, WorkTableTools::EXPORT,
+            WorkTableTools::ENRICH, WorkTableTools::ACT, WorkTableTools::PERM_WRITE
+                => ['t' => (string)WorkTableTools::traceType($name, $result), 'd' => WorkTableTools::traceDetail($name, $args, $result)],
             default                    => null,
         };
     }
@@ -10394,6 +11871,55 @@ class ChatController
     private static $emitSink = null;
 
     /**
+     * Texte que l'écran montrait quand la personne a cliqué Stop (job de chat).
+     *
+     * L'écran s'arrête au clic ; le worker ne voit la demande qu'à la
+     * prochaine lecture du flux du modèle. Ce qui s'est écrit entre les deux
+     * n'a jamais été montré : la réponse enregistrée s'arrête là où
+     * l'affichage s'est arrêté (cutToSeen). Branché par le job (ChatJob :
+     * JobQueue::textSeenUpTo au repère posté par le bouton), null ailleurs —
+     * une route synchrone (régénération) garde tout. Même règle que
+     * setEmitSink : TOUJOURS remettre à null en fin de job.
+     */
+    public static function setStopTextSource(?callable $source): void
+    {
+        self::$stopTextSource = $source;
+    }
+
+    /** @var callable|null cf. setStopTextSource() */
+    private static $stopTextSource = null;
+
+    /** Texte vu au clic Stop, ou null (aucune source, aucun repère, lecture en échec). */
+    private static function textSeenAtStop(): ?string
+    {
+        if (self::$stopTextSource === null) {
+            return null;
+        }
+        try {
+            $seen = (self::$stopTextSource)();
+            return is_string($seen) ? $seen : null;
+        } catch (\Throwable $e) {
+            error_log('[ChatController] texte vu au Stop illisible : ' . $e->getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * Réponse coupée là où l'écran s'est arrêté. Statique pure.
+     *
+     * `$seen` doit être un DÉBUT de la réponse produite : sinon (une image
+     * insérée par l'outil, un texte qui ne se recoupe pas) la réponse reste
+     * entière — mieux vaut quelques lignes de trop qu'un texte amputé à tort.
+     */
+    public static function cutToSeen(string $full, ?string $seen): string
+    {
+        if ($seen === null || !str_starts_with($full, $seen)) {
+            return $full;
+        }
+        return $seen;
+    }
+
+    /**
      * Prépare le handler SSE de génération pour qu'un abandon côté client
      * (bouton Stop / fermeture d'onglet) n'interrompe pas PHP avant d'avoir
      * sauvé la réponse partielle en base. Combiné aux checks
@@ -10406,17 +11932,18 @@ class ChatController
     }
 
     /**
-     * Marque une réponse partielle quand l'utilisateur a stoppé la génération.
-     * - texte vide → message neutre,
-     * - texte non vide → suffixe explicite (sans rejouer le contenu déjà streamé).
+     * Marque une réponse partielle quand l'utilisateur a stoppé la génération :
+     * la marque que l'écran a posée au clic (chat.js, renderStoppedReply), à
+     * la suite du texte déjà écrit — ou seule, si rien ne l'était. La réponse
+     * rechargée est ainsi celle qu'on a vue s'arrêter. Statique pure.
      */
-    private function markAsAborted(string $partial): string
+    public static function markAsAborted(string $partial): string
     {
-        $partial = (string)$partial;
+        $marker = "*[Réponse interrompue par l'utilisateur]*";
         if (trim($partial) === '') {
-            return '[Génération interrompue par l\'utilisateur.]';
+            return $marker;
         }
-        return rtrim($partial) . "\n\n*[Réponse interrompue par l'utilisateur]*";
+        return rtrim($partial) . "\n\n" . $marker;
     }
 
     /**
@@ -10471,6 +11998,17 @@ class ChatController
     private function resolveAppDefaultLlm(array $availableLlms): string
     {
         return LLMFactory::appDefault($availableLlms) ?? 'openai';
+    }
+
+    /**
+     * Modèle d'une conversation SANS assistant qui n'en porte pas encore :
+     * celui que la personne a choisi comme le sien (étoile du sélecteur,
+     * Préférences IA) s'il lui est encore proposé, sinon celui de
+     * l'organisation. Un assistant n'en dépend jamais (resolveProfileDefaultLlm).
+     */
+    private function resolveUserDefaultLlm(?array $user, array $availableLlms): string
+    {
+        return LlmPreference::defaultFor($user, $availableLlms);
     }
 
     /**
@@ -10761,7 +12299,7 @@ class ChatController
      * @param list<string> $engagedConnectors
      * @return array{cache:string, cache_key:string}
      */
-    public static function toolLoopOptions(int $convId, array $engagedConnectors): array
+    public static function toolLoopOptions(int $convId, array $engagedConnectors, bool $voiceMode = false): array
     {
         $instance = defined('APP_URL') ? (string)APP_URL : '';
         $options = [
@@ -10772,7 +12310,10 @@ class ChatController
         // Seuls les modèles dont le défaut est plus bas le reçoivent (Opus 5.5 :
         // `medium`) — l'adapter l'écarte partout ailleurs, où il ne changerait
         // rien. Une question simple garde l'effort par défaut du modèle.
-        if ($engagedConnectors !== []) {
+        // Conversation vocale : jamais relevé — chaque seconde de réflexion
+        // est un silence à l'oreille, et les connecteurs y sont engagés à
+        // chaque tour (ils s'activent à la demande).
+        if ($engagedConnectors !== [] && !$voiceMode) {
             $options['effort'] = 'high';
         }
         return $options;
@@ -11013,12 +12554,7 @@ class ChatController
      */
     private function filterLlmsForUserScope(array $llms, array $groupScope): array
     {
-        $allowed = UserGroup::allowedLlmKeysForUser((array)($groupScope['active_group_ids'] ?? []));
-        if ($allowed === null) {
-            return $llms;
-        }
-        $allowedSet = array_flip($allowed);
-        return array_intersect_key($llms, $allowedSet);
+        return LlmPreference::withinGroups($llms, (array)($groupScope['active_group_ids'] ?? []));
     }
 
     /** Envoie une réponse 403 cohérente avec les flows SSE/JSON quand le LLM n'est pas autorisé. */
@@ -11184,6 +12720,11 @@ class ChatController
             }
         }
 
+        // Cartes de réalisation des « Versions soignées » (cf. show()).
+        $nativeRuns = NativeDeckRun::forMessages($rawMessages, time(), $creditsByMsg);
+        // Tables de travail : puce de la zone de saisie et lignes « Voir » (cf. show()).
+        [$workTablesChip, $tableLines] = self::workTablesFor($convId, $rawMessages, self::engagedTables($convId, $conversation, $user));
+
         // Sérialisation des messages (sans base64 pour performance)
         $messages = [];
         foreach ($rawMessages as $m) {
@@ -11233,9 +12774,15 @@ class ChatController
                 // poursuivre (migration 078).
                 'plan'         => $m['role'] === 'assistant' ? (Message::agentOf($m)['plan'] ?? null) : null,
                 'suite'        => $m['role'] === 'assistant' ? (Message::agentOf($m)['suite'] ?? null) : null,
+                'offer'        => $m['role'] === 'assistant' && in_array(Message::agentOf($m)['offer'] ?? null, PolishOffer::OFFERED_KINDS, true)
+                    ? Message::agentOf($m)['offer'] : null,
                 // Suggestion de suite déjà calculée ('' = aucune) : posée dans la
                 // zone de saisie sans nouvel appel (FollowUpSuggestion).
                 'suggestion'   => $m['role'] === 'assistant' ? FollowUpSuggestion::storedOf($m) : null,
+                // Carte de réalisation d'une « Version soignée », toute rendue.
+                'run_html'     => isset($nativeRuns[(int)$m['id']]) ? NativeDeckRun::html($nativeRuns[(int)$m['id']]) : null,
+                // Tables de travail établies par cette réponse : la ligne « Voir », toute rendue.
+                'tables_html'  => isset($tableLines[(int)$m['id']]) ? WorkTableView::lineHtml($tableLines[(int)$m['id']]) : null,
                 'llm_badge'    => $m['role'] === 'assistant'
                     ? $this->buildLlmBadgePayload(
                         (string)($m['llm_provider'] ?? ''),
@@ -11282,8 +12829,127 @@ class ChatController
             // messages, un changement de conversation les perdait jusqu'au
             // rechargement de la page (même liste que show()).
             'pending_actions' => DrivePendingAction::pendingForConversation($convId, (int)$user['id']),
+            // Question de MIA (mémoire) restée sans réponse sous la dernière
+            // réponse (même règle que show()).
+            'memory_question' => self::pendingMemoryQuestion((int)$user['id'], $convId, $rawMessages),
             // Conversation née d'une tâche programmée : bandeau en tête du fil.
             'scheduled_task' => $scheduledBanner,
+            // Conversation d'une exécution de workflow : le volet « Avancement »
+            // la suit (workflow-progress.js, la discussion d'abord).
+            'workflow_run_id' => self::workflowRunIdFor($conversation, (int)$user['id']),
+            // Tables de travail de la conversation : la puce de la zone de saisie.
+            'tables' => ['chip' => $workTablesChip],
         ]);
+    }
+
+    /**
+     * Fin d'un tour qui avait les outils de tables : la puce de la zone de
+     * saisie à jour et la ligne « Voir » de la réponse (WorkTableView). Ne
+     * lève jamais.
+     *
+     * @param list<int|string> $tableRefs tables établies ou consultées pendant le tour — identifiant d'une
+     *                                    table de la conversation, ou « p12 » pour une table permanente
+     * @param list<array>|null $permanent tables permanentes engagées (null : relues pour la conversation)
+     * @return array{chip: array, html: string}|null
+     */
+    public static function turnTablesPayload(int $convId, array $tableRefs, ?array $permanent = null): ?array
+    {
+        try {
+            $permanent ??= self::engagedTables($convId);
+            $tables = (new SqlWorkTableStore())->all($convId);
+            // Même résolution que le fil rechargé (vues sans nom comprises).
+            $named = WorkTableView::forMessages(
+                [['id' => 0, 'role' => 'assistant', 'agent_json' => json_encode(['tables' => WorkTableView::refs($tableRefs)])]],
+                $tables,
+                $permanent,
+                new KbTableStore()
+            )[0] ?? [];
+            return ['chip' => self::tablesChip($tables, $permanent), 'html' => WorkTableView::lineHtml($named)];
+        } catch (\Throwable $e) {
+            error_log('[Tables] fin de tour, tables de la conversation ' . $convId . ' illisibles : ' . $e->getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * Tables de travail d'une conversation, pour l'écran : la puce de la zone
+     * de saisie (leur nombre, tables permanentes engagées comprises) et les
+     * tables à nommer sous chaque réponse (WorkTableView). Les tables de
+     * travail ne sont lues que si un message en cite.
+     * Ne lève jamais : sans elles, la conversation s'affiche quand même.
+     *
+     * @param list<array> $messages  lignes de `messages` (id, role, agent_json)
+     * @param list<array> $permanent tables permanentes engagées dans la conversation (engagedTables)
+     * @return array{0: array{count:int,label:string,title:string}, 1: array<int, list<array>>}
+     */
+    private static function workTablesFor(int $convId, array $messages, array $permanent = []): array
+    {
+        try {
+            $count  = count(SqlWorkTableStore::names($convId));
+            $tables = $count > 0 ? (new SqlWorkTableStore())->all($convId) : [];
+            $lines  = ($count > 0 || $permanent !== []) && WorkTableView::anyRefs($messages)
+                ? WorkTableView::forMessages($messages, $tables, $permanent, new KbTableStore())
+                : [];
+            return [self::tablesChip($tables, $permanent), $lines];
+        } catch (\Throwable $e) {
+            error_log('[Tables] tables de la conversation ' . $convId . ' illisibles : ' . $e->getMessage());
+            return [WorkTableView::chip(0), []];
+        }
+    }
+
+    /**
+     * La puce de la zone de saisie : la table de la personne d'abord, puis le
+     * nombre de résultats de MIA (les vues vivent sous leur table, elles ne
+     * comptent pas). Pure.
+     *
+     * @param list<array> $tables    tables de la conversation (sans brouillons)
+     * @param list<array> $permanent tables permanentes engagées
+     */
+    public static function tablesChip(array $tables, array $permanent): array
+    {
+        $results = count(array_filter($tables, static fn(array $t): bool => !WorkTableView::isView($t)));
+        return WorkTableView::chip($results, array_map(static fn(array $t): string => (string)$t['title'], $permanent));
+    }
+
+    /**
+     * Tables PERMANENTES engagées dans une conversation, pour l'écran : celles
+     * de son assistant et celles que SON PROPRIÉTAIRE a cochées, avec les
+     * portes du tour de chat (KbTableStore::engaged). Hors requête (job d'une
+     * opération de fond), la conversation et son propriétaire sont relus.
+     * Ne lève jamais.
+     *
+     * @return list<array>
+     */
+    private static function engagedTables(int $convId, ?array $conversation = null, ?array $user = null): array
+    {
+        try {
+            $conversation ??= Conversation::findById($convId);
+            if ($conversation === null) {
+                return [];
+            }
+            $user ??= User::findById((int)($conversation['user_id'] ?? 0));
+            return KbTableStore::engaged($convId, $user ?: null, (int)($conversation['profile_id'] ?? 0));
+        } catch (\Throwable $e) {
+            error_log('[Tables] tables permanentes de la conversation ' . $convId . ' illisibles : ' . $e->getMessage());
+            return [];
+        }
+    }
+
+    /**
+     * L'exécution de workflow dont cette conversation est le fil, si elle est
+     * à la personne (les exécutions sont personnelles), sinon null.
+     */
+    public static function workflowRunIdFor(?array $conversation, int $userId): ?int
+    {
+        $runId = (int)($conversation['workflow_run_id'] ?? 0);
+        if ($runId <= 0) {
+            return null;
+        }
+        try {
+            $run = WorkflowRun::find($runId);
+        } catch (\Throwable $e) {
+            return null;
+        }
+        return $run !== null && (int)$run['user_id'] === $userId ? $runId : null;
     }
 }

@@ -1,7 +1,8 @@
 <?php
 /**
  * Carte du compte — pied de barre latérale (chat, volet du chat des pages
- * d'espace, administration, paramètres) : avatar, nom, crédits du mois, puis
+ * d'espace, administration, paramètres) : avatar, nom, crédits du mois (ou
+ * crédits de démo restants, pour un compte de démonstration), puis
  * les deux portes des réglages, libellées (user-account-actions.php). La carte
  * elle-même n'est pas cliquable : une seule entrée par destination, ce sont
  * les liens « Réglages » (Mon profil) et « Admin » (administration).
@@ -9,6 +10,14 @@
  * $creditQuotaStatus.
  * L'avatar porte la seule pastille de ce partial : les connexions à
  * reconnecter. Les points à régler vivent sur le bouton « Admin ».
+ *
+ * REPLIABLE (2026-11-10, même mécanique que les sections du volet —
+ * sidebar-sections.js, section `account`) : le chevron du coin replie la
+ * carte en une seule rangée — l'avatar cerclé de ses crédits restants (anneau
+ * aux couleurs de la barre), puis Réglages et Admin en icônes. Toucher
+ * l'avatar ou le chevron la redéplie. Le nom et les crédits restent lus par
+ * les lecteurs d'écran (masqués à l'œil seulement). État posé sur <html>
+ * (`data-sb-account`) avant le premier rendu, par head-meta.php.
  */
 $currentUser = Session::currentUser();
 if (!$currentUser) {
@@ -52,24 +61,58 @@ if (!isset($connectorsToReconnect)) {
     $connectorsToReconnect = ConnectorRegistry::reconnectNeeded((int)$currentUser['id'], $userRole);
 }
 $reconnectSummary = ConnectorRegistry::reconnectSummary($connectorsToReconnect);
+// Carte repliée : l'anneau de l'avatar dit la part de crédits restante (même
+// couleur que la barre), et l'infobulle de l'avatar le nom et les crédits.
+// chat.js (applyQuotaStatus) tient les deux à jour en direct.
+$dockQuotaStyle = $quotaMax !== null
+    ? ' style="--quota-left:' . max(0, 100 - $quotaPct) . '%;--quota-color:' . $quotaBarColor . '"'
+    : '';
+if (($creditQuotaStatus['reason'] ?? null) === CreditQuota::REASON_BUDGET) {
+    $dockCreditText = t('Service IA suspendu');
+} elseif ($quotaMax === null) {
+    $dockCreditText = t('Illimité');
+} elseif ($remaining > 0) {
+    $dockCreditText = !empty($creditQuotaStatus['demo'])
+        ? t('{n} crédits de démo restants', ['n' => Format::credits($remaining)])
+        : t('{n} crédits restants', ['n' => Format::credits($remaining)]);
+} else {
+    $dockCreditText = !empty($creditQuotaStatus['demo']) ? t('Démo terminée') : t('Quota épuisé');
+}
+// La connexion à reconnecter a SA bulle, sur sa pastille (nav-signals.js).
+$dockAvatarTitle = trim((string)($currentUser['name'] ?? '')) . ' — ' . $dockCreditText;
 ?>
-<div class="user-dock">
-<div class="user-info" id="userAccountCard"<?= $reconnectSummary !== '' ? ' title="' . htmlspecialchars($reconnectSummary) . '"' : '' ?>>
-    <span class="user-avatar-wrap">
+<div class="user-dock<?= $quotaMax !== null ? ' has-quota' : '' ?>" id="userDock"<?= $dockQuotaStyle ?>>
+<button type="button" class="user-dock-toggle" data-sb-toggle="account" aria-expanded="true" aria-controls="userDock"
+        data-label-fold="<?= te('Replier le compte') ?>" data-label-unfold="<?= te('Déplier le compte') ?>"
+        title="<?= te('Replier le compte') ?>" aria-label="<?= te('Replier le compte') ?>">
+    <svg class="sb-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+</button>
+<div class="user-info" id="userAccountCard">
+    <span class="user-avatar-wrap" title="<?= htmlspecialchars($dockAvatarTitle) ?>">
         <?php if (!empty($currentUser['avatar_url'])): ?>
             <img src="<?= htmlspecialchars($currentUser['avatar_url']) ?>" class="user-avatar" alt="">
         <?php else: ?>
             <span class="user-avatar-fallback"><?= htmlspecialchars($userInitials) ?></span>
         <?php endif; ?>
-        <?php if ($reconnectSummary !== ''): ?><span class="reconnect-dot" aria-hidden="true"></span><?php endif; ?>
+        <?= ConnectorRegistry::reconnectDot($connectorsToReconnect) ?>
     </span>
-    <span style="flex:1;min-width:0;display:block;text-align:left">
+    <span class="user-info-text" style="flex:1;min-width:0;display:block;text-align:left">
         <span class="user-name" style="display:block"><?= htmlspecialchars($currentUser['name']) ?></span>
         <span id="creditQuotaPrimary" style="display:block;font-size:11px;color:var(--text-muted);margin-top:2px">
             <?php if (($creditQuotaStatus['reason'] ?? null) === CreditQuota::REASON_BUDGET): ?>
                 <!-- Budget IA de l'organisation atteint : même mention que chat.js (applyQuotaStatus). -->
                 <span id="creditRemainingLabel" style="color:#ef4444"><?= te('Service IA suspendu') ?></span>
                 <span id="creditBreakdownLabel"></span>
+            <?php elseif (!empty($creditQuotaStatus['demo'])): ?>
+                <!-- Compte de démo : enveloppe sans renouvellement — même mention que chat.js (applyQuotaStatus). -->
+                <span id="creditRemainingLabel" style="color:<?= $remaining === 0 ? '#ef4444' : ($quotaPct >= 70 ? '#f59e0b' : 'var(--text-muted)') ?>">
+                    <?= $remaining > 0 ? te('{n} crédits de démo restants', ['n' => Format::credits($remaining)]) : te('Démo terminée') ?>
+                </span>
+                <?php if ($remaining > 0): ?>
+                    <span id="creditBreakdownLabel"> <?= te('sur {max}', ['max' => Format::credits((int)$quotaMax)]) ?></span>
+                <?php else: ?>
+                    <span id="creditBreakdownLabel"></span>
+                <?php endif; ?>
             <?php elseif ($quotaMax !== null): ?>
                 <span id="creditRemainingLabel" style="color:<?= $remaining === 0 ? '#ef4444' : ($quotaPct >= 70 ? '#f59e0b' : 'var(--text-muted)') ?>">
                     <?= $remaining > 0 ? te('{n} crédits restants', ['n' => Format::credits($remaining)]) : te('Quota épuisé') ?>

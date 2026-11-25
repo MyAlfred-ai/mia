@@ -22,15 +22,18 @@ if (!isset($connectorsToReconnect)) {
 }
 $haReconnect = ConnectorRegistry::reconnectSummary($connectorsToReconnect);
 $haTitle     = t('Réglages') . ($haReconnect !== '' ? ' — ' . $haReconnect : '');
+// La connexion à reconnecter a SA bulle, sur sa pastille ; le nom accessible
+// du lien la dit aussi.
 ?>
 <a href="/settings" class="header-avatar-btn"
-        title="<?= htmlspecialchars($haTitle) ?>" aria-label="<?= htmlspecialchars($haTitle) ?>">
+        title="<?= te('Réglages') ?>" aria-label="<?= htmlspecialchars($haTitle) ?>">
     <span class="user-avatar-wrap">
         <?php if (!empty($haUser['avatar_url'])): ?>
             <img src="<?= htmlspecialchars($haUser['avatar_url']) ?>" class="user-avatar" alt="">
         <?php else: ?>
             <span class="user-avatar-fallback"><?= htmlspecialchars($haInitials) ?></span>
         <?php endif; ?>
-        <?php if ($haReconnect !== ''): ?><span class="reconnect-dot" aria-hidden="true"></span><?php endif; ?>
+        <?= ConnectorRegistry::reconnectDot($connectorsToReconnect) ?>
+        <?= MajorFeatures::dotAt(MajorFeatures::PLACE_ACCOUNT) ?>
     </span>
 </a>

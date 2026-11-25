@@ -149,6 +149,90 @@ final class CreationsGalleryTest extends TestCase
         $this->assertNull(Message::extractJsonTitle('pas du json'));
     }
 
+    // ---------- Versions soignées ----------
+
+    public function testUnFichierRealiseParUnModeleEstRepere(): void
+    {
+        $token   = str_repeat('a1', 16);
+        $content = "✅ Présentation réalisée par GPT-6.1 Sol : [bilan.pptx](/chat/12/presentation/$token) — conservée 30 jours.";
+        $this->assertSame(
+            [['token' => $token, 'label' => 'bilan.pptx', 'url' => "/chat/12/presentation/$token"]],
+            Message::nativeFileLinks($content, 12)
+        );
+        // Un lien vers une autre conversation : le téléchargement le refuserait.
+        $this->assertSame([], Message::nativeFileLinks($content, 13));
+        // Jeton qui n'en est pas un.
+        $this->assertSame([], Message::nativeFileLinks('[x.pptx](/chat/12/presentation/../../etc)', 12));
+    }
+
+    public function testLeMessageEnAnglaisEstRepereAussi(): void
+    {
+        $token = str_repeat('0f', 16);
+        $links = Message::nativeFileLinks("✅ Workbook produced by Claude: [sales.xlsx](/chat/7/presentation/$token) — kept 30 days.", 7);
+        $this->assertCount(1, $links);
+        $this->assertSame('sales.xlsx', $links[0]['label']);
+    }
+
+    /**
+     * La galerie lit le message que GammaService écrit : les deux doivent
+     * rester d'accord, sinon les présentations Gamma disparaissent en silence.
+     */
+    public function testLaPresentationGammaEstRelueDepuisSonMessage(): void
+    {
+        $texte = GammaService::summarizeResultMessage('Plan 2027', [
+            'gammaUrl'  => 'https://gamma.app/docs/plan-2027-abc',
+            'exportUrl' => 'https://assets.api.gamma.app/export/pdf/xyz/Plan-2027.pdf',
+            'credits_remaining' => 120,
+        ]);
+        $this->assertStringContainsString(Message::GAMMA_RESULT_PREFIX, $texte);
+
+        $gamma = Message::gammaResult($texte);
+        $this->assertSame('Plan 2027', $gamma['title']);
+        $this->assertSame('https://gamma.app/docs/plan-2027-abc', $gamma['url']);
+        $this->assertSame('https://assets.api.gamma.app/export/pdf/xyz/Plan-2027.pdf', $gamma['export']);
+        $this->assertSame('pdf', $gamma['export_ext']);
+
+        $sansExport = Message::gammaResult(GammaService::summarizeResultMessage('Plan', ['gammaUrl' => 'https://gamma.app/docs/p']));
+        $this->assertSame('', $sansExport['export']);
+        $this->assertNull(Message::gammaResult('✅ Présentation Gamma « Plan » générée.'), 'Sans lien, rien à ouvrir.');
+        $this->assertNull(Message::gammaResult('Présentation Gamma prête : [« X »](javascript:alert(1))'));
+    }
+
+    public function testLesJoursRestantsAvantEffacement(): void
+    {
+        $now = 1_800_000_000;
+        $this->assertSame(30, NativeDeckStore::daysLeft($now, $now));
+        $this->assertSame(1, NativeDeckStore::daysLeft($now - 29 * 86400 - 3600, $now));
+        $this->assertSame(1, NativeDeckStore::daysLeft($now - 40 * 86400, $now), 'Tant qu\'il existe, au moins un jour.');
+    }
+
+    /**
+     * Les versions soignées n'entrent PAS dans le prédicat partagé avec
+     * l'élagage : rien à neutraliser, elles resteraient éligibles à jamais.
+     */
+    public function testLesVersionsSoigneesRestentHorsDeLElagage(): void
+    {
+        $this->assertStringNotContainsString('/presentation/', Message::creationPredicateSql('m'));
+        $this->assertStringNotContainsString('Gamma', Message::creationPredicateSql('m'));
+    }
+
+    public function testLesVersionsSoigneesSontBrancheesDansLaGalerie(): void
+    {
+        $controller = (string)file_get_contents(ROOT . '/src/Controllers/UserSettingsController.php');
+        $this->assertStringContainsString('Message::polishedForUser', $controller);
+        $this->assertStringContainsString('NativeDeckStore::find(', $controller, 'Un fichier échu serait proposé.');
+
+        $tpl = (string)file_get_contents(ROOT . '/templates/settings/creations.php');
+        $this->assertStringContainsString("'polished_file'   => t('Version soignée')", $tpl);
+        $this->assertStringContainsString('creation-file-tile', $tpl);
+        $this->assertStringContainsString('data-open-url', $tpl);
+
+        $js = (string)file_get_contents(ROOT . '/public/assets/js/creations.js');
+        $this->assertStringContainsString("card.dataset.type === 'polished_file'", $js);
+        $this->assertStringContainsString("kind === 'external'", $js);
+        $this->assertStringContainsString('.creation-file-tile', (string)file_get_contents(ROOT . '/public/assets/css/main.css'));
+    }
+
     // ---------- Câblage de la page ----------
 
     /**

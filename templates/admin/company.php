@@ -28,10 +28,11 @@ $fileIcon = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke=
 $downloadIcon = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>';
 ?>
 <div class="admin-content brand-page company-page">
-    <div class="brand-page-head">
-        <div>
+    <?php require ROOT . '/templates/partials/admin-topbar.php'; ?>
+    <div class="brand-page-head page-head">
+        <div class="page-head-text">
             <h1><?= te('Entreprise') ?></h1>
-            <p class="brand-lead">
+            <p class="brand-lead page-head-sub">
                 <?= str_replace(['{a}', '{/a}'], ['<a href="/admin/settings">', '</a>'],
                     te("L'organisation qui utilise MIA. Son nom, son descriptif et son vocabulaire sont donnés à l'assistant dans chaque conversation ; son logo, sa mention de pied de page et ses modèles PowerPoint et Word habillent les documents produits. Le nom, les logos et les couleurs de l'application se règlent dans {a}Marque & apparence{/a}.")) ?>
             </p>
@@ -142,7 +143,7 @@ $downloadIcon = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" str
                 </div>
             </section>
 
-            <!-- Vocabulaire de l'entreprise (venu de Modèles IA → Modèles) -->
+            <!-- Vocabulaire de l'entreprise (venu de Modèles IA → Fournisseurs et modèles) -->
             <section class="card brand-card" aria-labelledby="companyVocabularyTitle" id="vocabulaire">
                 <div class="card-head">
                     <span class="card-ic" aria-hidden="true">

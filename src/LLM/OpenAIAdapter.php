@@ -278,15 +278,26 @@ class OpenAIAdapter implements LLMInterface
     }
 
     /**
-     * Nombre d'items `web_search_call` d'une réponse Responses API : chaque
-     * item = une recherche exécutée par OpenAI, facturée à l'appel en plus
-     * des tokens. Lu sur `response.output` à la complétion.
+     * Recherches FACTURÉES d'une réponse Responses API, lues sur
+     * `response.output` à la complétion. PURE.
+     *
+     * Un item `web_search_call` porte une action : `search` (une recherche),
+     * `open_page` (ouverture d'une page) ou `find_in_page` (recherche dans une
+     * page). Seule `search` est facturée (« Search actions incur a tool call
+     * cost », guide Web search d'OpenAI, relu le 2026-11-10) : les modèles qui
+     * raisonnent ouvrent souvent plusieurs pages par recherche, et compter
+     * chaque item surfacturait l'outil d'autant. Un item sans action (forme
+     * d'avant) reste compté comme une recherche — jamais de sous-facturation.
      */
-    private static function countWebSearchCalls(array $response): int
+    public static function countWebSearchCalls(array $response): int
     {
         $count = 0;
         foreach ((array)($response['output'] ?? []) as $item) {
-            if (is_array($item) && ($item['type'] ?? '') === 'web_search_call') {
+            if (!is_array($item) || ($item['type'] ?? '') !== 'web_search_call') {
+                continue;
+            }
+            $action = $item['action']['type'] ?? null;
+            if (!is_string($action) || $action === '' || $action === 'search') {
                 $count++;
             }
         }

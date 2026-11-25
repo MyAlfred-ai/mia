@@ -13,6 +13,7 @@
 <body class="admin-page">
 <?php $page = 'logs'; require ROOT . '/templates/partials/admin-nav.php'; ?>
 <div class="admin-content">
+    <?php require ROOT . '/templates/partials/admin-topbar.php'; ?>
     <?php $ongletsGroupe = AdminTabs::DIAGNOSTIC; require ROOT . '/templates/partials/admin-tabs.php'; ?>
     <?php
         /**
@@ -105,15 +106,15 @@
          data-cookie="<?= $h(LogsController::TZ_COOKIE) ?>"
          data-search="<?= $h(implode("\n", $query->terms)) ?>">
 
-        <header class="lgx-head">
-            <div class="lgx-head-main">
+        <header class="lgx-head page-head">
+            <div class="lgx-head-main page-head-text">
                 <div class="lgx-title-row">
                     <h1><?= te('Journaux') ?></h1>
                     <?php if ($stat['exists']): ?>
                         <span class="lgx-verdict is-<?= $h($verdict[0]) ?>" title="<?= $h($verdict[2]) ?>"><span class="lgx-verdict-dot" aria-hidden="true"></span><?= $h($verdict[1]) ?></span>
                     <?php endif; ?>
                 </div>
-                <p class="lgx-sub">
+                <p class="lgx-sub page-head-sub">
                     <?php if (!$stat['exists']): ?>
                         <?= te("Le journal serveur n'existe pas encore : il sera créé à la première entrée.") ?>
                     <?php elseif (!$stat['readable']): ?>

@@ -39,10 +39,15 @@ final class LoopSources
     /** Ordre = ordre des tuiles de l'éditeur. */
     public const KINDS = [self::ROWS, self::LIST, self::ATTACHMENTS, self::SLIDES, self::PAGES, self::SECTIONS, self::FILES, self::EMAILS, self::AI];
 
-    /** D'où vient la source : une pièce du dossier, un fichier Drive désigné, une recherche. */
+    /**
+     * D'où vient la source : une pièce du dossier, un fichier Drive désigné,
+     * une recherche, une table PERMANENTE (base de connaissances de nature
+     * « table », lignes « pour chaque ligne » seulement — WorkflowTables).
+     */
     public const FROM_PIECE  = 'piece';
     public const FROM_DRIVE  = 'drive';
     public const FROM_SEARCH = 'search';
+    public const FROM_TABLE  = 'table';
 
     /** Découpeurs qui savent lire un fichier Drive désigné (lien, chemin, nom). */
     public const DRIVE_FILE_KINDS = [self::ROWS, self::SLIDES, self::PAGES, self::SECTIONS];
@@ -186,7 +191,7 @@ final class LoopSources
         if ($kind === self::ATTACHMENTS) {
             return ($source['from'] ?? self::FROM_PIECE) !== self::FROM_SEARCH;
         }
-        return ($source['from'] ?? self::FROM_PIECE) !== self::FROM_DRIVE;
+        return !in_array($source['from'] ?? self::FROM_PIECE, [self::FROM_DRIVE, self::FROM_TABLE], true);
     }
 
     /**
@@ -261,6 +266,10 @@ final class LoopSources
         $fromDrive = ($source['from'] ?? '') === self::FROM_DRIVE;
         $driveName = trim((string)($source['drive'] ?? ''));
         $of = $fromDrive ? ($driveName !== '' ? $driveName : t('un fichier Drive')) : $name;
+        if ($kind === self::ROWS && ($source['from'] ?? '') === self::FROM_TABLE) {
+            $table = trim((string)($source['table'] ?? ''));
+            return $table !== '' ? t('Pour chaque ligne de la table « {table} »', ['table' => $table]) : t('Pour chaque ligne d’une table');
+        }
         return match ($kind) {
             self::ROWS        => $of !== '' ? t('Pour chaque ligne de « {source} »', ['source' => $of]) : t('Pour chaque ligne d’un tableau'),
             self::SLIDES      => $of !== '' ? t('Pour chaque slide de « {source} »', ['source' => $of]) : t('Pour chaque slide d’une présentation'),
@@ -305,6 +314,8 @@ final class LoopSources
                 'fields'   => self::FIXED_FIELDS[$kind] ?? [],
                 'file'     => in_array($kind, self::FILE_KINDS, true),
                 'drive'    => in_array($kind, self::DRIVE_FILE_KINDS, true),
+                // Les lignes d'une table permanente (Bases de connaissances).
+                'tables'   => $kind === self::ROWS,
                 'search'   => in_array($kind, [self::EMAILS, self::ATTACHMENTS], true),
                 'folder'   => $kind === self::FILES,
                 'ai'       => $kind === self::AI,

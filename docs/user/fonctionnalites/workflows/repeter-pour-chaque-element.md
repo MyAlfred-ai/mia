@@ -25,7 +25,7 @@ que la boucle parcourt** ; MIA découpe, compte, et traite les éléments un par
 
 | Parcourir… | Un élément, c'est… | Ce que l'élément porte | D'où viennent les éléments |
 |---|---|---|---|
-| **Lignes d'un tableau ou d'un Excel** | une ligne | les colonnes que vous déclarez (Client, Email, Montant…) | un fichier Excel ou CSV du départ, un Tableau remis par une étape, ou un fichier Google Drive |
+| **Lignes d'un tableau ou d'un Excel** | une ligne | les colonnes que vous déclarez (Client, Email, Montant…) | un fichier Excel ou CSV du départ, un Tableau remis par une étape, un fichier Google Drive, ou une **table de vos bases** (ses colonnes reprises d'office — voir [Utiliser des tables](utiliser-des-tables.md)) |
 | **Éléments d'une liste** | une ligne de la liste | son texte | une Liste, un champ liste d'une Fiche, ou un texte (une ligne = un élément) |
 | **Pièces jointes d'un email** | un fichier joint | nom, type, taille, objet et expéditeur de l'email — et le fichier lui-même | l'email qui lance le workflow, ou les emails d'une recherche |
 | **Slides d'une présentation** | une slide | numéro, titre, texte, notes du présentateur | un PowerPoint (.pptx) du départ, une présentation remise par une étape, ou un fichier Google Drive |

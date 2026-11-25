@@ -275,6 +275,20 @@ final class WorkflowValues
             $hay = is_array($value) ? implode("\n", $value) : (string)$value;
             return $target !== '' && mb_stripos(self::fold($hay), self::fold($target)) !== false;
         }
+        if ($type !== 'number' && $type !== 'date' && in_array($op, ['gt', 'gte', 'lt', 'lte'], true)) {
+            // « Supérieur à 0 » sur un champ resté texte (règle écrite par MIA,
+            // colonne d'un tableau non typée) : comparé comme une date ou un
+            // nombre si les DEUX côtés en sont — sinon la règle serait
+            // toujours fausse, sans un mot.
+            foreach (['date', 'number'] as $as) {
+                $a = self::coerce(is_array($value) ? null : (string)$value, $as);
+                $b = self::coerce($target, $as);
+                if ($a !== null && $b !== null) {
+                    return self::compare($a, $op, $target, $as);
+                }
+            }
+            return false;
+        }
         if ($type === 'number' || $type === 'date') {
             $b = self::coerce($target, $type);
             if ($b === null) {
@@ -299,6 +313,129 @@ final class WorkflowValues
     }
 
     /** Minuscules sans accents, pour comparer des textes. */
+    /**
+     * « « Oui », « Non » et « Peut-être » » : les valeurs citées, la dernière
+     * jointe par « et » — « ne peut pas valoir à la fois « Haute », « Basse » »
+     * se lisait comme une énumération coupée (recette du 2026-11-09).
+     *
+     * @param list<string> $values
+     */
+    private static function citedValues(array $values): string
+    {
+        if (count($values) < 2) {
+            return I18n::listeCitee($values);
+        }
+        $last = array_pop($values);
+        return t('{list} et {last}', ['list' => I18n::listeCitee($values), 'last' => I18n::listeCitee([$last])]);
+    }
+
+    /**
+     * Ce qu'une règle ne peut pas faire, dit AVANT de l'exécuter. Pure.
+     *
+     * Le défaut payé (retour du 2026-11-04) : trois conditions « Départ est
+     * égal à Oui », « … à Non », « … à Peut-être », jointes par « Toutes les
+     * conditions » — la personne pensait décrire trois réponses possibles, la
+     * règle n'était jamais vraie et la voie « Si non » partait à chaque fois,
+     * « Oui » saisi compris. Une condition ne répond qu'oui ou non ; ses
+     * conditions se COMBINENT en une réponse.
+     *
+     * Rend une liste de constats {level: block|warn, text} :
+     * - « toutes » : deux valeurs différentes pour un même champ, une valeur et
+     *   son contraire, « oui » et « non », « vide » et autre chose → jamais vraie ;
+     * - « au moins une » : une valeur et son contraire, « vide » et
+     *   « renseigné » → toujours vraie ;
+     * - un champ Choix comparé à une valeur qui n'est pas une de ses options.
+     *
+     * @param array $pieces clé → pièce ({fields: [{key, label, type, options?}]})
+     * @param string $target rule (condition) | filter (filtre d'une boucle) | until (sortie d'une boucle)
+     * @return list<array{level: string, text: string}>
+     */
+    public static function ruleConflicts(array $rule, array $pieces, string $target = 'rule'): array
+    {
+        $never = match ($target) {
+            'filter' => t('aucun élément ne serait gardé'),
+            'until'  => t('la boucle n’en sortirait jamais d’elle-même'),
+            default  => t('la voie « Si oui » ne serait jamais prise'),
+        };
+        $always = match ($target) {
+            'filter' => t('tous les éléments seront gardés'),
+            'until'  => t('la boucle s’arrêtera dès le premier tour'),
+            default  => t('la voie « Si non » ne sera jamais prise'),
+        };
+        $out = [];
+        $groups = [];
+        foreach ((array)($rule['items'] ?? []) as $it) {
+            $piece = $pieces[(string)($it['piece'] ?? '')] ?? null;
+            $def = null;
+            foreach ((array)($piece['fields'] ?? []) as $f) {
+                if (($f['key'] ?? null) === ($it['field'] ?? null)) {
+                    $def = $f;
+                }
+            }
+            if ($def === null) {
+                continue;
+            }
+            $label = (string)($def['label'] ?? '') !== '' ? (string)$def['label'] : (string)$it['field'];
+            $op = (string)($it['op'] ?? 'eq');
+            $value = trim((string)($it['value'] ?? ''));
+            $options = array_values(array_filter(array_map('strval', (array)($def['options'] ?? [])), static fn(string $o): bool => $o !== ''));
+            if ($options !== [] && in_array($op, ['eq', 'ne'], true) && $value !== '') {
+                $known = array_map(static fn(string $o): string => self::fold($o), $options);
+                if (!in_array(self::fold($value), $known, true)) {
+                    $out[] = ['level' => 'warn', 'text' => t('« {valeur} » n’est pas un des choix de « {champ} » ({choix}) : cette condition {verdict}.', [
+                        'valeur' => $value, 'champ' => $label, 'choix' => implode(', ', $options),
+                        'verdict' => $op === 'eq' ? t('ne sera jamais vraie') : t('sera toujours vraie'),
+                    ])];
+                }
+            }
+            $k = (string)$it['piece'] . '|' . (string)$it['field'];
+            $groups[$k]['label'] = $label;
+            $groups[$k]['items'][] = ['op' => $op, 'value' => self::fold($value), 'raw' => $value];
+        }
+        $any = ($rule['join'] ?? 'all') === 'any';
+        foreach ($groups as $g) {
+            if (count($g['items']) < 2) {
+                continue;
+            }
+            $eq = [];
+            $ne = [];
+            $ops = [];
+            foreach ($g['items'] as $i) {
+                $ops[$i['op']] = true;
+                if ($i['op'] === 'eq' && $i['value'] !== '') {
+                    $eq[$i['value']] = $i['raw'];
+                }
+                if ($i['op'] === 'ne' && $i['value'] !== '') {
+                    $ne[$i['value']] = $i['raw'];
+                }
+            }
+            $both = array_intersect_key($eq, $ne);
+            if ($any) {
+                if ($both !== [] || (isset($ops['empty']) && isset($ops['notempty']))) {
+                    $out[] = ['level' => 'warn', 'text' => t('Avec « Au moins une », ces conditions sur « {champ} » sont toujours vraies : {suite}.', ['champ' => $g['label'], 'suite' => $always])];
+                }
+                continue;
+            }
+            if (count($eq) > 1) {
+                $out[] = ['level' => 'block', 'text' => ($target === 'rule'
+                    ? t('« {champ} » ne peut pas valoir à la fois {valeurs} : avec « Toutes les conditions », {suite}. Une condition répond oui ou non : gardez la valeur qui mène à « Si oui » (les autres iront dans « Si non »), ou choisissez « Au moins une ».', [
+                        'champ' => $g['label'], 'valeurs' => self::citedValues(array_values($eq)), 'suite' => $never,
+                    ])
+                    : t('« {champ} » ne peut pas valoir à la fois {valeurs} : avec « Toutes les conditions », {suite}. Choisissez « Au moins une ».', [
+                        'champ' => $g['label'], 'valeurs' => self::citedValues(array_values($eq)), 'suite' => $never,
+                    ]))];
+                continue;
+            }
+            $contradicts = $both !== []
+                || (isset($ops['yes']) && isset($ops['no']))
+                || (isset($ops['empty']) && count($ops) > 1);
+            if ($contradicts) {
+                $out[] = ['level' => 'block', 'text' => t('Ces conditions sur « {champ} » se contredisent : avec « Toutes les conditions », {suite}.', ['champ' => $g['label'], 'suite' => $never])];
+            }
+        }
+        return $out;
+    }
+
     private static function fold(string $s): string
     {
         $s = mb_strtolower(trim($s));

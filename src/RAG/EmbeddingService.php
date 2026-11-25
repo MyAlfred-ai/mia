@@ -21,6 +21,15 @@ class EmbeddingService
      */
     public const PROVIDER_ORDER = ['openai', 'mistral', 'gemini'];
 
+    /**
+     * Nature d'un texte à vectoriser. Seuls les modèles qui déclarent des
+     * `task_prefixes` au catalogue en tiennent compte (Gemini Embedding 2, qui
+     * refuse `task_type` et attend la tâche écrite DANS le texte) : un extrait
+     * de document et la question d'un tour n'y sont pas formulés pareil.
+     */
+    public const KIND_DOCUMENT = 'document';
+    public const KIND_QUERY    = 'query';
+
     private static ?array $catalog = null;
 
     public static function catalog(): array
@@ -147,9 +156,24 @@ class EmbeddingService
      * @return list<list<float>> même ordre que $texts
      * @throws RuntimeException clé manquante, provider inconnu, échec API
      */
-    public static function embedBatch(string $provider, string $model, array $texts): array
+    public static function embedBatch(string $provider, string $model, array $texts, string $kind = self::KIND_DOCUMENT): array
     {
-        return self::embedBatchWithUsage($provider, $model, $texts)['vectors'];
+        return self::embedBatchWithUsage($provider, $model, $texts, $kind)['vectors'];
+    }
+
+    /**
+     * Texte tel qu'il part au fournisseur : le préfixe de tâche du modèle pour
+     * cette nature de texte (`task_prefixes` du catalogue), sinon le texte
+     * inchangé — OpenAI, Mistral et gemini-embedding-001 n'en ont pas. Pure.
+     */
+    public static function withTaskPrefix(array $modelEntry, string $kind, string $text): string
+    {
+        $prefixes = $modelEntry['task_prefixes'] ?? null;
+        if (!is_array($prefixes)) {
+            return $text;
+        }
+        $prefix = $prefixes[$kind === self::KIND_QUERY ? self::KIND_QUERY : self::KIND_DOCUMENT] ?? '';
+        return is_string($prefix) && $prefix !== '' ? $prefix . $text : $text;
     }
 
     /**
@@ -163,7 +187,7 @@ class EmbeddingService
      * @return array{vectors:list<list<float>>, tokens:int, estimated:bool, requests:int}
      * @throws RuntimeException clé manquante, provider inconnu, échec API
      */
-    public static function embedBatchWithUsage(string $provider, string $model, array $texts): array
+    public static function embedBatchWithUsage(string $provider, string $model, array $texts, string $kind = self::KIND_DOCUMENT): array
     {
         if ($texts === []) {
             return ['vectors' => [], 'tokens' => 0, 'estimated' => false, 'requests' => 0];
@@ -172,6 +196,13 @@ class EmbeddingService
         if ($entry === null) {
             throw new \RuntimeException("Provider d'embedding inconnu : $provider");
         }
+        // Préfixe de tâche AVANT le découpage en lots : l'estimation des jetons
+        // (Gemini ne les rapporte pas) porte sur ce qui part réellement.
+        $modelEntry = is_array($entry['models'][$model] ?? null) ? $entry['models'][$model] : [];
+        $texts = array_map(
+            static fn($t): string => self::withTaskPrefix($modelEntry, $kind, (string)$t),
+            array_values($texts)
+        );
         $apiKey = ApiKey::getDecrypted($provider);
         if (!$apiKey) {
             throw new \RuntimeException("Clé API $provider manquante pour les embeddings.");
@@ -220,9 +251,9 @@ class EmbeddingService
     }
 
     /** @return list<float> */
-    public static function embedOne(string $provider, string $model, string $text): array
+    public static function embedOne(string $provider, string $model, string $text, string $kind = self::KIND_DOCUMENT): array
     {
-        $vectors = self::embedBatch($provider, $model, [$text]);
+        $vectors = self::embedBatch($provider, $model, [$text], $kind);
         return $vectors[0];
     }
 
@@ -230,9 +261,9 @@ class EmbeddingService
      * Un seul texte, avec sa consommation (embedding d'une question de chat).
      * @return array{vector:list<float>, tokens:int, estimated:bool}
      */
-    public static function embedOneWithUsage(string $provider, string $model, string $text): array
+    public static function embedOneWithUsage(string $provider, string $model, string $text, string $kind = self::KIND_DOCUMENT): array
     {
-        $got = self::embedBatchWithUsage($provider, $model, [$text]);
+        $got = self::embedBatchWithUsage($provider, $model, [$text], $kind);
         return ['vector' => $got['vectors'][0], 'tokens' => $got['tokens'], 'estimated' => $got['estimated']];
     }
 
@@ -278,7 +309,9 @@ class EmbeddingService
      * Gemini batchEmbedContents ({requests:[{model, content, outputDimensionality}]}
      * → {embeddings:[{values}]}), clé en header x-goog-api-key. Aucun
      * compteur de tokens dans la réponse : `tokens` vaut null, l'appelant
-     * estime.
+     * estime. Jamais de `taskType` : gemini-embedding-2 le refuse (la tâche
+     * est déjà dans le texte, cf. withTaskPrefix), et une requête par texte
+     * — un seul `content` à plusieurs parties serait AGRÉGÉ en un vecteur.
      * @param list<string> $batch
      * @return array{vectors:list<list<float>>, tokens:?int}
      */

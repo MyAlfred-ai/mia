@@ -98,7 +98,7 @@ final class AccountMenuTest extends TestCase
     public function testLaCarteDuComptePorteDeuxLiensDirects(): void
     {
         $trigger = self::lire('templates/partials/user-account-trigger.php');
-        $this->assertStringContainsString('<div class="user-dock">', $trigger);
+        $this->assertStringContainsString('<div class="user-dock<?= $quotaMax !== null ? \' has-quota\' : \'\' ?>" id="userDock"', $trigger);
         $this->assertStringContainsString('<div class="user-info" id="userAccountCard"', $trigger, 'L’identité n’est pas un second chemin vers les réglages.');
         $this->assertStringNotContainsString('aria-haspopup', $trigger);
         $this->assertLessThan(

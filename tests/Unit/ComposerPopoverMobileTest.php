@@ -78,6 +78,49 @@ final class ComposerPopoverMobileTest extends TestCase
         $this->assertGreaterThanOrEqual(2, substr_count($js, 'window.fitComposerPopover(list)'), 'Assistants : bouton et mention « @ ».');
     }
 
+    /**
+     * Liste des modèles (sélecteur à droite de la pilule) : même règle que les
+     * trois autres. PIÈGE payé le 2026-11-13 : la largeur « au contenu » du
+     * bureau (`width: max-content`, ajoutée pour ne plus couper les noms) restait
+     * active au téléphone et l'emportait sur `right` — la liste faisait 497 px
+     * sur un écran de 390, étoiles « modèle par défaut » et coûts hors de vue.
+     */
+    public function testLaListeDesModelesTientDansLEcranAuTelephone(): void
+    {
+        $css = self::css();
+        // Règle de bureau : largeur du contenu, bornée.
+        $this->assertSame(1, preg_match('/\n\.llm-inline-picker \.llm-picker-list \{([^}]*)\}/', $css, $bureau));
+        $this->assertStringContainsString('width: max-content', $bureau[1]);
+
+        // Règle du téléphone (bloc ≤ 768 px, indentée) : elle DOIT rendre la
+        // largeur à left/right, sinon max-content déborde.
+        $this->assertSame(1, preg_match('/\n    \.llm-inline-picker \.llm-picker-list \{([^}]*)\}/', $css, $tel),
+            'Règle mobile de la liste des modèles introuvable.');
+        $rule = $tel[1];
+        $this->assertMatchesRegularExpression('/\bwidth:\s*auto/', $rule,
+            'Sans `width: auto`, la largeur du contenu du bureau sort la liste de l\'écran.');
+        $this->assertMatchesRegularExpression('/position:\s*absolute/', $rule);
+        $this->assertMatchesRegularExpression('/left:\s*0;/', $rule);
+        $this->assertMatchesRegularExpression('/right:\s*0;/', $rule);
+        $this->assertMatchesRegularExpression('/bottom:\s*calc\(100%\s*\+\s*8px\)/', $rule);
+        $this->assertStringNotContainsString('118px', $rule);
+        $this->assertStringContainsString('var(--composer-popover-room', $rule);
+        $this->assertMatchesRegularExpression('/will-change:\s*transform/', $rule);
+        // Le bloc conteneur est la pilule, pas l'enveloppe du bouton.
+        $this->assertMatchesRegularExpression('/\.llm-inline-picker\s*\{\s*position:\s*static;\s*\}/', $css);
+        // Les noms se raccourcissent, l'étoile et le coût ne rétrécissent pas.
+        $this->assertMatchesRegularExpression('/\.llm-picker-item-label\s*\{[^}]*min-width:\s*0;[^}]*text-overflow:\s*ellipsis/', $css);
+        $this->assertMatchesRegularExpression('/\.llm-cost-stars\s*\{[^}]*flex-shrink:\s*0/', $css);
+        $this->assertMatchesRegularExpression('/\.llm-fav-btn\s*\{[^}]*flex-shrink:\s*0/', $css);
+
+        // Hauteur ajustée à l'ouverture et quand la zone visible change.
+        $js = self::js();
+        $this->assertStringContainsString("'kbPickerPanel', 'llmPickerList']", $js);
+        $debut = strpos($js, "const btn  = document.getElementById('llmPickerBtn');");
+        $this->assertIsInt($debut);
+        $this->assertStringContainsString('window.fitComposerPopover(list)', substr($js, $debut, 900));
+    }
+
     public function testLeClavierQuiSeFermeNeRefermePasLeMenu(): void
     {
         $js = self::js();

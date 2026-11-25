@@ -127,6 +127,7 @@ final class FileBuildersLibraryTest extends TestCase
     {
         CompanyProfile::overrideTemplate(null);
         CompanyProfile::overrideWordTemplate(null);
+        CompanyProfile::overrideLogo(null);
         Settings::refresh();
     }
 
@@ -447,6 +448,86 @@ final class FileBuildersLibraryTest extends TestCase
         foreach (['Compte rendu', 'Participants', 'Lancer la phase 2', 'Loyer', 'ligne 2'] as $attendu) {
             $this->assertStringContainsString($attendu, $texte);
         }
+    }
+
+    /**
+     * Polices réellement intégrées : DejaVu en romain, gras et chasse fixe —
+     * jamais Helvetica (non intégrée, sans « → »). Un tableau de plus de six
+     * colonnes met la page en paysage, et tout tient dans la page.
+     */
+    public function testDocumentPdfPolicesEtTableauLarge(): void
+    {
+        self::exiger(\Dompdf\Dompdf::class, 'Dompdf');
+        if (!extension_loaded('gd')) {
+            self::markTestSkipped('Extension gd absente : Dompdf ne peut pas traiter les images.');
+        }
+
+        $large = "# Suivi → 2026\n\nTexte **gras** et `code`.\n\n"
+            . "| Réf | Client | Contact | Email | Site | IBAN | Montant | Statut | Échéance |\n"
+            . "|---|---|---|---|---|---|---:|---|---|\n"
+            . "| A1 | Transformationsnumériquesassociées | Jean | jean.dupont@entreprise-exemple.com | https://www.entreprise-exemple.com/espace-client | FR7630006000011234567890189 | 12 500 € | Payé | 30/11/2026 |";
+        $f = self::fabriquer('suivi.pdf', $large, 'markdown', 'suivi.pdf');
+
+        $this->assertStringContainsString('DejaVuSans-Bold', $f->bytes, 'Le gras est en DejaVu, intégré.');
+        $this->assertStringContainsString('DejaVuSansMono', $f->bytes);
+        $this->assertStringNotContainsString('/Helvetica', $f->bytes);
+        $this->assertMatchesRegularExpression('#/MediaBox \[0\.000 0\.000 841\.890 595\.280\]#', $f->bytes, 'A4 en paysage.');
+
+        $etroit = self::fabriquer('note.pdf', self::COURRIER, 'markdown', 'note.pdf');
+        $this->assertMatchesRegularExpression('#/MediaBox \[0\.000 0\.000 595\.280 841\.890\]#', $etroit->bytes, 'A4 en portrait.');
+    }
+
+    /**
+     * Le défaut payé (recette, 2026-11-04) : un appel d'offres rédigé par MIA,
+     * téléchargé en PDF avec le logo de l'entreprise — « Une erreur interne est
+     * survenue ». Le logo faisait 6 319 × 3 224 pixels, à canal alpha : Dompdf
+     * en sépare la transparence pixel par pixel et épuisait les 256 Mo de PHP
+     * (erreur fatale à Cpdf.php, imagepng). Le logo est désormais réduit avant
+     * Dompdf : le PDF se fabrique sous la même limite, logo compris. (Logo de
+     * 4 000 pixels ici : celui de la recette, décodé par le test lui-même, ne
+     * tiendrait pas dans la mémoire déjà prise par PHPUnit — il serait écarté,
+     * proprement : ImageBytes::decodable.)
+     */
+    public function testDocumentPdfAvecUnLogoDemesure(): void
+    {
+        self::exiger(\Dompdf\Dompdf::class, 'Dompdf');
+        if (!extension_loaded('gd')) {
+            self::markTestSkipped('Extension gd absente : Dompdf ne peut pas traiter les images.');
+        }
+        $logo = FileScratch::path('logo-demesure', 'png');
+        $im = imagecreatetruecolor(4000, 2000);
+        imagealphablending($im, false);
+        imagesavealpha($im, true);
+        imagefill($im, 0, 0, (int)imagecolorallocatealpha($im, 0, 0, 0, 127));
+        imagealphablending($im, true);
+        imagefilledellipse($im, 1000, 1000, 1600, 1600, (int)imagecolorallocatealpha($im, 140, 60, 200, 0));
+        imagepng($im, $logo, 9);
+        unset($im);
+        CompanyProfile::overrideLogo($logo);
+        self::reglages([CompanyProfile::SETTING_NAME => 'MyAlfred.ai', CompanyProfile::SETTING_LEGAL => 'MyAlfred.ai · Document interne']);
+
+        $appel = "# Appel d’offres — Refonte du SIRH\n\n**Référence :** AO-2026-114\n\n---\n\n## 1. Objet\n\n"
+            . str_repeat("La présente consultation a pour objet la refonte complète du système d’information RH, pour 420 salariés.\n\n", 40)
+            . "| Domaine | Utilisateurs | Volume | Priorité | Lot |\n|---|---|---:|---|---|\n| Paie | RH (6) | 5 040 bulletins | Haute | 1 |\n\n"
+            . "## 7. Réserves\n\n- de ne pas donner suite à l’appel d’offre ;\n- de modifier le calendrier.\n\n---\n";
+
+        // Le budget d'une requête (256 Mo) AU-DESSUS de ce que PHPUnit tient
+        // déjà : en CI, unitaires et fonctionnels tournent dans le même
+        // processus, et une limite fixe à 256 Mo y laissait trop peu pour
+        // décoder le logo — il était alors écarté (ImageBytes::decodable),
+        // proprement, mais le test ne vérifiait plus la réduction.
+        $limite = (string)ini_get('memory_limit');
+        ini_set('memory_limit', (string)(memory_get_usage(true) + 256 * 1024 * 1024));
+        try {
+            $f = CompanyProfile::withReferences(true, true, static fn (): GeneratedFile => self::fabriquer('appel-offre-fictif.pdf', $appel, 'markdown', 'appel-offre-fictif.pdf'));
+        } finally {
+            ini_set('memory_limit', $limite);
+            @unlink($logo);
+        }
+
+        $this->assertStringStartsWith('%PDF-', $f->bytes);
+        $this->assertMatchesRegularExpression('#/Width ' . ImageBytes::PRINT_LOGO_SIDE . '\b#', $f->bytes, 'Le logo est embarqué, réduit.');
+        $this->assertDoesNotMatchRegularExpression('#/Width 4000\b#', $f->bytes, 'Jamais l’original démesuré.');
     }
 
     public function testDocumentPdfSurPlusieursPages(): void

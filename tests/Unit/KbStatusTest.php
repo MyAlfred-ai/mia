@@ -157,7 +157,7 @@ final class KbStatusTest extends TestCase
             ['extraction_status' => 'pending', 'vector_status' => 'pending', 'chunk_count' => 0, 'n' => 2],
         ]);
         $this->assertSame(
-            ['total' => 28, 'indexed' => 22, 'no_text' => 1, 'failed' => 1, 'lexical' => 1, 'busy' => 1, 'pending' => 2],
+            ['total' => 28, 'indexed' => 22, 'no_text' => 1, 'failed' => 1, 'lexical' => 1, 'busy' => 1, 'pending' => 2, 'excluded' => 0],
             $c
         );
     }
@@ -235,6 +235,48 @@ final class KbStatusTest extends TestCase
         $this->assertSame('3 / 5', $st['meta']);
         $this->assertSame(60, $st['progress']['pct']);
         $this->assertTrue($st['busy']);
+    }
+
+    /**
+     * La fiche s'ouvre sur « D'où viennent les documents » quand la base
+     * demande qu'on s'en occupe — et seulement alors. La signature change
+     * avec le problème : un nouveau document en échec rouvre le volet que
+     * la personne avait replié, un défaut déjà vu ne s'impose pas.
+     */
+    public function testLaFicheSOuvreSurLesDocumentsQuandLaBaseDemandeAttention(): void
+    {
+        $aJour = KbStatus::summarize(self::drive(['sync_report' => self::rapport()]), self::comptes(['total' => 3, 'indexed' => 3]), self::vivant());
+        $this->assertSame(KbStatus::OK, $aJour['state']);
+        $this->assertSame('', KbStatus::attention($aJour), 'Une base à jour se replie.');
+
+        $unEchec = KbStatus::summarize(self::kb(), self::comptes(['total' => 3, 'indexed' => 2, 'failed' => 1]), self::vivant());
+        $deuxEchecs = KbStatus::summarize(self::kb(), self::comptes(['total' => 3, 'indexed' => 1, 'failed' => 2]), self::vivant());
+        $this->assertSame(KbStatus::PARTIAL, $unEchec['state']);
+        $this->assertNotSame('', KbStatus::attention($unEchec));
+        $this->assertNotSame(KbStatus::attention($unEchec), KbStatus::attention($deuxEchecs), 'Un document de plus en échec : un problème nouveau.');
+        $this->assertSame(KbStatus::attention($unEchec), KbStatus::attention(
+            KbStatus::summarize(self::kb(), self::comptes(['total' => 3, 'indexed' => 2, 'failed' => 1]), self::vivant())
+        ), 'Le même défaut, la même signature : il ne rouvre rien.');
+        $this->assertStringNotContainsString('échec', KbStatus::attention($unEchec), 'Une signature, pas un texte traduit.');
+
+        $echec = KbStatus::summarize(self::drive(['sync_status' => 'error', 'sync_error' => 'x']), self::comptes(['total' => 2, 'indexed' => 2]), self::vivant());
+        $this->assertNotSame('', KbStatus::attention($echec));
+        $vide = KbStatus::summarize(self::kb(), self::comptes(), self::vivant());
+        $this->assertSame(KbStatus::EMPTY, $vide['state']);
+        $this->assertNotSame('', KbStatus::attention($vide), 'Une base vide attend ses documents.');
+
+        // Un passage en cours se suit dans l'en-tête : il n'ouvre rien.
+        $enCours = KbStatus::summarize(self::kb(), self::comptes(['total' => 5, 'indexed' => 3, 'busy' => 1, 'failed' => 1]), self::vivant());
+        $this->assertTrue($enCours['busy']);
+        $this->assertSame('', KbStatus::attention($enCours));
+
+        // Un cerveau : connexion refusée oui, en service non.
+        $cerveau = ['id' => 7, 'backend' => 'mybrain', 'name' => 'Cerveau', 'remote_url' => 'https://cerveau.exemple.fr'];
+        $ok = KbStatus::summarizeRemote($cerveau + ['remote_status' => 'ok', 'remote_app_name' => 'MIA', 'remote_rights' => 'lire', 'remote_checked_age' => 30], KbStatus::countDocuments([]));
+        $refus = KbStatus::summarizeRemote($cerveau + ['remote_status' => 'refused', 'remote_error' => 'Clé refusée.'], KbStatus::countDocuments([]));
+        $this->assertSame('', KbStatus::attention($ok));
+        $this->assertNotSame('', KbStatus::attention($refus));
+        $this->assertSame('', KbStatus::attention([]));
     }
 
     /** Processus tué au milieu : l'état dit « syncing » pour toujours, sans verrou ni job. */
@@ -471,7 +513,7 @@ final class KbStatusTest extends TestCase
         ];
         KbSync::selectSyncable($files, $report);
         $this->assertSame([
-            ['name' => 'Archive.zip', 'reason' => 'format non pris en charge'],
+            ['name' => 'Archive.zip', 'reason' => 'archive non synchronisée'],
             ['name' => 'Vide.pdf', 'reason' => 'fichier vide'],
             ['name' => 'Enorme.pdf', 'reason' => 'plus de 50 Mo'],
         ], $report['issues']);
@@ -534,11 +576,14 @@ final class KbStatusTest extends TestCase
         $this->assertStringContainsString("'state'             => KbStatus::documentState(\$doc)", $ctrl);
         $this->assertGreaterThanOrEqual(2, substr_count($ctrl, 'session_write_close();'), 'Un rafraîchissement ne retient jamais la session.');
 
+        // Piste D : chaque ligne porte son état ; le titre arrive du serveur.
         $tpl = self::lire('templates/admin/knowledge-bases.php');
-        $this->assertStringContainsString("fetch('/admin/knowledge-bases/status'", $tpl);
-        $this->assertStringContainsString('data-kb-id="<?= $kbId ?>"', $tpl);
-        $this->assertStringContainsString("live.outerHTML = b.html", $tpl, 'Le bloc arrive tout rendu : aucun libellé côté JavaScript.');
-        $this->assertStringContainsString("document.addEventListener('visibilitychange'", $tpl);
+        $this->assertStringContainsString('data-kb-row="<?= $r[\'id\'] ?>"', $tpl);
+        $this->assertStringContainsString('<span data-kb-state>', $tpl);
+        $js = self::lire('public/assets/js/kb-list.js');
+        $this->assertStringContainsString("fetch('/admin/knowledge-bases/status'", $js);
+        $this->assertStringContainsString("txt.textContent = b.title || '';", $js, 'Aucun libellé côté JavaScript.');
+        $this->assertStringContainsString("document.addEventListener('visibilitychange'", $js);
 
         // La fiche d'une base suit son passage tant que le serveur dit « busy »
         // — attente comprise — et reçoit son panneau tout rendu.
@@ -546,12 +591,10 @@ final class KbStatusTest extends TestCase
         $this->assertStringContainsString('next = data.busy ? 2500 : 0;', $fiche);
         $this->assertStringContainsString("'/sync-status'", $fiche);
         $this->assertStringContainsString('data.panel_html', $fiche);
-        foreach (['pollDocStatus', 'renderSyncState', 'pollSyncStatus', 'docStatusText', 'kbSyncStateWrap'] as $ancien) {
-            $this->assertStringNotContainsString($ancien, $tpl, "« $ancien » appartient à l'ancien suivi.");
-            $this->assertStringNotContainsString($ancien, $fiche, "« $ancien » appartient à l'ancien suivi.");
-        }
-        $this->assertStringContainsString("require ROOT . '/templates/partials/kb-status.php';", $tpl);
-        $this->assertStringContainsString("require ROOT . '/templates/partials/kb-status-overview.php';", $tpl);
+        // La page de consultation aussi, pour qui gère la base.
+        $show = self::lire('public/assets/js/kb-show.js');
+        $this->assertStringContainsString("'/sync-status'", $show);
+        $this->assertStringContainsString('panel.innerHTML = data.panel_html;', $show);
     }
 
     public function testLaClasseEtLaMigrationSontEnPlace(): void

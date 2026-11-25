@@ -34,6 +34,9 @@ final class WorkflowDeliveries
 {
     public const ATTACH_KEY = '_wf_attach';
     public const FOLDER_KEY = '_wf_folder';
+    /** Pièces jointes d'un email (allégées, bornes d'un email) ou d'un message Slack (fichiers d'origine). */
+    public const FOR_EMAIL = 'email';
+    public const FOR_SLACK = 'slack';
 
     /** Arguments internes retirés d'une carte proposée par le modèle. */
     public static function stripInternal(array $args): array
@@ -100,6 +103,7 @@ final class WorkflowDeliveries
                 'drive' => self::drive($run, $user, $d, $messageId) + ['label' => $label],
                 'slack' => self::slack($run, $user, $d, $messageId) + ['label' => $label],
                 'kb'    => self::kb($run, $user, $d) + ['label' => $label],
+                'table' => self::table($run, $user, $d, $messageId) + ['label' => $label],
                 default => ['status' => 'skipped', 'label' => $label],
             };
         } catch (\RuntimeException | \InvalidArgumentException $e) {
@@ -120,6 +124,7 @@ final class WorkflowDeliveries
             'drive' => t('Enregistrement dans Google Drive'),
             'slack' => t('Publication dans Slack'),
             'kb'    => t('Ajout à une base de connaissances'),
+            'table' => t('Écriture dans une table'),
             default => (string)$d['type'],
         };
     }
@@ -200,14 +205,16 @@ final class WorkflowDeliveries
     }
 
     /**
-     * Fichiers joints d'une action d'email déposée par un workflow : relus
-     * depuis le dossier de L'EXÉCUTION de cette conversation, qui doit
-     * appartenir à la personne. Jamais un chemin reçu. Une référence qui
-     * porte un `cid` est une image INTÉGRÉE au corps (WorkflowInserts).
+     * Fichiers joints d'une action déposée par un workflow (email, message
+     * Slack) : relus depuis le dossier de L'EXÉCUTION de cette conversation,
+     * qui doit appartenir à la personne. Jamais un chemin reçu. Une référence
+     * qui porte un `cid` est une image INTÉGRÉE au corps d'un email
+     * (WorkflowInserts). Pour Slack (`FOR_SLACK`) : les fichiers d'origine,
+     * sans les bornes d'un email (UserSlackService::normalizeFiles borne).
      *
      * @return list<array{name: string, mime: string, bytes: string, cid?: string}>
      */
-    public static function attachmentsFor(array $args, array $user, int $convId): array
+    public static function attachmentsFor(array $args, array $user, int $convId, string $for = self::FOR_EMAIL): array
     {
         $refs = (array)($args[self::ATTACH_KEY] ?? []);
         if ($refs === []) {
@@ -218,10 +225,26 @@ final class WorkflowDeliveries
             throw new \RuntimeException(t('Les pièces jointes de cette action ne sont plus disponibles.'));
         }
         $keys = [];
+        $seen = [];
         foreach ($refs as $r) {
             if (is_array($r) && (int)($r['run_id'] ?? 0) === $run['id'] && is_string($r['piece'] ?? null)) {
+                if ($for === self::FOR_SLACK) {
+                    // Une même pièce, jointe par la brique ET citée dans le texte : un fichier.
+                    if (isset($seen[$r['piece']])) {
+                        continue;
+                    }
+                    $seen[$r['piece']] = true;
+                }
                 $keys[] = ['piece' => $r['piece'], 'cid' => is_string($r['cid'] ?? null) ? $r['cid'] : ''];
             }
+        }
+        if ($for === self::FOR_SLACK) {
+            $out = [];
+            foreach ($keys as $k) {
+                $built = WorkflowFiles::build($run, (string)$k['piece'], '');
+                $out[] = ['name' => $built['name'], 'mime' => $built['mime'], 'bytes' => $built['bytes']];
+            }
+            return $out;
         }
         return self::attachmentFiles($run, $keys);
     }
@@ -285,7 +308,12 @@ final class WorkflowDeliveries
                     throw new \RuntimeException(UserDriveService::MSG_RECONNECT_WRITE);
                 }
                 $tool = 'creer_google_doc';
-                $args = ['titre' => $title, 'contenu' => ArtifactContract::render($p, $a['content'], 400000)];
+                $body = ArtifactContract::render($p, $a['content'], 400000);
+                // Un fichier brut (script, données) : un bloc de code, sinon ses « # » deviendraient des titres.
+                if ($p['form'] === 'document' && ArtifactContract::isRawFile((string)($a['content']['format'] ?? ''))) {
+                    $body = "```" . ArtifactContract::languageFor((string)$a['content']['format']) . "\n" . rtrim($body) . "\n```";
+                }
+                $args = ['titre' => $title, 'contenu' => $body];
             }
             if (trim((string)$d['folder']) !== '') {
                 $args[self::FOLDER_KEY] = (string)$d['folder'];
@@ -361,7 +389,8 @@ final class WorkflowDeliveries
         if (trim($text) === '') {
             return ['status' => 'skipped', 'note' => t('rien à publier')];
         }
-        $args = UserSlackService::normalizePostArgs(['canal' => (string)$d['channel'], 'texte' => mb_substr($text, 0, 38000)]);
+        $canal = self::slackChannel($svc, (string)$d['channel']);
+        $args = UserSlackService::normalizePostArgs(['canal' => $canal, 'texte' => mb_substr($text, 0, 38000)]);
         $preview = UserSlackService::actionPreview('envoyer_message_slack', $args);
         $preview['workflow'] = true;
         $actionId = self::deposit($run, $user, 'envoyer_message_slack', $args, $preview, $messageId);
@@ -369,6 +398,33 @@ final class WorkflowDeliveries
             return ['status' => 'card', 'action_ids' => [$actionId]];
         }
         return self::outcome((new ChatController())->decideForWorkflow((int)$run['conversation_id'], $user, $actionId, 'approve')) + ['action_ids' => [$actionId]];
+    }
+
+    /**
+     * Le canal d'une livraison Slack, vérifié AVANT de déposer l'action. Le
+     * problème résolu : un canal qui n'existe pas (« Canal Slack », écrit à
+     * la place du vrai nom) n'échouait qu'à la publication, avec le message
+     * destiné au modèle, après une action d'étape qui, elle, avait publié —
+     * l'exécution finissait en échec sans que rien ne dise que c'était la
+     * LIVRAISON. Le canal trouvé est rendu sous son vrai nom (la carte montre
+     * où le message partira) ; un identifiant reste un identifiant.
+     */
+    public static function slackChannel(UserSlackService $svc, string $ref): string
+    {
+        $ref = trim($ref);
+        $found = UserSlackService::isPlausibleChannelRef($ref) ? $svc->findChannel($ref) : null;
+        $canal = $found['canal'] ?? null;
+        if ($canal !== null) {
+            return $canal['nom'] !== $canal['id'] ? '#' . $canal['nom'] : $canal['id'];
+        }
+        $approchants = $found['approchants'] ?? [];
+        throw new \RuntimeException($approchants !== []
+            ? t('le canal Slack « {canal} » est introuvable (canaux approchants : {liste}). Corrigez le canal de cette livraison dans le livrable du workflow.', [
+                'canal' => $ref, 'liste' => implode(', ', $approchants),
+            ])
+            : t('le canal Slack « {canal} » est introuvable parmi vos conversations Slack (MIA ne voit que celles dont vous êtes membre). Corrigez le canal de cette livraison dans le livrable du workflow.', [
+                'canal' => $ref,
+            ]));
     }
 
     // ------------------------------------------------------------------
@@ -382,7 +438,7 @@ final class WorkflowDeliveries
         if ($kb === null) {
             throw new \RuntimeException(t('la base de connaissances n’existe plus.'));
         }
-        if (KnowledgeBase::isRemote($kb) || KnowledgeBase::isSystem($kbId) || !KnowledgeBase::manageableBy($kbId, $user)) {
+        if (!KnowledgeBase::holdsDocuments($kb) || KnowledgeBase::isSystem($kbId) || !KnowledgeBase::manageableBy($kbId, $user)) {
             throw new \RuntimeException(t('vous ne gérez plus la base « {nom} ».', ['nom' => (string)$kb['name']]));
         }
         $pieces = WorkflowSpec::pieces($run['definition']);
@@ -439,6 +495,28 @@ final class WorkflowDeliveries
             'nom' => (string)$kb['name'], 'fichiers' => implode(', ', $added),
         ]));
         return ['status' => 'done'];
+    }
+
+    // ------------------------------------------------------------------
+    // Table permanente (WorkflowTables)
+    // ------------------------------------------------------------------
+
+    /**
+     * Les lignes d'une pièce écrites dans une table permanente, par la carte
+     * d'une écriture de table — approuvée par le moteur si la livraison est
+     * « sans validation » (même chemin que le clic, tout revérifié).
+     */
+    private static function table(array $run, array $user, array $d, int $messageId): array
+    {
+        $convId = (int)$run['conversation_id'];
+        return WorkflowTables::deliver(
+            $run,
+            $user,
+            $d,
+            $messageId,
+            static fn(string $tool, array $args, array $preview): int => self::deposit($run, $user, $tool, $args, $preview, $messageId),
+            static fn(int $id): array => self::outcome((new ChatController())->decideForWorkflow($convId, $user, $id, 'approve'))
+        );
     }
 
     // ------------------------------------------------------------------

@@ -17,6 +17,7 @@ $typeLabels = [
     'map_route'       => t('Itinéraire'),
     'video_file'      => t('Vidéo'),
     'generated_image' => t('Image'),
+    'polished_file'   => t('Version soignée'),
 ];
 // Couleur d'accent par type — mêmes teintes que les cartes de /admin/tools ($typeAccents).
 $typeAccents = [
@@ -25,6 +26,15 @@ $typeAccents = [
     'html_page'       => '#818cf8',
     'map_route'       => '#34d399',
     'slide_deck'      => '#fbbf24',
+    'polished_file'   => '#2b6cb0',
+];
+// Version soignée : la teinte suit le FORMAT, mêmes couleurs que les cartes de
+// fichier du chat (files.css, [data-tone]).
+$toneAccents = [
+    'sheet'  => '#1d8a4f',
+    'doc'    => '#2b6cb0',
+    'pdf'    => '#c53030',
+    'slides' => '#b7472a',
 ];
 // Icônes par type (feather 24×24, stroke currentColor) — tuiles carte + fallback d'aperçu.
 $typeIcons = [
@@ -33,6 +43,7 @@ $typeIcons = [
     'html_page'       => '<polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/>',
     'map_route'       => '<polygon points="1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6"/><line x1="8" y1="2" x2="8" y2="18"/><line x1="16" y1="6" x2="16" y2="22"/>',
     'slide_deck'      => '<rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/>',
+    'polished_file'   => '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/>',
 ];
 // Normalisation recherche (minuscules, accents strippés) — miroir de norm() dans creations.js.
 $crNorm = static function (string $s): string {
@@ -72,13 +83,13 @@ $total = count($creations);
     <div class="creations-wrap">
         <h1 style="margin-bottom:6px"><?= te('Mes créations') ?></h1>
         <p style="color:var(--text-muted);font-size:14px;margin-bottom:22px">
-            <?= te('Toutes les images, vidéos, pages web, présentations et itinéraires que vous avez générés, toutes conversations confondues.') ?>
+            <?= te('Toutes les images, vidéos, pages web, présentations, itinéraires et versions soignées que vous avez générés, toutes conversations confondues.') ?>
         </p>
 
         <?php if ($total === 0): ?>
             <div class="al-empty">
                 <?= te('Aucune création pour l\'instant.') ?><br>
-                <?= te('Générez une image, une page web, une vidéo, une présentation ou un itinéraire depuis le chat : tout apparaîtra ici.') ?>
+                <?= te('Générez une image, une page web, une vidéo, une présentation, un itinéraire ou une version soignée depuis le chat : tout apparaîtra ici.') ?>
             </div>
         <?php else: ?>
 
@@ -100,12 +111,17 @@ $total = count($creations);
                 $type   = $item['type'];
                 $label  = $typeLabels[$type] ?? t('Création');
                 $accent = $typeAccents[$type] ?? 'var(--accent)';
+                if ($type === 'polished_file') {
+                    $accent = $toneAccents[(string)($item['tone'] ?? '')] ?? $accent;
+                }
                 $icon   = $typeIcons[$type] ?? $typeIcons['generated_image'];
                 $sub    = '';
                 if ($type === 'slide_deck' && !empty($item['slides'])) {
                     $sub = I18n::plural((int)$item['slides'], '{n} slide', '{n} slides');
                 } elseif ($type === 'map_route' && !empty($item['waypoints'])) {
                     $sub = I18n::plural((int)$item['waypoints'], '{n} étape', '{n} étapes');
+                } elseif ($type === 'polished_file') {
+                    $sub = (string)($item['format_label'] ?? '');
                 }
             ?>
             <article class="creation-card" tabindex="0" role="button"
@@ -118,6 +134,8 @@ $total = count($creations);
                      data-title="<?= htmlspecialchars($crNorm($item['title'])) ?>"
                      data-conv="<?= htmlspecialchars($crNorm($item['conv_title'])) ?>"
                      <?php if (!empty($item['url'])): ?>data-url="<?= htmlspecialchars($item['url']) ?>"<?php endif; ?>
+                     <?php if (!empty($item['open_url'])): ?>data-open-url="<?= htmlspecialchars($item['open_url']) ?>"<?php endif; ?>
+                     <?php if (!empty($item['file_name'])): ?>data-filename="<?= htmlspecialchars($item['file_name']) ?>"<?php endif; ?>
                      <?php if ($type === 'html_page'): ?>data-preview="html"<?php elseif ($type === 'slide_deck'): ?>data-preview="deck"<?php endif; ?>>
                 <div class="creation-thumb">
                     <?php if ($type === 'generated_image'): ?>
@@ -125,6 +143,12 @@ $total = count($creations);
                     <?php elseif ($type === 'video_file'): ?>
                         <video src="<?= htmlspecialchars($item['url']) ?>" preload="metadata" muted playsinline></video>
                         <span class="creation-play"><svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><polygon points="6 3 21 12 6 21 6 3"/></svg></span>
+                    <?php elseif ($type === 'polished_file'): ?>
+                        <?php /* Aucun aperçu d'un fichier Office : sa pastille de format. */ ?>
+                        <div class="creation-file-tile">
+                            <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><?= $typeIcons['polished_file'] ?></svg>
+                            <span class="creation-file-ext"><?= htmlspecialchars(strtoupper((string)($item['format'] ?? ''))) ?></span>
+                        </div>
                     <?php elseif ($type === 'map_route'):
                         // Tracé réel des étapes géocodées ; à défaut (spec tronquée
                         // ou géocodage échoué), la tuile d'icône d'origine.
@@ -153,13 +177,23 @@ $total = count($creations);
                         <?php if ($sub !== ''): ?><span class="creation-sub"><?= htmlspecialchars($sub) ?></span><?php endif; ?>
                     </div>
                     <h3 class="creation-title"><?= htmlspecialchars($item['title']) ?></h3>
+                    <?php if ($type === 'polished_file' && (($item['by'] ?? '') !== '' || ($item['keep'] ?? '') !== '')): ?>
+                        <div class="creation-meta creation-polished-meta">
+                            <?= htmlspecialchars(implode(' · ', array_filter([(string)($item['by'] ?? ''), (string)($item['keep'] ?? '')]))) ?>
+                        </div>
+                    <?php endif; ?>
                     <div class="creation-meta">
                         <?= htmlspecialchars($item['date']) ?> ·
                         <a href="/chat/<?= (int)$item['conversation_id'] ?>" title="<?= te('Ouvrir la conversation') ?>"><?= htmlspecialchars($item['conv_title']) ?></a>
                     </div>
                     <?php $download = (string)($item['download'] ?? ''); ?>
-                    <?php if ($download !== '' || !empty($item['shareable'])): ?>
+                    <?php if ($download !== '' || !empty($item['shareable']) || !empty($item['open_url'])): ?>
                     <div class="creation-actions">
+                        <?php if (!empty($item['open_url'])): ?>
+                            <a class="btn-secondary creation-open-external" href="<?= htmlspecialchars($item['open_url']) ?>" target="_blank" rel="noopener noreferrer">
+                                <?= te('Ouvrir dans {service}', ['service' => 'Gamma']) ?>
+                            </a>
+                        <?php endif; ?>
                         <?php if ($download !== ''): ?>
                             <button type="button" class="btn-download-creation btn-secondary"
                                     data-download="<?= htmlspecialchars($download) ?>"
@@ -168,7 +202,7 @@ $total = count($creations);
                                     <?php if (!empty($item['url'])): ?>data-url="<?= htmlspecialchars($item['url']) ?>"<?php endif; ?>
                                     title="<?= te('Télécharger') ?>">
                                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right:3px"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-                                <?= te('Télécharger') ?>
+                                <?= ($item['download_label'] ?? '') !== '' ? htmlspecialchars((string)$item['download_label']) : te('Télécharger') ?>
                             </button>
                         <?php endif; ?>
                         <?php if (!empty($item['shareable'])):

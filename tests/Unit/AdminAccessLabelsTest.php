@@ -46,7 +46,7 @@ final class AdminAccessLabelsTest extends TestCase
         $this->assertStringNotContainsString('tous les utilisateurs', $m[1]);
         $this->assertStringContainsString('groupes', $m[1]);
 
-        $this->assertSame(1, preg_match('#<p class="tools-intro">(.*?)</p>#s', $html, $m));
+        $this->assertSame(1, preg_match('#<p class="tools-intro[^"]*">(.*?)</p>#s', $html, $m));
         $this->assertStringNotContainsString('tous les utilisateurs', $m[1]);
     }
 

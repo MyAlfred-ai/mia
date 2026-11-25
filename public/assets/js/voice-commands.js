@@ -7,7 +7,10 @@
 
      - cardCommand()  : un ordre pour la carte en attente sous la réponse
                         (approuver / annuler ; pour un email : envoyer, créer
-                        le brouillon, améliorer, confirmer l'envoi…) ;
+                        le brouillon, améliorer, confirmer l'envoi… ; « lis-le »
+                        pour l'entendre) ;
+     - connectorCommand() : un connecteur à allumer ou éteindre (« active
+                        Gmail », « coupe l'agenda ») ;
      - stopCommand()  : un ordre d'arrêt (« stop », « arrête », « tais-toi ») ;
      - interruption() : ce qu'une phrase entendue PENDANT la lecture doit
                         faire — seul un ordre d'arrêt y compte, et la voix de
@@ -85,6 +88,8 @@
         // Objets
         'rendez vous', 'les deux', 'les trois', 'un peu', 'droit au but',
         'version precedente', 'previous version',
+        // Connecteurs (anglais : verbe en deux mots)
+        'turn on', 'turn off', 'switch on', 'switch off',
         // Arrêt de la lecture
         'arrete toi', 'arretez vous', 'arrete de parler', 'arrete la lecture', 'stop la lecture',
         'tais toi', 'taisez vous', 'te taire', 'interromps toi', 'ca suffit', 'ca ira', 'c est assez',
@@ -211,6 +216,13 @@
     const UNDO_VERBS = S('annule annuler annulez undo');
     const UNDO_OBJECTS = S(`modification modifications changement changements amelioration reecriture derniere
         dernier change changes edit last`);
+
+    // « Lis-le » : entendre la carte avant de décider. « Relis » n'en fait pas
+    // partie : pour un email, c'est le préréglage de correction — et, devant
+    // la confirmation d'envoi, un retour à la relecture.
+    const READ_NEED = S('lis lire lisez lecture read');
+    const READ_ALLOW = S(`moi me nous voix haute a contenu texte corps entier entierement tout en ce que qu
+        tu as ecrit prepare out loud aloud to content body text all what you wrote`);
 
     const CONFIRM_NEED = S(`confirme confirmer confirmez confirmes je_confirme envoie envoies envoyer envoyez
         j_envoie send send_it confirm do_it`);
@@ -354,6 +366,10 @@
     function matchApproval(names, ctx) {
         const titleWords = rawWords(String(ctx.title || '').normalize('NFC')).map((w) => w.n);
         const all = names.some((w) => ALL_MARKERS.has(w));
+        // Entendre la carte ne décide de rien : testé en premier.
+        if (bag(names, { need: READ_NEED, allow: union(DET, APPROVAL_NOUNS, READ_ALLOW, new Set(titleWords)) })) {
+            return { act: 'read' };
+        }
         // Le refus d'abord : il ne défait rien, et « ok annule » est un refus.
         if (bag(names, {
             need: CANCEL_NEED, softs: NO, fill: YES,
@@ -403,6 +419,12 @@
 
     function matchMail(parsed, names, ctx) {
         const mode = String(ctx.mode || 'preview');
+        // « Lis-le », dans tous les modes : on écoute l'email avant de
+        // l'envoyer, y compris devant la confirmation. Sauf panneau
+        // d'amélioration ouvert, où ce qui est dit est une consigne.
+        if (mode !== 'improve' && bag(names, { need: READ_NEED, allow: union(MAIL_OBJ, READ_ALLOW) })) {
+            return { act: 'read' };
+        }
         if (mode === 'send-confirm') {
             // Dernier mot avant un envoi réel. Le renoncement est testé en
             // premier, et lui seul accepte un « non » nu : il ne défait rien.
@@ -463,15 +485,107 @@
      *         canUndo (mail : une version précédente existe) }
      *
      * Rend { act, all?, preset?, instruction? } — act ∈ approve | cancel |
-     * reask (approval) ; send | draft | improve | preset | instruct | undo |
-     * discard | close | confirm | back | reask (mail). `reask` : un accord ou
-     * un refus nu, là où il faut le mot de l'action.
+     * read | reask (approval) ; send | draft | improve | preset | instruct |
+     * undo | discard | close | confirm | back | read | reask (mail). `reask` :
+     * un accord ou un refus nu, là où il faut le mot de l'action ; `read` :
+     * entendre la carte (« lis-le »), sans rien décider.
      */
     function cardCommand(text, ctx) {
         const parsed = tokenize(text);
         const names = parsed.list.map((w) => w.n);
         if (!names.length || !ctx) return null;
         return ctx.kind === 'mail' ? matchMail(parsed, names, ctx) : matchApproval(names, ctx);
+    }
+
+    // ---- Connecteurs ------------------------------------------------------
+    // « Active Gmail », « coupe l'agenda », « allume mes mails et mon drive ».
+    // Même prudence que pour une carte : la phrase ENTIÈRE doit être faite du
+    // verbe, de noms de services et de petits mots. « Utilise mes mails pour
+    // retrouver l'adresse de Paul » est une demande : elle part à l'assistant.
+    const CONNECT_ON = S(`active activer activez actives reactive reactiver allume allumer allumez branche
+        brancher branchez utilise utiliser utilisez connecte connecter connectez
+        enable turn_on switch_on use connect`);
+    const CONNECT_OFF = S(`desactive desactiver desactivez coupe couper coupez eteins eteindre eteignez
+        debranche debrancher debranchez deconnecte deconnecter deconnectez
+        disable turn_off switch_off disconnect`);
+    // Mots admis autour : déterminants, possessifs, noms génériques.
+    const CONNECT_ALLOW = S(`mon ma mes my nos notre our connecteur connecteurs connector connectors acces
+        access au aux to of pour for avec with sur on aussi also too compte account service services
+        boite reception inbox liste list listes lists de recherche search`);
+    // Ce que chaque mot DÉSIGNE. Une marque seule tranche ; un nom commun
+    // (« mes mails », « mon agenda ») laisse le choix entre les deux
+    // fournisseurs — la page retient celui qui est relié.
+    const CONNECT_BRAND = {
+        google: 'google', gmail: 'google', microsoft: 'microsoft', outlook: 'microsoft', office: 'microsoft',
+    };
+    const CONNECT_KINDS = {
+        mail:     S('gmail mail mails email emails e courriel courriels messagerie'),
+        calendar: S('agenda agendas calendrier calendriers calendar calendars planning rendez_vous reunions meetings'),
+        tasks:    S('tache taches task tasks todo todos'),
+        drive:    S('drive fichier fichiers file files document documents docs dossiers'),
+        teams:    S('teams'),
+        slack:    S('slack'),
+        web:      S('internet web'),
+    };
+    const CONNECT_KEYS = {
+        mail:     { google: ['gmail'], microsoft: ['outlook'], any: ['gmail', 'outlook'] },
+        calendar: { google: ['calendar'], microsoft: ['mscalendar'], any: ['calendar', 'mscalendar'] },
+        tasks:    { google: ['tasks'], microsoft: ['mstodo'], any: ['tasks', 'mstodo'] },
+        drive:    { google: ['drive'], microsoft: ['drive'], any: ['drive'] },
+        teams:    { google: ['teams'], microsoft: ['teams'], any: ['teams'] },
+        slack:    { google: ['slack'], microsoft: ['slack'], any: ['slack'] },
+        web:      { google: ['web'], microsoft: ['web'], any: ['web'] },
+    };
+    const CONNECT_MESSAGES = S('message messages conversation conversations');
+
+    /**
+     * Connecteur(s) à allumer ou éteindre, ou null (= pas un ordre).
+     * Rend { on, all, targets } : `targets` = une liste par service nommé,
+     * chacune donnant les clés de connecteur possibles, la plus probable
+     * d'abord (« mes mails » → gmail, sinon outlook) ; `all` = « tous mes
+     * connecteurs ». La page retient, pour chaque service, le premier
+     * connecteur réellement relié.
+     */
+    function connectorCommand(text) {
+        // « To Do » (Microsoft) : deux mots qui n'en font qu'un, ici seulement —
+        // ailleurs, « to » et « do » gardent leur sens.
+        const names = [];
+        tokenize(text).list.forEach((w) => {
+            if (w.n === 'do' && names[names.length - 1] === 'to') names[names.length - 1] = 'todo';
+            else names.push(w.n);
+        });
+        let on = null;
+        let brand = '';
+        let generic = false;
+        const kinds = [];
+        for (const word of names) {
+            if (CONNECT_ON.has(word) || CONNECT_OFF.has(word)) {
+                const wanted = CONNECT_ON.has(word);
+                if (on !== null && on !== wanted) return null; // « active X et coupe Y » : à l'assistant
+                on = wanted;
+                continue;
+            }
+            if (CONNECT_BRAND[word]) {
+                if (brand && brand !== CONNECT_BRAND[word]) return null; // deux fournisseurs : ambigu
+                brand = CONNECT_BRAND[word];
+            }
+            let kind = '';
+            for (const name of Object.keys(CONNECT_KINDS)) {
+                if (CONNECT_KINDS[name].has(word)) { kind = name; break; }
+            }
+            if (kind) { if (!kinds.includes(kind)) kinds.push(kind); continue; }
+            if (word === 'connecteurs' || word === 'connectors') { generic = true; continue; }
+            if (CONNECT_BRAND[word] || CONNECT_MESSAGES.has(word)) continue;
+            if (NEUTRAL.has(word) || DET.has(word) || YES.has(word) || ALL_MARKERS.has(word) || CONNECT_ALLOW.has(word)) continue;
+            return null;
+        }
+        if (on === null) return null;
+        // « Outlook » seul désigne la messagerie ; « messages Teams » ne dit
+        // rien de plus que « Teams ».
+        if (!kinds.length && brand === 'microsoft' && names.includes('outlook')) kinds.push('mail');
+        if (!kinds.length) return generic ? { on, all: true, targets: [] } : null;
+        const targets = kinds.map((kind) => CONNECT_KEYS[kind][brand || 'any']);
+        return { on, all: false, targets };
     }
 
     /**
@@ -594,5 +708,7 @@
         return false;
     }
 
-    root.MiaVoiceCommands = { normalize, cardCommand, stopCommand, interruption, endCommand, looksLikeEcho, verbForms };
+    root.MiaVoiceCommands = {
+        normalize, cardCommand, connectorCommand, stopCommand, interruption, endCommand, looksLikeEcho, verbForms,
+    };
 })(typeof window !== 'undefined' ? window : globalThis);

@@ -57,11 +57,41 @@ class CreditsRefreshJob implements JobHandler
             if ($stopped || $ctx->shouldStop()) {
                 return ['ok' => false, 'done' => true, 'cancelled' => true, 'message' => 'Mise à jour annulée.'];
             }
-            throw $e;
+            if ($e instanceof JobErrorException) {
+                throw $e;
+            }
+            // Sans charge utile, `JobQueue::execute` afficherait « La
+            // génération n'a pas abouti. Réessayez. » : aucune cause, et
+            // réessayer ne change rien quand c'est l'enregistrement qui bute.
+            throw new JobErrorException(self::errorPayload($e), $e->getMessage());
         }
 
         $ctx->emit($result);
 
         return $result;
+    }
+
+    /**
+     * Ce que l'écran dit d'une recherche en échec (pure). L'écran est réservé
+     * aux administrateurs des coûts : le message d'une recherche en ligne
+     * (« Appel OpenAI impossible (…) », « OpenAI a refusé la requête… ») y est
+     * montré tel quel. Une erreur de base de données ou de code, elle, n'a rien
+     * à dire à l'écran : elle renvoie aux journaux, qui la portent en entier.
+     */
+    public static function errorPayload(\Throwable $e): array
+    {
+        $journaux = t('Le détail est dans Maintenance → Diagnostic → Journaux.');
+        $message = match (true) {
+            $e instanceof \PDOException => t('Les prix n’ont pas pu être enregistrés.') . ' ' . $journaux,
+            $e instanceof \RuntimeException && trim($e->getMessage()) !== ''
+                => t('La recherche de prix a échoué : {erreur}', ['erreur' => trim($e->getMessage())]),
+            default => t('La recherche de prix a échoué sur une erreur interne.') . ' ' . $journaux,
+        };
+
+        return [
+            'kind'    => 'generic',
+            'title'   => t('Mise à jour des prix impossible'),
+            'message' => $message,
+        ];
     }
 }

@@ -5,7 +5,9 @@ sidebar:
   order: 1
 ---
 
-**Administration → Modèles IA → Clés API.** C'est la première étape de toute instance : tant
+**Administration → Modèles IA → Fournisseurs et modèles.** Une carte par fournisseur, avec son
+logo et son état : **Connecté**, **Clé refusée**, **Crédit épuisé**, **Clé manquante** ou **À connecter**.
+C'est la première étape de toute instance : tant
 qu'aucune clé n'est enregistrée, MIA ne peut répondre à personne.
 
 > Sans clé, une pastille ambre clignote sur **Modèles IA** dans le menu, un bandeau « Première
@@ -19,23 +21,26 @@ lui. Selon votre contrat, les clés peuvent être fournies et enregistrées par 
 
 ## Enregistrer une clé
 
-1. Dans la carte **Fournisseurs cloud**, choisissez le **Fournisseur** — ChatGPT (OpenAI), Claude
-   (Anthropic), Mistral, Perplexity, Gemini (Google), DeepSeek, Kimi (Moonshot), GLM (Z.ai).
-   Changer de fournisseur ouvre sa fiche ; cela n'enregistre rien.
-2. Choisissez un **Modèle** — le modèle de référence de l'éditeur. Il sert aux vérifications et aux
-   tâches internes ; ce n'est pas lui qui est proposé aux utilisateurs, ce sont les modèles activés.
-3. Collez la **Clé API**. L'enregistrement est automatique : « Configuration enregistrée. »
+1. Dans la carte du fournisseur (**À connecter**), collez la clé dans **Coller la clé API**.
+2. Cliquez **Connecter** : « Configuration enregistrée. » La page s'ouvre sur le panneau de ce
+   fournisseur, sous la grille, avec ses modèles.
 
-La clé est **chiffrée** ; le tableau n'en montre que les premiers caractères. Pour un fournisseur déjà
-configuré, le champ affiche « Clé enregistrée — laissez vide pour la conserver » : vous pouvez changer
-le modèle de référence sans ressaisir la clé.
+La clé est **chiffrée** ; la carte n'en montre que les premiers caractères.
+
+Pour **remplacer** une clé, ou changer le **modèle de référence** de l'éditeur (il sert aux
+vérifications et aux tâches internes — découpage des documents, description des images ; ce n'est pas
+lui qui est proposé aux utilisateurs), ouvrez le panneau du fournisseur et dépliez **Remplacer la clé ou
+le modèle de référence**. Le champ affiche « Clé enregistrée — laissez vide pour la conserver » ;
+l'enregistrement y est automatique.
+
+**Déconnecter**, dans le panneau, supprime la clé.
 
 **Enregistrer une clé ne suffit pas** : il faut ensuite activer les modèles de cet éditeur — voir
 [Activer les modèles](activer-les-modeles.md).
 
 ## Tester une clé
 
-Dans le tableau des clés, **Tester** envoie une question minimale à chaque modèle activé de
+Dans le panneau du fournisseur, **Tester la clé** envoie une question minimale à chaque modèle activé de
 l'éditeur et affiche la réponse ou l'erreur. Ce test n'est pas décompté en crédits.
 
 ## Déclarer un LLM local

@@ -95,6 +95,16 @@ final class LlmStopReasonTest extends TestCase
             'GLM réseau'             => ['network_error', 'overloaded'],
             'Mistral error'          => ['error', 'generic'],
             'Gemini OTHER'           => ['OTHER', 'generic'],
+            // Raisons Gemini relevées dans la référence `FinishReason` le
+            // 2026-11-10 : sans elles, l'utilisateur lisait « flux vide ».
+            'Gemini CONTINUATION'    => ['CONTINUATION', 'truncated'],
+            'Gemini ESCALATION'      => ['ESCALATION', 'filtered'],
+            'Gemini IMAGE_RECITATION'=> ['IMAGE_RECITATION', 'filtered'],
+            'Gemini réponse malformée' => ['MALFORMED_RESPONSE', 'generic'],
+            'Gemini trop d\'outils'  => ['TOO_MANY_TOOL_CALLS', 'generic'],
+            'Gemini signature'       => ['MISSING_THOUGHT_SIGNATURE', 'generic'],
+            'Gemini compte restreint'=> ['PUP_LIMITED_DISABLED', 'generic'],
+            'Gemini sans image'      => ['NO_IMAGE', 'generic'],
         ];
     }
 

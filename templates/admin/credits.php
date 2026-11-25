@@ -328,9 +328,12 @@ if (!is_string($bootstrapJson)) {
 ?>
 
 <div class="admin-content">
-    <div class="credits-header">
+    <?php require ROOT . '/templates/partials/admin-topbar.php'; ?>
+    <div class="credits-header page-head">
+        <div class="page-head-text">
         <h1><?= te('Tarifs & crédits') ?></h1>
-        <p><?= te('Cette section permet de définir la conversion entre le coût réel des services IA et les crédits consommés par les utilisateurs.') ?></p>
+        <p class="page-head-sub"><?= te('Cette section permet de définir la conversion entre le coût réel des services IA et les crédits consommés par les utilisateurs.') ?></p>
+        </div>
     </div>
 
     <?php if ($success ?? false): ?>
@@ -703,6 +706,7 @@ if (!is_string($bootstrapJson)) {
         { value: 'image_generated', label: <?= tj('Image générée') ?> },
         { value: 'video_second', label: <?= tj('Seconde vidéo') ?> },
         { value: 'audio_minute', label: <?= tj('Minute audio') ?> },
+        { value: '1m_characters', label: <?= tj('1M caractères') ?> },
         { value: 'api_call', label: <?= tj('Appel API') ?> },
         { value: 'request', label: <?= tj('Requête') ?> },
         { value: 'minute', label: 'Minute' },
@@ -720,6 +724,7 @@ if (!is_string($bootstrapJson)) {
         image_generated: 'Image générée',
         video_second: 'Seconde vidéo',
         audio_minute: 'Minute audio',
+        '1m_characters': '1M caractères',
         api_call: 'Appel API',
         request: 'Requête',
         minute: 'Minute',
@@ -959,13 +964,20 @@ if (!is_string($bootstrapJson)) {
     /**
      * Coût réel par unité de la ligne TEL QUE LA FACTURATION L'APPLIQUE :
      * le prix saisi, sinon le tarif public, sinon une variante dérivée du prix
-     * de référence. `source` : own | catalog | derived | none (non tarifée).
+     * de référence. `source` : own | catalog | basis (coût qui n'est pas un
+     * prix unitaire, dit tel quel) | derived | none (non tarifée).
      */
     function effectiveCost(service) {
         const own = Math.max(0, Number(service && service.real_cost_eur || 0));
         if (own > 0) return { eur: own, source: 'own' };
         const key = String(service && service.catalog_key || '');
         const cat = CATALOG_COSTS[key];
+        // Outil dont le coût n'est pas un prix unitaire (au jeton, porté par
+        // un modèle de langage, facturé hors de MIA) : on dit lequel, plutôt
+        // que « non tarifé ».
+        if (cat && typeof cat.basis === 'string' && cat.basis !== '') {
+            return { eur: 0, source: 'basis', basis: cat.basis };
+        }
         if (cat && cat.eur !== null && Number.isFinite(Number(cat.eur))) {
             const from = TOKEN_UNIT_SIZE[cat.unit];
             const to = TOKEN_UNIT_SIZE[service.unit];
@@ -1193,7 +1205,9 @@ if (!is_string($bootstrapJson)) {
             ? '<div class="credits-muted credits-cost-source">' + escapeHtml(L.costCatalog) + '</div>'
             : (cost.source === 'derived'
                 ? '<div class="credits-muted credits-cost-source">' + escapeHtml(L.costDerived) + '</div>'
-                : (cost.source === 'none' ? '<div class="credits-muted credits-cost-source is-none">' + escapeHtml(L.costNone) + '</div>' : ''));
+                : (cost.source === 'basis'
+                    ? '<div class="credits-muted credits-cost-source">' + escapeHtml(cost.basis) + '</div>'
+                    : (cost.source === 'none' ? '<div class="credits-muted credits-cost-source is-none">' + escapeHtml(L.costNone) + '</div>' : '')));
         return '<input type="number" class="form-input" data-field="real_cost_eur" min="0" step="0.000001"'
             + (own ? ' value="' + shown + '"' : ' value="" placeholder="' + shown + '"') + '>' + note;
     }
@@ -1443,6 +1457,15 @@ if (!is_string($bootstrapJson)) {
             return {
                 quantityUnits: (unit === 'video_second' || unit === 'second') ? seconds : 1,
                 summary: fill(L.scenarioVideo, { n: seconds }),
+                hints: hints.join(' · '),
+            };
+        }
+
+        // Lecture facturée au texte (Voxtral TTS) : une minute lue ≈ 900 caractères.
+        if (unit === '1m_characters') {
+            return {
+                quantityUnits: 900 / 1000000,
+                summary: fill(L.scenarioAudio, { n: 1 }),
                 hints: hints.join(' · '),
             };
         }
@@ -2645,6 +2668,7 @@ if (!is_string($bootstrapJson)) {
                 PRICE_FLASH_KEY,
                 plural(applied, L.updatedOne, L.updatedMany)
                     + (result.engine ? ' (' + result.engine + ')' : '') + '.'
+                    + (result.warning ? ' ' + result.warning : '')
             );
         } catch (_e) {}
         window.location.reload();

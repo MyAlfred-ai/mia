@@ -23,8 +23,10 @@ declare(strict_types=1);
  *     chaque message rapporté citerait des identifiants, et le modèle les
  *     recopierait tels quels.
  *
- * `users:read.email` n'est PAS demandé : MIA n'a aucun besoin des adresses des
- * collègues de l'utilisateur, et le consentement serait plus large que l'usage.
+ *   - `users:read.email` — retrouver la personne à qui écrire par son ADRESSE
+ *     (`users.lookupByEmail`) : une brique Slack de workflow prend souvent son
+ *     destinataire dans une Fiche, qui porte un email. Lu pour désigner une
+ *     personne, jamais rapporté au modèle.
  *
  * Écriture :
  *   - `chat:write` — publier un message EN SON NOM, et rien d'autre. C'est le
@@ -39,6 +41,17 @@ declare(strict_types=1);
  *          envoyé pendant le stream) ;
  *       3. la page Connexions et la fiche d'administration annoncent l'étendue
  *          réelle du droit accordé.
+ *
+ *   - `im:write` — ouvrir la conversation directe avec UNE personne désignée,
+ *     pour y publier (même file d'approbation, carte qui nomme la personne).
+ *     `mpim:write` (conversations de groupe) n'est pas demandé ;
+ *   - `files:write` — joindre les fichiers d'une brique Slack de workflow
+ *     (images, documents du dossier). Le modèle ne désigne jamais un fichier.
+ *     Ni `files:read`, ni suppression de fichier.
+ *
+ * Ces trois autorisations sont arrivées avec la brique Slack des workflows
+ * (2026-10-26) : une connexion plus ancienne ne les a pas, et le dit (page
+ * Comptes connectés, « À régler » d'un workflow) jusqu'à sa reconnexion.
  *
  * ⚠ Une publication Slack est IRRÉVERSIBLE du point de vue des lecteurs :
  * contrairement à un brouillon Gmail ou Outlook, le message part réellement
@@ -62,7 +75,10 @@ class SlackMessagesOAuth extends SlackUserOAuth
         'im:history',
         'mpim:history',
         'users:read',
+        'users:read.email', // retrouver un destinataire par son adresse
         'chat:write',       // publication approuvée — jamais de suppression
+        'im:write',         // message direct à une personne désignée
+        'files:write',      // fichiers joints par une brique de workflow
     ];
 
     public const STATE_PREFIX   = 'slack_';

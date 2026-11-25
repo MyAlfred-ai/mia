@@ -261,7 +261,9 @@ final class ScheduledTaskContractTest extends TestCase
         $runSend = self::methode(self::src('src/Controllers/ChatController.php'), 'runSend');
         $this->assertStringContainsString("\$scheduled         = is_array(\$payload['scheduled'] ?? null)", $runSend);
         // Pas de capture de mémoire ni de règle : la consigne est rejouée à chaque échéance.
-        $this->assertStringContainsString('$memoryCapture = !$unattended', $runSend);
+        $this->assertStringContainsString('$memoryCapture = ($memoryOn && !$unattended)', $runSend);
+        // Tour sans personne : seuls les souvenirs tenus par la personne sont relus.
+        $this->assertStringContainsString('UserMemory::promptFragment((int)$user[\'id\'], $unattended)', $runSend);
         $this->assertStringContainsString('$taskRuleCapture = $unattended ? null : $this->captureTaskRule(', $runSend);
         $this->assertStringContainsString('$loopRunsAnyway && !$unattended', $runSend);
         // La file d'approbation, passage OBLIGÉ de toute écriture, est remplacée par un refus.

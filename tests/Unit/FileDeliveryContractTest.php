@@ -233,7 +233,7 @@ final class FileDeliveryContractTest extends TestCase
 
         $this->assertSame(
             3,
-            preg_match_all('/innerHTML = renderMarkdown\((?:text|raw)\);\s*\n\s*hydrateGeneratedFiles\(md(?:El)?\);/', $chat),
+            preg_match_all('/(?:innerHTML = renderMarkdown\((?:text|raw)\)|MiaStream\.swap\(mdEl, renderMarkdown\(raw\)\));\s*\n\s*hydrateGeneratedFiles\(md(?:El)?\);/', $chat),
             'appendMessage, finalizeAssistantMessage et le chargement de la page.'
         );
         $this->assertStringContainsString('window.MiaFiles.hydrate(mdEl)', self::fonctionJs($chat, 'hydrateGeneratedFiles'));

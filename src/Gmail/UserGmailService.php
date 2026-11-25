@@ -291,6 +291,219 @@ class UserGmailService extends GoogleUserApiService
         return $out;
     }
 
+    /** Emails qu'une collecte peut rapporter (tables de travail). */
+    public const COLLECT_MAX = 1000;
+
+    /** En-têtes lus en même temps : 6 × 5 unités de quota restent sous la limite par seconde de Gmail. */
+    private const COLLECT_PARALLEL = 6;
+
+    /**
+     * Collecte EXHAUSTIVE (tables de travail) : tous les emails d'une
+     * recherche, page après page, jusqu'à `$limit` (COLLECT_MAX au plus).
+     * Les en-têtes sont lus par petits lots en parallèle (ParallelHttp).
+     *
+     * `$progress(int $lus, ?int $estimes): bool` est appelé après chaque lot ;
+     * rendre `false` arrête la collecte (bouton Stop) — ce qui est lu est rendu,
+     * `interrompu` le dit.
+     *
+     * @return array{messages: list<array{id:string,de:string,a:string,objet:string,recu:int,extrait:string}>, estimation: ?int, tronque: bool, echecs: int, interrompu: bool}
+     */
+    public function collectMessages(string $query, int $limit, ?\Closure $progress = null): array
+    {
+        $query = trim($query) !== '' ? trim($query) : 'in:inbox';
+        $limit = max(1, min(self::COLLECT_MAX, $limit));
+
+        $ids      = [];
+        $estimate = null;
+        $page     = '';
+        $more     = false;
+        do {
+            $list = $this->apiJson('GET', self::API_BASE . '/messages?maxResults=' . min(500, $limit - count($ids) + 1)
+                . '&q=' . rawurlencode($query) . ($page !== '' ? '&pageToken=' . rawurlencode($page) : ''));
+            $estimate ??= isset($list['resultSizeEstimate']) ? (int)$list['resultSizeEstimate'] : null;
+            foreach (($list['messages'] ?? []) as $m) {
+                $id = (string)($m['id'] ?? '');
+                if ($id === '') {
+                    continue;
+                }
+                if (count($ids) >= $limit) {
+                    $more = true;
+                    break;
+                }
+                $ids[] = $id;
+            }
+            $page = (string)($list['nextPageToken'] ?? '');
+            $more = $more || ($page !== '' && count($ids) >= $limit);
+        } while ($page !== '' && count($ids) < $limit);
+
+        $out     = [];
+        $failed  = [];
+        $stopped = false;
+        foreach (array_chunk($ids, self::COLLECT_PARALLEL) as $chunk) {
+            $tasks = [];
+            foreach ($chunk as $id) {
+                $tasks[$id] = fn(): array => $this->collectMeta($id);
+            }
+            foreach (ParallelHttp::run($tasks, 60.0) as $id => $r) {
+                if (isset($r['ok']) && is_array($r['ok'])) {
+                    $out[(string)$id] = $r['ok'];
+                } else {
+                    $failed[] = (string)$id;
+                }
+            }
+            if ($progress !== null && $progress(count($out), $estimate) === false) {
+                $stopped = true;
+                break;
+            }
+        }
+        // Un lot refusé (limite de débit) : une seconde chance, un par un.
+        if (!$stopped && $failed !== [] && count($failed) <= 40) {
+            usleep(800000);
+            foreach ($failed as $i => $id) {
+                try {
+                    $out[$id] = $this->collectMeta($id);
+                    unset($failed[$i]);
+                } catch (\RuntimeException) {
+                    // compté plus bas
+                }
+            }
+        }
+        // L'ordre de Gmail (plus récents d'abord), pas celui des réponses.
+        $ordered = [];
+        foreach ($ids as $id) {
+            if (isset($out[$id])) {
+                $ordered[] = $out[$id];
+            }
+        }
+        if ($ordered === [] && $failed !== []) {
+            throw new \RuntimeException('Gmail n\'a pas rendu les emails demandés (limite de débit ou connexion). Réessayez dans un instant.');
+        }
+        return ['messages' => $ordered, 'estimation' => $estimate, 'tronque' => $more, 'echecs' => count($failed), 'interrompu' => $stopped];
+    }
+
+    /** En-têtes d'un email pour une collecte : expéditeur, destinataires, objet, heure de réception, extrait. */
+    private function collectMeta(string $id): array
+    {
+        $meta = $this->apiJson(
+            'GET',
+            self::API_BASE . '/messages/' . rawurlencode($id)
+                . '?format=metadata&metadataHeaders=From&metadataHeaders=To&metadataHeaders=Subject&metadataHeaders=Date'
+        );
+        $headers = self::headerMap($meta['payload']['headers'] ?? []);
+        $ms      = (string)($meta['internalDate'] ?? '');
+        $ts      = ctype_digit($ms) ? (int)floor(((float)$ms) / 1000) : (int)(strtotime((string)($headers['date'] ?? '')) ?: 0);
+        return [
+            'id'      => $id,
+            'de'      => $headers['from'] ?? '',
+            'a'       => $headers['to'] ?? '',
+            'objet'   => $headers['subject'] ?? '',
+            'recu'    => $ts,
+            'extrait' => html_entity_decode((string)($meta['snippet'] ?? ''), ENT_QUOTES | ENT_HTML5, 'UTF-8'),
+        ];
+    }
+
+    // ------------------------------------------------------------------
+    // Déclencheur « email reçu » des workflows (WorkflowTriggers, MailPush)
+    // ------------------------------------------------------------------
+
+    /**
+     * Identifiants des messages récents (plus récents d'abord), en UN appel :
+     * la surveillance ne lit les en-têtes que des messages qu'elle n'a pas
+     * encore vus (watchMeta). Requête vide : la boîte de réception PAR SON
+     * LIBELLÉ (`labelIds=INBOX`), jamais par la recherche (`q=`), dont l'index
+     * retarde sur un email tout juste arrivé — la notification arrivait, la
+     * recherche ne le trouvait pas encore, et l'email attendait le passage
+     * suivant.
+     *
+     * @return list<array{id:string}>
+     */
+    public function watchList(string $query, int $limit = 50): array
+    {
+        $limit = max(1, min(100, $limit));
+        $query = trim($query);
+        $list = $this->apiJson('GET', self::API_BASE . '/messages?maxResults=' . $limit
+            . ($query === '' ? '&labelIds=INBOX' : '&q=' . rawurlencode($query)));
+        $out = [];
+        foreach (($list['messages'] ?? []) as $m) {
+            $id = (string)($m['id'] ?? '');
+            if ($id !== '') {
+                $out[] = ['id' => $id];
+            }
+        }
+        return $out;
+    }
+
+    /**
+     * En-têtes d'un message pour les filtres du déclencheur : expéditeur,
+     * destinataires, objet, et l'heure de RÉCEPTION (internalDate, secondes
+     * UTC) — qui écarte un ancien message ramené dans la boîte.
+     *
+     * @return array{id:string,de:string,a:string,cc:string,objet:string,date:string,received:?int}
+     */
+    public function watchMeta(string $messageId): array
+    {
+        $id = self::assertMessageId($messageId);
+        $meta = $this->apiJson(
+            'GET',
+            self::API_BASE . '/messages/' . rawurlencode($id)
+                . '?format=metadata&metadataHeaders=From&metadataHeaders=To&metadataHeaders=Cc'
+                . '&metadataHeaders=Subject&metadataHeaders=Date'
+        );
+        $headers = self::headerMap($meta['payload']['headers'] ?? []);
+        $ms = (string)($meta['internalDate'] ?? '');
+        return [
+            'id'       => $id,
+            'de'       => $headers['from'] ?? '',
+            'a'        => $headers['to'] ?? '',
+            'cc'       => $headers['cc'] ?? '',
+            'objet'    => $headers['subject'] ?? '',
+            'date'     => $headers['date'] ?? '',
+            'received' => ctype_digit($ms) ? intdiv((int)$ms, 1000) : null,
+        ];
+    }
+
+    /** Adresse de la boîte reliée (routage des notifications Pub/Sub). */
+    public function mailboxAddress(): string
+    {
+        $profile = $this->apiJson('GET', self::API_BASE . '/profile');
+        return mb_strtolower(trim((string)($profile['emailAddress'] ?? '')));
+    }
+
+    /**
+     * Demande à Gmail de prévenir le topic Pub/Sub de chaque changement de la
+     * boîte de réception (users.watch). À renouveler au moins tous les 7
+     * jours — Google conseille chaque jour.
+     *
+     * @return array{history_id:string,expires:?int} expiration en secondes UTC
+     * @throws \RuntimeException message FR (topic refusé, droits de publication)
+     */
+    public function startPushWatch(string $topic): array
+    {
+        try {
+            $res = $this->apiJson('POST', self::API_BASE . '/watch', [
+                'topicName' => $topic,
+                'labelIds' => ['INBOX'],
+                'labelFilterBehavior' => 'INCLUDE',
+            ]);
+        } catch (\RuntimeException $e) {
+            if (in_array($this->lastHttpStatus, [400, 403, 404], true)) {
+                throw new \RuntimeException(t('Google refuse le topic Pub/Sub « {topic} » : vérifiez son nom et que gmail-api-push@system.gserviceaccount.com a le droit d’y publier.', ['topic' => $topic]), $this->lastHttpStatus, $e);
+            }
+            throw $e;
+        }
+        $ms = (string)($res['expiration'] ?? '');
+        return [
+            'history_id' => (string)($res['historyId'] ?? ''),
+            'expires'    => ctype_digit($ms) ? intdiv((int)$ms, 1000) : null,
+        ];
+    }
+
+    /** Arrête les notifications de la boîte (users.stop). */
+    public function stopPushWatch(): void
+    {
+        $this->apiRaw('POST', self::API_BASE . '/stop', []);
+    }
+
     /**
      * Pièces jointes d'un message, avec son objet et son expéditeur (boucle
      * « pour chaque pièce jointe »). Inventaire seulement : aucun octet.

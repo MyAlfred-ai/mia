@@ -77,7 +77,7 @@ final class LlmEffectiveDefaultTest extends TestCase
 
     public function testLaPageDitQuandLeDefautNEstPasEnregistre(): void
     {
-        $gabarit = (string)file_get_contents(ROOT . '/templates/admin/llms/models.php');
+        $gabarit = (string)file_get_contents(ROOT . '/templates/admin/llms/index.php');
         $this->assertStringContainsString('id="defaultLlmUnsaved"', $gabarit);
         $this->assertStringContainsString('id="defaultLlmConfirm"', $gabarit);
     }

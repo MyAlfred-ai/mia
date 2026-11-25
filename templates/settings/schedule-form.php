@@ -325,7 +325,9 @@ $sectionIcon = static fn(string $paths): string =>
                             $kbLocked = isset($lockedKbIds[(int)$kbId]);
                             // Note par défaut (hors assistant) : schedules.js la remet quand
                             // l'assistant qui verrouillait la base change.
-                            $kbNote   = $kbOff ? (string)$kb['reason'] : ($kb['live'] ? t('en direct') : I18n::plural($kb['docs'], '{n} document', '{n} documents'));
+                            $kbNote   = $kbOff ? (string)$kb['reason'] : (!empty($kb['table'])
+                                ? t('Table') . ' · ' . WorkTableView::rowsLabel((int)($kb['rows'] ?? 0))
+                                : ($kb['live'] ? t('en direct') : I18n::plural($kb['docs'], '{n} document', '{n} documents')));
                         ?>
                             <label class="sched-tile sched-kb<?= $kbOff ? ' is-unavailable' : '' ?><?= $kbLocked ? ' is-locked' : '' ?>"
                                    data-kb-id="<?= (int)$kbId ?>"

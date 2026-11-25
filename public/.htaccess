@@ -50,6 +50,12 @@ AddType application/vnd.android.package-archive .apk
 
 RewriteEngine On
 
+# Claude dans Excel (passerelle /office) : l'en-tête Authorization porte le
+# jeton Microsoft ou le jeton MIA de la personne. Selon le mode d'exécution de
+# PHP, Apache ne le transmet pas : il passe par une variable d'environnement.
+RewriteCond %{HTTP:Authorization} .
+RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
+
 # Médias générés (images/vidéos) : servis sous contrôle d'accès par
 # MediaController, JAMAIS en statique. Cette règle passe AVANT la condition
 # `!-f` — sans elle, Apache livrerait le fichier existant directement, sans

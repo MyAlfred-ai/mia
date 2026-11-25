@@ -14,8 +14,10 @@ declare(strict_types=1);
  *   proposé ;
  * - une source qui ne lui est pas proposée du tout est retirée de l'étape
  *   (elle serait ignorée à l'exécution) ;
- * - une création, une action n8n ou Gamma reçoit le premier outil de sa
- *   nature qui lui est ouvert et en service, quand elle n'en a pas, ou plus ;
+ * - une création — brique Création, ou étape dont la pièce est une image,
+ *   une page, une carte —, une action n8n ou Gamma reçoit le premier outil
+ *   de sa nature qui lui est ouvert et en service, quand elle n'en a pas, ou
+ *   plus ;
  * - une livraison vers un service absent (ni lui, ni son équivalent) est
  *   retirée : elle ne pourrait jamais partir ; une livraison dans une base
  *   reçoit la base quand la personne n'en gère qu'une ;
@@ -122,6 +124,11 @@ final class WorkflowFit
                 && ($n['tool_id'] === null || !isset($creationOk[$n['tool_id']])) && isset($creations[$n['kind']])) {
                 $n['tool_id'] = $creations[$n['kind']];
             }
+            $form = (string)($n['output']['form'] ?? '');
+            if ($n['type'] === WorkflowSpec::TYPE_STEP && $knownCreations && WorkflowSpec::isCreationForm($form)
+                && (($n['output']['tool_id'] ?? null) === null || !isset($creationOk[$n['output']['tool_id']])) && isset($creations[$form])) {
+                $n['output']['tool_id'] = $creations[$form];
+            }
             foreach (['yes', 'no'] as $lane) {
                 if (isset($n[$lane]['nodes'])) {
                     $n[$lane]['nodes'] = array_map($node, $n[$lane]['nodes']);
@@ -161,6 +168,12 @@ final class WorkflowFit
             if ($d['type'] === 'kb' && array_key_exists('delivery_kbs', $choices)
                 && ($d['kb_id'] === null || !isset($kbs[$d['kb_id']])) && count($kbs) === 1) {
                 $d['kb_id'] = (int)array_key_first($kbs);
+            }
+            // Une table où écrire : la seule que la personne gère, si l'écrite n'en est pas une.
+            $tables = (array)($choices['delivery_tables'] ?? []);
+            if ($d['type'] === 'table' && array_key_exists('delivery_tables', $choices)
+                && ($d['kb_id'] === null || !isset($tables[$d['kb_id']])) && count($tables) === 1) {
+                $d['kb_id'] = (int)array_key_first($tables);
             }
             $deliveries[] = $d;
         }

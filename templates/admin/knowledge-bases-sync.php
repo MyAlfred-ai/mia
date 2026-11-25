@@ -24,11 +24,16 @@ $consoleGoogle = '<a href="https://console.cloud.google.com/apis/credentials" ta
 <body class="admin-page">
 <?php $page = 'knowledge-bases-sync'; require ROOT . '/templates/partials/admin-nav.php'; ?>
 <div class="admin-content">
-    <h1><?= te('Sources synchronisées') ?></h1>
-    <p style="color:var(--text-muted);font-size:13px;margin:-6px 0 18px;max-width:760px">
+    <?php require ROOT . '/templates/partials/admin-topbar.php'; ?>
+    <header class="page-head">
+    <div class="page-head-text">
+        <h1><?= te('Sources synchronisées') ?></h1>
+        <p class="page-head-sub">
         <?= $md(teb('Les identifiants qui permettent à une base de connaissances de refléter automatiquement un dossier {b}Google Drive{/b}, {b}OneDrive{/b} ou {b}SharePoint{/b}, ou un agenda {b}Google Agenda{/b}. Ils sont globaux : une fois renseignés ici, tous les gestionnaires de bases peuvent activer une synchronisation depuis {a}Bases de connaissances{/a}.'), '<a href="/admin/knowledge-bases">') ?>
         <?= $md(teb('Deux logiques cohabitent : Drive (clé API), SharePoint et Agenda lisent des dossiers {i}partagés{/i} ; {b}OneDrive{/b} et le mode « ma connexion » de Drive lisent les dossiers {i}personnels{/i} de l\'utilisateur qui enregistre la base, avec ses propres droits.')) ?>
     </p>
+    </div>
+    </header>
 
     <?php if ($success): ?>
         <div class="alert alert-success" style="margin-bottom:20px"><?= htmlspecialchars($success) ?></div>
@@ -42,6 +47,7 @@ $consoleGoogle = '<a href="https://console.cloud.google.com/apis/credentials" ta
             <h3 style="font-size:14px;font-weight:600;margin-bottom:4px;display:flex;align-items:center;gap:8px">
                 <img src="/assets/img/google-drive.svg" alt="" width="16" height="14" style="flex-shrink:0">
                 Google Drive
+                <?= AdminAttention::itemDot('sync:drive') ?>
             </h3>
             <p style="font-size:12px;color:var(--text-muted);margin-bottom:10px">
                 <?= $md(teb('Lit les dossiers partagés « Tous les utilisateurs disposant du lien ». Créez la clé dans la {a}console Google Cloud{/a} : activez l\'{b}API Google Drive{/b} sur le projet, générez une {b}clé API{/b} et restreignez-la à l\'API Drive — sans restriction « référents HTTP » (les appels viennent du serveur). La clé est stockée chiffrée et n\'est jamais réaffichée.'), $consoleGoogle) ?>
@@ -73,6 +79,7 @@ $consoleGoogle = '<a href="https://console.cloud.google.com/apis/credentials" ta
             <h3 style="font-size:14px;font-weight:600;margin-bottom:4px;display:flex;align-items:center;gap:8px">
                 <img src="/assets/img/sharepoint.svg" alt="" width="16" height="16" style="flex-shrink:0">
                 Microsoft SharePoint
+                <?= AdminAttention::itemDot('sync:sharepoint') ?>
             </h3>
             <p style="font-size:12px;color:var(--text-muted);margin-bottom:10px">
                 <?= $md(teb('Lit les dossiers SharePoint via une application {a}Azure{/a} (Microsoft Entra ID → Inscriptions d\'applications) : notez l\'{b}ID de l\'annuaire (tenant){/b} et l\'{b}ID d\'application (client){/b}, créez un {b}secret client{/b} (notez sa valeur immédiatement, surveillez son expiration), puis accordez la permission d\'application {b}Files.Read.All{/b} (Microsoft Graph) avec {b}consentement administrateur{/b}. Le secret est stocké chiffré et n\'est jamais réaffiché.'), '<a href="https://portal.azure.com" target="_blank" rel="noopener">') ?>
@@ -120,6 +127,7 @@ $consoleGoogle = '<a href="https://console.cloud.google.com/apis/credentials" ta
             <h3 style="font-size:14px;font-weight:600;margin-bottom:4px;display:flex;align-items:center;gap:8px">
                 <img src="/assets/img/onedrive.svg" alt="" width="16" height="16" style="flex-shrink:0">
                 Microsoft OneDrive
+                <?= AdminAttention::itemDot('sync:onedrive') ?>
             </h3>
             <p style="font-size:12px;color:var(--text-muted);margin-bottom:10px">
                 <?= teb('Ici, l\'application Azure n\'accède à {b}rien par elle-même{/b} : elle autorise chaque utilisateur à connecter {b}son propre OneDrive{/b}, puis à {b}parcourir ses dossiers{/b} pour en faire la source d\'une base. C\'est donc une application en permissions {b}déléguées{/b} — distinctes de celles de SharePoint ci-dessus, même si la même inscription Azure peut porter les deux.') ?>
@@ -209,6 +217,7 @@ $consoleGoogle = '<a href="https://console.cloud.google.com/apis/credentials" ta
             <h3 style="font-size:14px;font-weight:600;margin-bottom:4px;display:flex;align-items:center;gap:8px">
                 <img src="/assets/img/google-calendar.svg" alt="" width="16" height="16" style="flex-shrink:0">
                 <?= te('Google Agenda') ?>
+                <?= AdminAttention::itemDot('sync:gcalendar') ?>
             </h3>
             <p style="font-size:12px;color:var(--text-muted);margin-bottom:10px">
                 <?= $md(teb('Lit les agendas rendus {b}publics{/b} (Paramètres de l\'agenda → « Rendre disponible publiquement »), reflétés en documents mensuels dans la base. Créez la clé dans la {a}console Google Cloud{/a} : activez l\'{b}API Google Calendar{/b} sur le projet, générez une {b}clé API{/b} (distincte de la clé Drive ou commune, au choix — l\'important est que l\'API Calendar soit autorisée) — sans restriction « référents HTTP ». La clé est stockée chiffrée et n\'est jamais réaffichée.'), $consoleGoogle) ?>

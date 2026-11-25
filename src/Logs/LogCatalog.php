@@ -36,12 +36,12 @@ final class LogCatalog
     public const SOURCES = [
         'ia' => [
             'label' => 'IA & modèles',
-            'tags'  => '/^(?:[A-Za-z]*Adapter(?:\/.*)?|OpenAI.*|Anthropic.*|Mistral.*|Gemini.*|DeepSeek.*|Perplexity.*|Moonshot.*|Zai.*|LlmAdapterHelpers|LLM.*|Incident fournisseur|ConvTitle|Condensation|Contexte|Estimation|Suggestion|Mémoire|speech|voix|realtimeTranscriptionToken|Prompt assistant|ChatController|Conversations|Télémétrie agent|assistants)$/iu',
-            'paths' => ['src/LLM/', 'src/Agent/', 'src/Assistants/', 'src/Controllers/ChatController.php'],
+            'tags'  => '/^(?:[A-Za-z]*Adapter(?:\/.*)?|OpenAI.*|Anthropic.*|Mistral.*|Gemini.*|DeepSeek.*|Perplexity.*|Moonshot.*|Zai.*|LlmAdapterHelpers|LLM.*|Incident fournisseur|ConvTitle|Condensation|Contexte|Estimation|Suggestion|Mémoire|speech|speech realtime|speech Voxtral|voix|realtimeTranscriptionToken|dictée Voxtral|Prompt assistant|ChatController|Conversations|Télémétrie agent|assistants|Tables)$/iu',
+            'paths' => ['src/LLM/', 'src/Agent/', 'src/Tables/', 'src/Assistants/', 'src/Controllers/ChatController.php'],
         ],
         'creations' => [
             'label' => 'Créations & fichiers',
-            'tags'  => '/^(?:ImageGenerator|VideoGenerator|HtmlIllustrator|Image|Deck|PptxTemplate|DocxTemplate|DocxExport|DOCX Export|PDF Export|Fichiers|Fichier par le modèle|Références image|gamma|Geocoder|Brouillon)$/iu',
+            'tags'  => '/^(?:ImageGenerator|VideoGenerator|HtmlIllustrator|Image|Deck|PptxTemplate|DocxTemplate|DocxExport|DOCX Export|PDF Export|Fichiers|Fichier par le modèle|Références image|Créations|gamma|Geocoder|Brouillon)$/iu',
             'paths' => ['src/Slides/', 'src/Files/', 'src/Helpers/ImageGenerator.php', 'src/Helpers/VideoGenerator.php', 'src/Helpers/HtmlIllustrator.php', 'src/Jobs/HtmlPageJob.php'],
         ],
         'kb' => [
@@ -51,8 +51,8 @@ final class LogCatalog
         ],
         'connecteurs' => [
             'label' => 'Connecteurs',
-            'tags'  => '/^(?:connecteurs|.+ user|.+ OAuth|Microsoft OAuth|Slack.*|Teams.*|n8n|approbation.*|Tâches règles)$/iu',
-            'paths' => ['src/Connectors/', 'src/Drive/', 'src/Gmail/', 'src/Outlook/', 'src/Calendar/', 'src/Tasks/', 'src/Todo/', 'src/Slack/', 'src/Teams/', 'src/N8n/', 'src/Gamma/'],
+            'tags'  => '/^(?:connecteurs|.+ user|.+ OAuth|Microsoft OAuth|Slack.*|Teams.*|n8n|approbation.*|Tâches règles|Claude dans Office)$/iu',
+            'paths' => ['src/Connectors/', 'src/Office/', 'src/Controllers/OfficeGatewayController.php', 'src/Controllers/OfficeAddinController.php', 'src/Drive/', 'src/Gmail/', 'src/Outlook/', 'src/Calendar/', 'src/Tasks/', 'src/Todo/', 'src/Slack/', 'src/Teams/', 'src/N8n/', 'src/Gamma/'],
         ],
         'automatisation' => [
             'label' => 'Tâches & workflows',
@@ -66,17 +66,17 @@ final class LogCatalog
         ],
         'securite' => [
             'label' => 'Connexion & sécurité',
-            'tags'  => '/^(?:AUTH|CSRF|SSO.*|Rôles|Contacts administrateurs|Media)$/iu',
+            'tags'  => '/^(?:AUTH|CSRF|Session|SSO.*|Entra|Rôles|Contacts administrateurs|Media)$/iu',
             'paths' => ['src/Auth/', 'src/Security/', 'src/Middleware/'],
         ],
         'donnees' => [
             'label' => 'Base & stockage',
-            'tags'  => '/^(?:db|migrate|Backup|Élagage|AvatarStorage|Marque|Settings|entrypoint)$/iu',
-            'paths' => ['src/Backup/', 'src/Maintenance/', 'src/Models/Database.php', 'src/Helpers/AvatarStorage.php', 'database/'],
+            'tags'  => '/^(?:db|migrate|Backup|Élagage|AvatarStorage|Marque|Settings|entrypoint|Nouveautés majeures|Volet)$/iu',
+            'paths' => ['src/Backup/', 'src/Maintenance/', 'src/Models/Database.php', 'src/Helpers/AvatarStorage.php', 'src/Helpers/SidebarSpaces.php', 'src/Changelog/', 'database/'],
         ],
         'couts' => [
             'label' => 'Coûts & usage',
-            'tags'  => '/^(?:Usage.*|Budget.*|Points à régler|AdminController)$/iu',
+            'tags'  => '/^(?:Usage.*|Budget.*|Tarifs|Points à régler|AdminController)$/iu',
             'paths' => ['src/Billing/'],
         ],
         'php' => [

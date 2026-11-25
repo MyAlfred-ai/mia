@@ -101,7 +101,7 @@ final class AdminNavTest extends TestCase
         $titres = [
             'templates/admin/usage.php' => "<h1><?= te('Consommation') ?></h1>",
             'templates/admin/credits.php' => "<h1><?= te('Tarifs & crédits') ?></h1>",
-            'templates/admin/profiles/list.php' => "<h1><?= te('Assistants') ?></h1>",
+            'templates/admin/profiles/list.php' => "<div class=\"asx-kicker\"><?= te('Assistants') ?></div>",
             'templates/admin/logs.php' => "<h1><?= te('Journaux') ?></h1>",
             'templates/admin/vector-database.php' => "<h1><?= te('Moteur vectoriel') ?></h1>",
             'templates/admin/users.php' => "><?= te('Comptes') ?></h1>",
@@ -115,13 +115,13 @@ final class AdminNavTest extends TestCase
     public function testComportementParDefautFusionneDansModeles(): void
     {
         $routes = self::lire('public/index.php');
-        $this->assertStringContainsString("get('/admin/llms/defaults', function (): void { header('Location: /admin/llms/models#defaut', true, 301); exit; });", $routes);
+        $this->assertStringContainsString("get('/admin/llms/defaults', function (): void { header('Location: /admin/llms#defaut', true, 301); exit; });", $routes);
         $this->assertStringContainsString("post('/admin/llms/defaults',", $routes, 'Le formulaire poste toujours au même endroit');
         $this->assertFileDoesNotExist(dirname(__DIR__, 2) . '/templates/admin/llms/defaults.php');
-        $models = self::lire('templates/admin/llms/models.php');
+        $models = self::lire('templates/admin/llms/index.php');
         $this->assertStringContainsString('id="defaut"', $models);
         $this->assertStringContainsString('action="/admin/llms/defaults" data-autosave', $models);
-        $this->assertStringContainsString("'/admin/llms/models#defaut'", self::lire('src/Controllers/AdminController.php'));
+        $this->assertStringContainsString("'/admin/llms#defaut'", self::lire('src/Controllers/AdminController.php'));
     }
 
     /**
@@ -145,7 +145,7 @@ final class AdminNavTest extends TestCase
         I18n::use('en');
         try {
             $this->assertSame('People', AdminMenu::label('people'));
-            $this->assertSame('Models', AdminMenu::pageText('llms-models'), '« Modèles » des LLM, pas des workflows.');
+            $this->assertSame('Providers and models', AdminMenu::pageText('llms-keys'), 'Une page : fournisseurs, clés et modèles.');
             $this->assertSame('People › Accounts', AdminMenu::pathText('users'));
             $this->assertSame('Knowledge bases', AdminMenu::pathText('knowledge-bases', 'Bases de connaissances'));
             $this->assertSame('Logs', AdminTabs::ongletText('logs'));

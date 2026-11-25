@@ -8,6 +8,7 @@
 <body class="admin-page">
 <?php $page = 'users'; require ROOT . '/templates/partials/admin-nav.php'; ?>
 <div class="admin-content">
+    <?php require ROOT . '/templates/partials/admin-topbar.php'; ?>
 
     <?php
         $currentUser = Session::currentUser();
@@ -79,15 +80,19 @@
         ));
         $rows = [];
         $countActive = 0; $countInactive = 0; $countAdmins = 0; $countOverQuota = 0;
+        // Comptes de démo (DemoAccount::accounts) : enveloppe et consommation
+        // depuis le début de LEUR démo, à la place du quota mensuel.
+        $countDemo = 0; $countDemoEnded = 0;
+        $demoAccounts = $demoAccounts ?? [];
         foreach ($users as $u) {
             $uid          = (int)$u['id'];
             $monthCredits = (int)($monthCreditsByUser[$uid] ?? 0);
             $userGroups   = $groupsByUser[$uid] ?? [];
             $groupQuota   = $effectiveGroupQuotas[$uid] ?? null;
-            $userQuota    = isset($u['credit_quota_k']) && $u['credit_quota_k'] !== null
-                ? (int)$u['credit_quota_k']
-                : (isset($u['token_quota']) && $u['token_quota'] !== null ? (int)$u['token_quota'] : null);
-            $effectiveQuota = $userQuota !== null ? $userQuota : $groupQuota;
+            $userQuota    = User::individualQuotaK($u);
+            // Le plus généreux du compte et de ses groupes (User::effectiveCreditQuotaKFrom) :
+            // la même règle que celle appliquée au moment de consommer.
+            $effectiveQuota = User::effectiveCreditQuotaKFrom($u, $groupQuota);
             $quotaMax       = $effectiveQuota !== null ? $effectiveQuota * 1_000 : null;
             if ($quotaMax === null) {
                 $pct = 0;
@@ -103,7 +108,11 @@
             $isLocalAdmin = ($u['google_id'] ?? '') === 'local_admin';
             $authLabel    = UserIdentity::authLabel($userProviders, $isLocalPw, $isLocalAdmin);
             $authMethods  = UserIdentity::authMethods($userProviders, $isLocalPw, $isLocalAdmin);
-            $quotaSource  = $userQuota !== null ? t('Individuel') : ($groupQuota !== null ? t('Groupes (max)') : t('Illimité'));
+            $quotaSource  = match (User::quotaOrigin($userQuota, $groupQuota)) {
+                'user'   => t('Individuel'),
+                'groups' => t('Groupes (max)'),
+                default  => t('Illimité'),
+            };
             $lastActivity = $lastActivityByUser[$uid] ?? null;
             $isActive     = (int)$u['is_active'] === 1;
 
@@ -112,7 +121,16 @@
             // Ce compte peut-il être modifié par celui qui regarde ? Jamais un
             // compte plus large que le sien (Role::canManageAccount).
             $canManageRow = Role::canManageAccount($currentUser, $u);
-            if ($effectiveQuota !== null && $pct >= 90) { $countOverQuota++; }
+            $demo = $demoAccounts[$uid] ?? null;
+            $demoPct = $demo !== null
+                ? ($demo['credits'] > 0 ? min(100, (int)round($demo['used'] / $demo['credits'] * 100)) : 100)
+                : null;
+            if ($demo !== null) {
+                $countDemo++;
+                if ($demo['exhausted']) { $countDemoEnded++; }
+            } elseif ($effectiveQuota !== null && $pct >= 90) {
+                $countOverQuota++;
+            }
 
             $rows[] = [
                 'u'              => $u,
@@ -129,6 +147,8 @@
                 'authMethods'    => $authMethods,
                 'quotaSource'    => $quotaSource,
                 'lastActivity'   => $lastActivity,
+                'demo'           => $demo,
+                'demoPct'        => $demoPct,
                 'payload'        => [
                     'id'            => $uid,
                     'name'          => (string)$u['name'],
@@ -153,15 +173,26 @@
                     // compte a des droits que le rôle de celui qui regarde n'a pas.
                     'locked_reason' => !$canEditUser ? 'right' : (!$canManageRow ? 'wider' : ''),
                     'can_delete'    => $canDeleteUser && $canManageRow && $uid !== (int)$currentUser['id'],
+                    // Compte de démo : enveloppe et consommation depuis son début.
+                    'demo'          => $demo !== null ? [
+                        'credits'   => $demo['credits'],
+                        'used'      => $demo['used'],
+                        'remaining' => $demo['remaining'],
+                        'exhausted' => $demo['exhausted'],
+                        'muted'     => $demo['muted'],
+                        'started'   => Format::dateFr(substr($demo['started_at'], 0, 10)),
+                    ] : null,
+                    // Peut-il devenir un compte de démo ? Jamais un administrateur.
+                    'demo_allowed'  => DemoAccount::allowedForRole((string)$u['role']),
                 ],
             ];
         }
     ?>
 
-    <div class="um-header">
-        <div>
-            <h1 style="margin-bottom:2px"><?= te('Comptes') ?></h1>
-            <p style="color:var(--text-muted);font-size:13px;margin:0">
+    <div class="um-header page-head">
+        <div class="page-head-text">
+            <h1><?= te('Comptes') ?></h1>
+            <p class="page-head-sub">
                 <?= te('Comptes, rôles, groupes et quotas mensuels.') ?>
                 <?php
                     // Phrase ENTIÈRE dans une clé : les liens y entrent par
@@ -177,7 +208,7 @@
             </p>
         </div>
         <?php if (!empty($canCreateUser)): ?>
-        <button type="button" class="btn-primary" id="btnNewUser">+ <?= te('Nouvel utilisateur') ?></button>
+        <button type="button" class="btn-primary page-head-primary" id="btnNewUser">+ <?= te('Nouvel utilisateur') ?></button>
         <?php endif; ?>
     </div>
 
@@ -206,6 +237,16 @@
             <span class="um-stat-value" style="color:<?= $countOverQuota > 0 ? '#f59e0b' : 'var(--text)' ?>"><?= $countOverQuota ?></span>
             <span class="um-stat-label"><?= te('Quota ≥ 90 %') ?></span>
         </button>
+        <?php if ($countDemo > 0): ?>
+        <button type="button" class="um-stat" data-stat="demo" title="<?= te('Comptes de démonstration : enveloppe de crédits sans renouvellement mensuel') ?>">
+            <span class="um-stat-value"><?= $countDemo ?></span>
+            <span class="um-stat-label"><?= te('Démos') ?></span>
+        </button>
+        <button type="button" class="um-stat" data-stat="demoended" title="<?= te('Démos dont les crédits sont épuisés : MIA ne leur répond plus') ?>">
+            <span class="um-stat-value" style="color:<?= $countDemoEnded > 0 ? '#f59e0b' : 'var(--text)' ?>"><?= $countDemoEnded ?></span>
+            <span class="um-stat-label"><?= te('Démos épuisées') ?></span>
+        </button>
+        <?php endif; ?>
     </div>
 
     <!--
@@ -215,8 +256,21 @@
         « Inactifs » juste au-dessus). Route dédiée : l'auto-save reposte le
         formulaire ENTIER sur sa propre action.
     -->
-    <div class="card" style="margin-bottom:16px">
-        <h3 style="font-size:14px;font-weight:600;margin:0 0 14px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em"><?= te("Règles d'accès") ?></h3>
+    <?php
+        // Résumé de la ligne repliée : l'état des deux réglages, lisible sans ouvrir.
+        $accessSummary = ($newUsersActive ? t('Nouveaux comptes actifs d’office') : t('Nouveaux comptes à approuver'))
+            . ' · ' . ($staffEmailDomain !== '' ? t('Équipe : {domaine}', ['domaine' => $staffEmailDomain]) : t('Aucun domaine d’équipe'));
+    ?>
+    <details class="card admin-fold" style="margin-bottom:16px">
+        <summary class="admin-fold-head">
+            <span class="admin-fold-icon" aria-hidden="true"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg></span>
+            <span class="admin-fold-text">
+                <span class="admin-fold-title"><?= te("Règles d'accès") ?></span>
+                <span class="admin-fold-summary"><?= htmlspecialchars($accessSummary) ?></span>
+            </span>
+            <span class="admin-fold-action"><?= te('Modifier') ?><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></span>
+        </summary>
+        <div class="admin-fold-body">
         <form method="POST" action="/admin/users/access-rules"<?= !empty($canEditUser) ? ' data-autosave' : '' ?>>
             <?= Csrf::field() ?>
             <?php // Règles d'accès : droit « Comptes — Modifier ». Sans lui, affichées en lecture seule. ?>
@@ -248,7 +302,8 @@
             </div>
             <?php endif; ?>
         </form>
-    </div>
+        </div>
+    </details>
 
     <!-- Recherche + filtres -->
     <div class="um-toolbar">
@@ -258,6 +313,24 @@
             <?php foreach ($allRoles as $roleSlug => $roleDef): ?>
                 <option value="<?= htmlspecialchars($roleSlug) ?>"><?= htmlspecialchars($roleLabels[$roleSlug] ?? (string)$roleDef['name']) ?></option>
             <?php endforeach; ?>
+        </select>
+        <?php
+            // Filtre par groupe : chaque groupe de la page (actifs et inactifs),
+            // puis les comptes qui n'ont que le groupe par défaut — tout le
+            // monde en fait partie, le choisir ne filtrerait rien d'utile.
+            $defaultGroup = null;
+            foreach ($allGroups as $g) {
+                if (!empty($g['is_default'])) { $defaultGroup = $g; break; }
+            }
+        ?>
+        <select id="umFilterGroup" class="form-select um-filter um-filter-group">
+            <option value=""><?= te('Tous les groupes') ?></option>
+            <?php foreach ($allGroups as $g): ?>
+                <option value="<?= (int)$g['id'] ?>"><?= !empty($g['is_default']) ? '★ ' : '' ?><?= htmlspecialchars($groupLabel($g)) ?><?= empty($g['is_active']) ? ' (' . te('inactif') . ')' : '' ?></option>
+            <?php endforeach; ?>
+            <?php /* Libellé court : il suit « ★ Par défaut » dans la liste, et la liste
+                     prend la largeur de sa plus longue option. */ ?>
+            <option value="none" title="<?= $defaultGroup !== null ? te('Comptes qui ne sont dans aucun groupe en dehors de « {nom} »', ['nom' => $groupLabel($defaultGroup)]) : te('Comptes qui ne sont dans aucun groupe') ?>"><?= $defaultGroup !== null ? te('Sans autre groupe') : te('Aucun groupe') ?></option>
         </select>
         <select id="umFilterStatus" class="form-select um-filter">
             <option value=""><?= te('Tous les statuts') ?></option>
@@ -299,8 +372,12 @@
                     data-role="<?= htmlspecialchars($u['role']) ?>"
                     data-active="<?= $r['isActive'] ? 1 : 0 ?>"
                     data-auth="<?= htmlspecialchars(implode(' ', $r['authMethods'])) ?>"
-                    data-pct="<?= $r['effectiveQuota'] !== null ? $r['pct'] : -1 ?>"
-                    data-overquota="<?= ($r['effectiveQuota'] !== null && $r['pct'] >= 90) ? 1 : 0 ?>"
+                    data-groups="<?= htmlspecialchars(implode(' ', array_map(static fn(array $g): int => (int)$g['id'], $r['userGroups']))) ?>"
+                    data-own-groups="<?= count(array_filter($r['userGroups'], static fn(array $g): bool => empty($g['is_default']))) ?>"
+                    data-pct="<?= $r['demo'] !== null ? $r['demoPct'] : ($r['effectiveQuota'] !== null ? $r['pct'] : -1) ?>"
+                    data-overquota="<?= ($r['demo'] === null && $r['effectiveQuota'] !== null && $r['pct'] >= 90) ? 1 : 0 ?>"
+                    data-demo="<?= $r['demo'] !== null ? 1 : 0 ?>"
+                    data-demoended="<?= ($r['demo'] !== null && $r['demo']['exhausted']) ? 1 : 0 ?>"
                     data-activity="<?= htmlspecialchars($r['lastActivity'] ?? '') ?>">
                     <td data-label="<?= te('Utilisateur') ?>">
                         <div class="um-user-cell">
@@ -312,6 +389,7 @@
                             <div class="um-user-id">
                                 <span class="um-user-name">
                                     <?= htmlspecialchars($u['name']) ?>
+                                    <?= AdminAttention::itemDot('user:' . $uid) ?>
                                     <?php if ($uid === (int)$currentUser['id']): ?><span class="badge badge-gray" style="font-size:10px"><?= te('vous') ?></span><?php endif; ?>
                                 </span>
                                 <span class="um-user-email"><?= htmlspecialchars($u['email']) ?></span>
@@ -321,6 +399,12 @@
                     <td data-label="<?= te('Rôle') ?>">
                         <div class="um-role-cell">
                             <?= $roleBadge((string)$u['role']) ?>
+                            <?php if ($r['demo'] !== null): ?>
+                                <span class="badge um-demo-badge<?= $r['demo']['exhausted'] ? ' is-ended' : '' ?>"
+                                      title="<?= $r['demo']['exhausted'] ? te('Démo épuisée : MIA ne répond plus à ce compte') : te('Compte de démonstration : enveloppe de crédits sans renouvellement mensuel') ?>">
+                                    <?= $r['demo']['exhausted'] ? te('Démo épuisée') : te('Démo') ?>
+                                </span>
+                            <?php endif; ?>
                             <?php if ($r['authLabel'] !== ''): ?>
                                 <span class="um-auth" title="<?= te('Méthode de connexion') ?>"><?= htmlspecialchars($r['authLabel']) ?></span>
                             <?php endif; ?>
@@ -355,6 +439,24 @@
                         <?php endif; ?>
                     </td>
                     <td data-label="<?= te('Quota mensuel') ?>">
+                        <?php if ($r['demo'] !== null): $d = $r['demo']; $dp = (int)$r['demoPct']; ?>
+                        <div class="um-quota">
+                            <div class="um-quota-line">
+                                <?= Format::credits($d['used']) ?> / <?= Format::credits($d['credits']) ?>
+                                <span style="color:<?= $dp >= 90 ? '#ef4444' : 'var(--text-muted)' ?>">(<?= te('{n} %', ['n' => $dp]) ?>)</span>
+                            </div>
+                            <div class="um-quota-bar">
+                                <div style="width:<?= $dp ?>%;background:<?= $dp >= 90 ? '#ef4444' : ($dp >= 70 ? '#f59e0b' : 'var(--accent)') ?>"></div>
+                            </div>
+                            <div class="um-quota-meta">
+                                <?php if ($d['exhausted']): ?>
+                                    <em style="color:#ef4444"><?= te('Démo épuisée') ?></em><?= $d['muted'] ? ' · ' . te('alerte masquée') : '' ?>
+                                <?php else: ?>
+                                    <em><?= te('Crédits de démo · {n} restants', ['n' => Format::credits($d['remaining'])]) ?></em>
+                                <?php endif; ?>
+                            </div>
+                        </div>
+                        <?php else: ?>
                         <div class="um-quota">
                             <div class="um-quota-line">
                                 <?= Format::credits((int)$r['monthCredits']) ?>
@@ -376,6 +478,7 @@
                                 <?php endif; ?>
                             </div>
                         </div>
+                        <?php endif; ?>
                     </td>
                     <td data-label="<?= te('Activité') ?>">
                         <div class="um-activity">
@@ -449,6 +552,23 @@
                                 <option value="0"><?= te('Inactif') ?></option>
                             </select>
                         </div>
+                    </div>
+                </section>
+                <section class="profile-section">
+                    <h4><?= te('Démo') ?></h4>
+                    <label class="um-check">
+                        <input type="checkbox" name="is_demo" value="1" id="nuDemo">
+                        <?= te('Compte de démonstration') ?>
+                    </label>
+                    <div id="nuDemoFields" hidden>
+                        <div class="form-group" style="margin:0;max-width:220px">
+                            <label for="nuDemoCredits"><?= te('Crédits de démo') ?></label>
+                            <input type="number" name="demo_credits" id="nuDemoCredits" class="form-input"
+                                   value="<?= (int)($demoDefaultCredits ?? DemoAccount::DEFAULT_CREDITS) ?>" min="1" max="<?= DemoAccount::MAX_CREDITS ?>" step="1" disabled>
+                        </div>
+                        <p class="profile-hint" style="margin-top:6px"><?= te('Utilisables une seule fois : ils ne se renouvellent pas chaque mois et remplacent le quota mensuel. Une fois épuisés, MIA ne répond plus ; la personne garde ses conversations et un message l’invite à prendre contact.') ?>
+                            <?php if (!empty($demoContactEmail)): ?><?= te('Adresse indiquée : {email}.', ['email' => $demoContactEmail]) ?><?php else: ?><?= te('Aucune adresse de contact n’est renseignée (Marque & apparence → Liens & contact).') ?><?php endif; ?>
+                        </p>
                     </div>
                 </section>
                 <section class="profile-section">
@@ -541,6 +661,38 @@
                     </label>
                 </section>
 
+                <section class="profile-section" id="euDemoSection" hidden>
+                    <h4><?= te('Démo') ?></h4>
+                    <div id="euDemoOn" hidden>
+                        <p class="um-demo-usage" id="euDemoUsage"></p>
+                        <?php /* Marqueur : la section démo est dans le POST (la case absente vaut décochée). */ ?>
+                        <input type="hidden" name="demo_form" value="1" id="euDemoFormFlag" disabled>
+                        <div class="form-group" style="margin:0;max-width:220px">
+                            <label for="euDemoCredits"><?= te('Crédits de démo') ?></label>
+                            <input type="number" name="demo_credits" id="euDemoCredits" class="form-input" min="1" max="<?= DemoAccount::MAX_CREDITS ?>" step="1" disabled>
+                        </div>
+                        <p class="profile-hint" style="margin-top:4px"><?= te('Augmenter l’enveloppe rouvre la démo : le décompte ne repart pas de zéro.') ?></p>
+                        <label class="um-check" style="margin-top:8px">
+                            <input type="checkbox" name="demo_alert_muted" value="1" id="euDemoMuted" disabled>
+                            <?= te('Ne plus signaler l’épuisement de cette démo') ?>
+                        </label>
+                        <p class="profile-hint" style="margin-top:4px"><?= te('La pastille de « Personnes › Comptes » disparaît pour ce compte. Elle revient si son enveloppe change.') ?></p>
+                        <div class="um-demo-actions">
+                            <button type="button" class="btn-secondary" id="euDemoConvert"><?= te('Convertir en compte normal') ?></button>
+                        </div>
+                    </div>
+                    <div id="euDemoOff" hidden>
+                        <p class="profile-section-hint"><?= te('Un compte de démo dispose d’une enveloppe de crédits qui ne se renouvelle pas chaque mois. Le décompte part du moment où vous le passez en démo.') ?></p>
+                        <div class="um-demo-actions">
+                            <div class="form-group" style="margin:0;max-width:160px">
+                                <label for="euDemoStartCredits"><?= te('Crédits de démo') ?></label>
+                                <input type="number" id="euDemoStartCredits" class="form-input" value="<?= (int)($demoDefaultCredits ?? DemoAccount::DEFAULT_CREDITS) ?>" min="1" max="<?= DemoAccount::MAX_CREDITS ?>" step="1" data-autosave-skip>
+                            </div>
+                            <button type="button" class="btn-secondary" id="euDemoStart"><?= te('Passer en compte de démo') ?></button>
+                        </div>
+                    </div>
+                </section>
+
                 <section class="profile-section">
                     <h4><?= te('Groupes') ?></h4>
                     <p class="profile-section-hint"><?= te("Droits d'accès (assistants, outils, modèles) et quota hérités des groupes cochés.") ?></p>
@@ -568,6 +720,8 @@
                 </section>
             </form>
             <form method="POST" id="euDeleteForm" style="display:none"><?= Csrf::field() ?></form>
+            <?php /* Gestes de démo (passer en démo, convertir) : actions explicites, hors auto-save. */ ?>
+            <form method="POST" id="euDemoActionForm" style="display:none"><?= Csrf::field() ?><input type="hidden" name="demo_credits" id="euDemoActionCredits"></form>
         </div>
         <footer class="profile-modal-footer">
             <?php require ROOT . '/templates/partials/autosave-hint.php'; ?>
@@ -616,17 +770,19 @@
     // ── Recherche, filtres, tuiles ──
     const search   = document.getElementById('umSearch');
     const fRole    = document.getElementById('umFilterRole');
+    const fGroup   = document.getElementById('umFilterGroup');
     const fStatus  = document.getElementById('umFilterStatus');
     const fAuth    = document.getElementById('umFilterAuth');
     const tbody    = document.getElementById('umTbody');
     const countEl  = document.getElementById('umCount');
     const emptyEl  = document.getElementById('umEmpty');
     const statsEl  = document.getElementById('umStats');
-    let statFilter = 'all'; // all | active | inactive | admins | overquota
+    let statFilter = 'all'; // all | active | inactive | admins | overquota | demo | demoended
 
     function applyFilters() {
         const q  = (search.value || '').trim().toLowerCase();
         const r  = fRole.value;
+        const g  = fGroup.value;
         const s  = fStatus.value;
         const a  = fAuth.value;
         let shown = 0;
@@ -634,6 +790,13 @@
             let ok = true;
             if (q && !(tr.dataset.name || '').includes(q)) ok = false;
             if (r && tr.dataset.role !== r) ok = false;
+            // Un compte appartient à plusieurs groupes : il apparaît sous
+            // CHACUN. « none » = seulement le groupe par défaut (ou aucun).
+            if (g === 'none') {
+                if (tr.dataset.ownGroups !== '0') ok = false;
+            } else if (g && !(tr.dataset.groups || '').split(' ').includes(g)) {
+                ok = false;
+            }
             if (s !== '' && tr.dataset.active !== s) ok = false;
             // Un compte peut se connecter de plusieurs façons (« google password ») :
             // il apparaît sous CHACUNE de ses méthodes.
@@ -642,6 +805,8 @@
             if (statFilter === 'inactive'  && tr.dataset.active !== '0') ok = false;
             if (statFilter === 'admins'    && tr.dataset.role !== 'admin') ok = false;
             if (statFilter === 'overquota' && tr.dataset.overquota !== '1') ok = false;
+            if (statFilter === 'demo'      && tr.dataset.demo !== '1') ok = false;
+            if (statFilter === 'demoended' && tr.dataset.demoended !== '1') ok = false;
             tr.style.display = ok ? '' : 'none';
             if (ok) shown++;
         });
@@ -654,11 +819,17 @@
             b.classList.toggle('is-active', b.dataset.stat === statFilter && statFilter !== 'all');
         });
     }
-    [search, fRole, fStatus, fAuth].forEach(el => el.addEventListener('input', applyFilters));
+    [search, fRole, fGroup, fStatus, fAuth].forEach(el => el.addEventListener('input', applyFilters));
     // Lien « N comptes » d'Personnes → Rôles : la liste s'ouvre filtrée sur ce rôle.
     const roleParam = new URLSearchParams(window.location.search).get('role');
     if (roleParam && Array.from(fRole.options).some(o => o.value === roleParam)) {
         fRole.value = roleParam;
+    }
+    // ?demo=1 : les comptes de démo ; ?demo=epuisees : celles qui n'ont plus
+    // de crédits (lien de la pastille « démos épuisées »).
+    const demoParam = new URLSearchParams(window.location.search).get('demo');
+    if (demoParam && statsEl.querySelector('[data-stat="demo"]')) {
+        statFilter = demoParam === 'epuisees' ? 'demoended' : 'demo';
     }
     statsEl.addEventListener('click', e => {
         const btn = e.target.closest('.um-stat');
@@ -784,9 +955,29 @@
         });
     });
 
+    // ── Création : compte de démonstration ──
+    // Coché, la case ouvre l'enveloppe (champ envoyé seulement alors) et retire
+    // le rôle Administrateur de la liste : une démo ne l'est jamais.
+    const nuDemo       = document.getElementById('nuDemo');
+    const nuDemoFields = document.getElementById('nuDemoFields');
+    const nuDemoCredits = document.getElementById('nuDemoCredits');
+    function syncNewUserDemo() {
+        const on = !!nuDemo.checked;
+        nuDemoFields.hidden = !on;
+        nuDemoCredits.disabled = !on;
+        const roleSel = document.querySelector('#newUserForm select[name="role"]');
+        const adminOpt = roleSel ? roleSel.querySelector('option[value="admin"]') : null;
+        if (adminOpt) {
+            adminOpt.disabled = on;
+            if (on && roleSel.value === 'admin') roleSel.value = 'user';
+        }
+    }
+    nuDemo.addEventListener('change', syncNewUserDemo);
+
     document.getElementById('btnNewUser')?.addEventListener('click', () => {
         const form = document.getElementById('newUserForm');
         form.reset();
+        syncNewUserDemo();
         openModal('newUserModal');
         form.querySelector('input[name="name"]').focus();
     });
@@ -794,6 +985,32 @@
     // ── Modale édition ──
     const fmt = n => Number(n || 0).toLocaleString(NUM_LOCALE);
     let currentEditUser = null;
+    // D'où viendra le quota appliqué : le PLUS GÉNÉREUX entre le quota
+    // individuel et celui des groupes (User::effectiveCreditQuotaKFrom).
+    // Recalculé à la frappe : la règle se lit avant d'enregistrer.
+    function paintQuotaHint(u, raw) {
+        const hint = document.getElementById('euQuotaHint');
+        if (!hint || !u) return;
+        if (u.demo) {
+            hint.textContent = <?= tj('Compte de démo : ce quota mensuel ne s’appliquera qu’après conversion en compte normal.') ?>;
+            return;
+        }
+        const val = String(raw ?? '').trim();
+        const own = val === '' ? null : Math.max(0, parseInt(val, 10) || 0);
+        const grp = u.quota_group;
+        if (own === null) {
+            hint.textContent = grp !== null
+                ? fill(<?= tj('Vide : hérite du plus généreux des groupes ({n} crédits/mois).') ?>, { n: fmt(grp * 1000) })
+                : <?= tj('Vide et aucun quota de groupe : illimité.') ?>;
+        } else if (grp === null) {
+            hint.textContent = <?= tj('Quota individuel : aucun groupe n’en définit.') ?>;
+        } else if (own > grp) {
+            hint.textContent = fill(<?= tj('Plus généreux que ses groupes ({n} crédits/mois) : c’est lui qui s’applique.') ?>, { n: fmt(grp * 1000) });
+        } else {
+            hint.textContent = fill(<?= tj('Ses groupes sont plus généreux : {n} crédits/mois s’appliquent. Le plus généreux l’emporte toujours.') ?>, { n: fmt(grp * 1000) });
+        }
+    }
+    document.getElementById('euQuota')?.addEventListener('input', e => paintQuotaHint(currentEditUser, e.target.value));
 
     document.querySelectorAll('.um-edit-btn').forEach(btn => {
         btn.addEventListener('click', () => {
@@ -819,7 +1036,8 @@
 
             // Consommation
             document.getElementById('euUsage').innerHTML =
-                '<span>' + fill(<?= tj('{n} crédits ce mois') ?>, { n: '<strong>' + fmt(u.month_credits) + '</strong>' }) + '</span>'
+                (u.demo ? '<span>' + fill(<?= tj('{n} crédits de démo utilisés sur {max}') ?>, { n: '<strong>' + fmt(u.demo.used) + '</strong>', max: fmt(u.demo.credits) }) + '</span>' : '')
+                + '<span>' + fill(<?= tj('{n} crédits ce mois') ?>, { n: '<strong>' + fmt(u.month_credits) + '</strong>' }) + '</span>'
                 + '<span>' + fill(<?= tj('{n} au total') ?>, { n: '<strong>' + fmt(u.total_credits) + '</strong>' }) + '</span>'
                 + '<span>' + fill(<?= tj('Dernière activité : {date}') ?>, { date: '<strong>' + (u.last_activity || <?= tj('jamais') ?>) + '</strong>' }) + '</span>';
 
@@ -852,11 +1070,28 @@
             document.getElementById('euActive').disabled = !!u.is_self || !u.can_edit;
             document.getElementById('euActiveSelf').disabled = !u.is_self;
             document.getElementById('euQuota').value   = u.quota_user !== null ? u.quota_user : '';
-            document.getElementById('euQuotaHint').textContent = u.quota_user !== null
-                ? <?= tj('Quota individuel — prime sur les groupes.') ?>
-                : (u.quota_group !== null
-                    ? fill(<?= tj('Vide : hérite du plus généreux des groupes ({n} crédits/mois).') ?>, { n: fmt(u.quota_group * 1000) })
-                    : <?= tj('Vide et aucun quota de groupe : illimité.') ?>);
+            paintQuotaHint(u, document.getElementById('euQuota').value);
+
+            // Démo : enveloppe, alerte et conversion (compte de démo) ; passage
+            // en démo (autre compte, jamais un administrateur). Les champs
+            // d'une partie masquée sont désactivés : jamais postés.
+            const demoOn = !!u.demo;
+            const demoSection = document.getElementById('euDemoSection');
+            demoSection.hidden = !demoOn && !(u.demo_allowed && u.can_edit);
+            document.getElementById('euDemoOn').hidden = !demoOn;
+            document.getElementById('euDemoOff').hidden = demoOn;
+            document.getElementById('euDemoFormFlag').disabled = !demoOn || !u.can_edit;
+            document.getElementById('euDemoCredits').disabled = !demoOn || !u.can_edit;
+            document.getElementById('euDemoMuted').disabled = !demoOn || !u.can_edit;
+            document.getElementById('euDemoConvert').hidden = !u.can_edit;
+            if (demoOn) {
+                document.getElementById('euDemoCredits').value = u.demo.credits;
+                document.getElementById('euDemoMuted').checked = !!u.demo.muted;
+                document.getElementById('euDemoUsage').textContent = u.demo.exhausted
+                    ? fill(<?= tj('Démo épuisée : {n} crédits utilisés sur {max} depuis le {date}. MIA ne répond plus à ce compte.') ?>, { n: fmt(u.demo.used), max: fmt(u.demo.credits), date: u.demo.started })
+                    : fill(<?= tj('{n} crédits utilisés sur {max} depuis le {date} — {reste} restants.') ?>, { n: fmt(u.demo.used), max: fmt(u.demo.credits), date: u.demo.started, reste: fmt(u.demo.remaining) });
+                document.getElementById('euDemoUsage').classList.toggle('is-ended', !!u.demo.exhausted);
+            }
 
             // Groupes
             document.querySelectorAll('#euGroupList input[type="checkbox"]').forEach(cb => {
@@ -885,6 +1120,43 @@
             // prendre la main (s'il y a quelque chose à enregistrer).
             editForm.dataset.autosave = u.can_edit ? 'on' : 'off';
         });
+    });
+
+    // Une enveloppe qui change rallume l'alerte côté serveur : la case suit,
+    // sinon le prochain envoi de la fiche la remasquerait.
+    document.getElementById('euDemoCredits').addEventListener('input', () => {
+        document.getElementById('euDemoMuted').checked = false;
+    });
+
+    // Gestes de démo : explicites (confirmation), hors auto-save. Ce qui reste
+    // à enregistrer dans la fiche part d'abord, puis la page se recharge.
+    async function submitDemoAction(path, credits) {
+        const editForm = document.getElementById('editUserForm');
+        if (window.MiaAutosave) {
+            try { await window.MiaAutosave.settle(editForm); } catch (e) { /* l'envoi en échec se voit dans la fiche */ }
+            window.MiaAutosave.detach(editForm);
+        }
+        const f = document.getElementById('euDemoActionForm');
+        document.getElementById('euDemoActionCredits').value = credits !== undefined ? String(credits) : '';
+        f.action = '/admin/users/' + currentEditUser.id + path;
+        f.submit();
+    }
+    document.getElementById('euDemoConvert').addEventListener('click', () => {
+        if (!currentEditUser) return;
+        if (!confirm(fill(<?= tj('Convertir « {nom} » en compte normal ? Son historique est conservé ; son quota mensuel (individuel ou des groupes) s’applique dès maintenant.') ?>, { nom: currentEditUser.name }))) return;
+        submitDemoAction('/demo/convert');
+    });
+    document.getElementById('euDemoStart').addEventListener('click', () => {
+        if (!currentEditUser) return;
+        const input = document.getElementById('euDemoStartCredits');
+        const n = parseInt(input.value, 10);
+        if (!(n >= 1 && n <= <?= DemoAccount::MAX_CREDITS ?>)) {
+            input.reportValidity();
+            input.focus();
+            return;
+        }
+        if (!confirm(fill(<?= tj('Passer « {nom} » en compte de démo avec {n} crédits ? Le décompte part de maintenant, sans renouvellement mensuel.') ?>, { nom: currentEditUser.name, n: fmt(n) }))) return;
+        submitDemoAction('/demo', n);
     });
 
     // La checkbox « actif » décochée n'envoie rien : is_active lu côté serveur
@@ -939,6 +1211,11 @@
                         + (it.kb_shares_given > 0 ? ' (' + fill(plural(it.kb_shares_given,
                             <?= tj('et {n} partage accordé') ?>,
                             <?= tj('et {n} partages accordés') ?>), { n: it.kb_shares_given }) + ')' : ''));
+                }
+                if (it.private_kb_count > 0) {
+                    lignes.push('• ' + fill(plural(it.private_kb_count,
+                        <?= tj('{n} base « Uniquement pour moi » supprimée avec le compte') ?>,
+                        <?= tj('{n} bases « Uniquement pour moi » supprimées avec le compte') ?>), { n: it.private_kb_count }));
                 }
                 if (it.sync_owner_kbs.length > 0) {
                     lignes.push('⚠ ' + fill(plural(it.sync_owner_kbs.length,

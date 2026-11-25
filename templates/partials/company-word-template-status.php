@@ -125,5 +125,6 @@ $hex = static fn ($v, string $fallback): string => is_string($v) && preg_match('
                 <?php endif; ?>
             </div>
         </div>
+        <?php $pathsKind = 'docx'; require __DIR__ . '/company-template-paths.php'; ?>
     <?php endif; ?>
 </div>

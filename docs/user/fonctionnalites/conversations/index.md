@@ -9,6 +9,8 @@ Une **conversation** est un fil d'échanges entre vous et MIA. C'est le point de
 reste : c'est dans une conversation que vous choisissez un modèle ou un assistant, que vous joignez
 des fichiers, que vous allumez un connecteur ou un outil.
 
+![Une réponse de MIA qui se termine par la question « Quel ton pour l'invitation ? » et trois boutons numérotés : Formel, Cordial et Deux versions, chacun avec une courte précision. Dessous, le lien Autre réponse.](../../images/choix-en-boutons.png)
+
 ## À quoi ça sert
 
 Poser une question, faire rédiger, résumer, analyser un document, préparer un mail — puis affiner la
@@ -32,9 +34,10 @@ conversation.
 - **MIA peut vous proposer des choix en boutons** quand la suite dépend d'une décision de votre part :
   un clic envoie l'option comme votre réponse, et vous pouvez toujours écrire autre chose. Voir
   [Mener une conversation](mener-une-conversation.md).
-- **MIA livre aussi des fichiers.** Demandez un tableau Excel, un document Word, une présentation
-  PowerPoint ou un CSV : il arrive dans la réponse sous forme de carte, avec un aperçu et un bouton
-  **Télécharger**.
+- **MIA livre aussi des fichiers.** Demandez un tableau Excel, un document Word ou PDF, une
+  présentation PowerPoint ou un CSV : il arrive dans la réponse sous forme de carte, avec un aperçu et
+  un bouton **Télécharger**. Pour un PDF, un document Word ou une présentation, MIA propose d'abord
+  une **version rapide** ou une **version soignée**, mise en page par un modèle.
 - **Une génération lancée continue sur le serveur.** Vous pouvez changer de conversation, recharger
   la page ou fermer l'onglet : la réponse vous attend dans son fil.
 - **Ce qui est allumé dans une conversation y reste** jusqu'à ce que vous l'éteigniez : un outil de

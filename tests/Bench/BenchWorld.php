@@ -468,6 +468,21 @@ class BenchCalendar extends UserCalendarService
         throw new \RuntimeException('Évènement introuvable — utilise rechercher_agenda d\'abord.');
     }
 
+    public function fetchForUpdate(string $calendarId, string $eventId, bool $wholeSeries): array
+    {
+        foreach ($this->world->events() as $e) {
+            if ($e['id'] === trim($eventId)) {
+                return [[
+                    'id' => $e['id'], 'summary' => $e['titre'], 'location' => $e['lieu'], 'description' => $e['description'],
+                    'start' => ['dateTime' => $e['debut']->format(DATE_RFC3339)],
+                    'end' => ['dateTime' => $e['fin']->format(DATE_RFC3339)],
+                    'organizer' => ['email' => BenchWorld::ACCOUNT, 'self' => true], 'htmlLink' => '',
+                ], ''];
+            }
+        }
+        throw new \RuntimeException('Évènement introuvable — utilise rechercher_agenda d\'abord.');
+    }
+
     public function busyIntervals(\DateTimeImmutable $from, \DateTimeImmutable $to, array $participants = []): array
     {
         $busy = [];

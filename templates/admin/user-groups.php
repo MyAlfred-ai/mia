@@ -46,13 +46,14 @@ foreach ($groups as $g) {
 <body class="admin-page">
 <?php $page = 'user-groups'; require ROOT . '/templates/partials/admin-nav.php'; ?>
 <div class="admin-content">
-    <div class="ug-header">
-        <div>
+    <?php require ROOT . '/templates/partials/admin-topbar.php'; ?>
+    <div class="ug-header page-head">
+        <div class="page-head-text">
             <h1><?= te('Groupes') ?></h1>
-            <p class="ug-header-sub"><?= te("Membres, droits d'accès (assistants, outils, LLMs) et quotas par groupe.") ?></p>
+            <p class="ug-header-sub page-head-sub"><?= te("Membres, droits d'accès (assistants, outils, LLMs) et quotas par groupe.") ?></p>
         </div>
         <?php if (Session::can('groups.create')): ?>
-        <button type="button" class="btn-primary ug-create-btn" id="ugCreateBtn">+ <?= te('Nouveau groupe') ?></button>
+        <button type="button" class="btn-primary ug-create-btn page-head-primary" id="ugCreateBtn">+ <?= te('Nouveau groupe') ?></button>
         <?php endif; ?>
     </div>
 
@@ -68,7 +69,7 @@ foreach ($groups as $g) {
             <div class="admin-collapse-content" style="font-size:12px;color:var(--text-muted);display:flex;flex-direction:column;gap:6px">
                 <div><?= strtr(teb("{b}Groupe « Par défaut » :{/b} il contient automatiquement {i}tous{/i} les utilisateurs (y compris chaque nouveau compte) et ne peut pas être supprimé. Ses droits constituent le socle commun de la plateforme."), ['{i}' => '<em>', '{/i}' => '</em>']) ?></div>
                 <div><?= strtr(teb("{b}Les groupes s'additionnent :{/b} les droits (LLMs, assistants, outils) de chaque groupe actif s'ajoutent. Un utilisateur dans plusieurs groupes voit l'{i}union{/i} de tout ce que ces groupes autorisent."), ['{i}' => '<em>', '{/i}' => '</em>']) ?></div>
-                <div><?= strtr(teb("{b}Quota mensuel :{/b} on retient le quota {i}le plus généreux{/i} parmi ses groupes actifs qui en définissent un. Un groupe sans quota est {i}neutre{/i} : il n'ouvre rien. Un quota défini sur l'utilisateur lui-même prend toujours le dessus."), ['{i}' => '<em>', '{/i}' => '</em>']) ?></div>
+                <div><?= strtr(teb("{b}Quota mensuel :{/b} on retient le quota {i}le plus généreux{/i} parmi ses groupes actifs qui en définissent un. Un groupe sans quota est {i}neutre{/i} : il n'ouvre rien. Un quota défini sur l'utilisateur lui-même compte comme un groupe de plus : c'est toujours le plus généreux qui s'applique, jamais le plus restrictif."), ['{i}' => '<em>', '{/i}' => '</em>']) ?></div>
                 <div><?= teb('{b}Groupes inactifs :{/b} ignorés (ni droits, ni quota).') ?></div>
                 <div><?= strtr(teb("{b}Liste LLM vide :{/b} un groupe sans aucun LLM coché est neutre. Un utilisateur dont seul le groupe par défaut est actif — et sans liste — n'a accès qu'au {i}LLM par défaut{/i} de l'application."), ['{i}' => '<em>', '{/i}' => '</em>']) ?></div>
             </div>
@@ -89,6 +90,7 @@ foreach ($groups as $g) {
                 <div class="ug-card-name">
                     <?php if ($isDefault): ?><span class="ug-star" aria-hidden="true">★</span><?php endif; ?>
                     <?= htmlspecialchars($groupLabel($group)) ?>
+                    <?= AdminAttention::itemDot('group:' . $gid, false) ?>
                 </div>
                 <div class="ug-card-badges">
                     <?php if ($isDefault): ?><span class="badge badge-default-group"><?= te('Par défaut') ?></span><?php endif; ?>
@@ -367,12 +369,18 @@ foreach ($groups as $g) {
         filterMembers();
     }
 
+    // Sans casse ni accents : « helene » trouve « Hélène ».
+    const fold = (s) => String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
+
     function filterMembers() {
-        const q = memberSearch.value.trim().toLowerCase();
+        const q = fold(memberSearch.value);
         let visible = 0;
         form.querySelectorAll('.ug-member-item').forEach((item) => {
-            const match = !q || (item.dataset.search || '').includes(q);
-            item.style.display = match ? '' : 'none';
+            const match = !q || fold(item.dataset.search).includes(q);
+            // Attribut `hidden`, jamais `style.display` : `.ug-check-item`
+            // impose `display: flex !important`, qui l'emporte sur un style
+            // en ligne — la recherche ne masquait plus rien.
+            item.hidden = !match;
             if (match) visible++;
         });
         memberNoResult.style.display = visible === 0 ? '' : 'none';

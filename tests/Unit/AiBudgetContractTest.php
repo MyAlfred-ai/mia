@@ -142,7 +142,8 @@ final class AiBudgetContractTest extends TestCase
         $js = self::lire('public/assets/js/chat.js');
         $this->assertStringContainsString('function showQuotaModal(reason)', $js);
         $this->assertStringContainsString("status.reason === 'budget'", $js);
-        $this->assertStringContainsString('showQuotaModal(payload.quota_status ? payload.quota_status.reason : null)', $js);
+        // La raison du serveur est relayée ; une démo épuisée (`quota` + `demo`) a son propre bloc.
+        $this->assertStringContainsString("showQuotaModal(status && status.demo === true && reason === 'quota' ? 'demo' : reason)", $js);
 
         $trigger = self::lire('templates/partials/user-account-trigger.php');
         $this->assertStringContainsString('CreditQuota::REASON_BUDGET', $trigger);

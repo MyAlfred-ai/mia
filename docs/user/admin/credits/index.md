@@ -38,8 +38,8 @@ opérations sont comptées et attribuées, mais n'entament aucun quota.
 maintenance comprise. Atteint, il suspend les nouvelles demandes jusqu'au 1er (ou seulement le
 signale, au choix). C'est le filet de sécurité ; les quotas font le partage.
 
-**Le quota.** Par personne et par mois calendaire, en **milliers de crédits**. Le quota individuel
-prime ; sinon, c'est le plus élevé des quotas définis parmi ses groupes actifs ; sinon, illimité. Un
+**Le quota.** Par personne et par mois calendaire, en **milliers de crédits**. C'est le plus élevé
+des quotas définis — son quota individuel et ceux de ses groupes actifs ; sinon, illimité. Un
 quota s'applique **à chaque membre** d'un groupe, ce n'est pas une enveloppe partagée.
 
 **La valorisation.** Crédits × valeur **actuelle** du crédit. Changer la valeur du crédit réévalue
@@ -66,7 +66,7 @@ crédits** fait ce calcul pour vous.
 de quota par compte qui garantit de ne jamais l'atteindre, et suspend tout au plafond, maintenance et
 comptes sans quota compris. Voir [Fixer un budget IA mensuel](fixer-un-budget.md).
 
-**Des quotas par équipe.** ★ Par défaut à 5, *Direction* à 50, un stagiaire à 2 en individuel —
+**Des quotas par équipe.** ★ Par défaut à 5, *Direction* à 50, une personne à 80 en individuel —
 voir [Fixer les quotas](fixer-les-quotas.md).
 
 **Un tarif oublié.** Un outil vidéo ajouté sans tarif : chaque vidéo coûte le minimum, et la page

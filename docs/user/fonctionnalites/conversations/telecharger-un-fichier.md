@@ -1,6 +1,6 @@
 ---
 title: Télécharger un fichier créé par MIA
-description: Obtenir un tableau Excel, un document Word, une présentation PowerPoint, un CSV ou un texte prêt à enregistrer, directement dans la conversation.
+description: Obtenir un tableau Excel, un document Word ou PDF, une présentation PowerPoint, un CSV ou un texte prêt à enregistrer, directement dans la conversation — en version rapide ou soignée.
 sidebar:
   order: 5
 ---
@@ -21,6 +21,23 @@ sidebar:
 Pour modifier le fichier, demandez-le dans la conversation — *« Ajoute une colonne TVA »* :
 MIA renvoie le fichier complet, dans une nouvelle carte.
 
+**Version rapide ou version soignée ?** Quand vous demandez un **PDF**, un document **Word** ou une
+présentation **PowerPoint**, MIA vous propose d'abord, en deux boutons, de choisir : la **version
+rapide**, prête tout de suite, ou la **version soignée**, mise en page par un modèle — son nom, le
+temps et le coût estimé sont affichés. Choisissez **Version soignée** : MIA rédige le contenu, puis
+le confie aussitôt à ce modèle, et le fichier mis en page arrive dans la conversation une à trois
+minutes plus tard. Le document n'est ainsi fabriqué qu'une fois. Vous pouvez aussi le dire d'emblée :
+*« Fais-moi un rapport PDF en version soignée »*. La question n'est pas reposée quand vous retouchez un
+fichier déjà livré : sa carte garde son bouton **Version soignée**.
+
+**Avec ou sans le modèle et le logo de l'entreprise.** Si votre organisation a déposé son modèle
+PowerPoint, son modèle Word ou son logo, la carte d'une présentation, d'un document Word ou d'un PDF
+porte une ligne **Embarquer :** avec une case par élément — *Modèle PowerPoint de …*, *Modèle Word
+de …*, *Logo de …* —, cochées d'office. Décochez ce que vous ne voulez pas **avant** de télécharger
+ou de lancer la version soignée : le fichier suit alors la mise en page de MIA, sans le modèle ou sans
+le logo. Les mêmes cases apparaissent sous la question « Version rapide / Version soignée » posée
+avant l'écriture. Votre choix est retenu pour les fichiers suivants, sur cet appareil.
+
 ## Les formats
 
 | Vous demandez | Vous obtenez | Autres formats proposés |
@@ -30,6 +47,12 @@ MIA renvoie le fichier complet, dans une nouvelle carte.
 | Une présentation | **PowerPoint** (.pptx) | PowerPoint, PDF (une page par slide), Word, Markdown |
 | Un texte simple | Fichier **texte** (.txt) ou **Markdown** (.md) | — |
 | Des données ou du code | Le fichier du format demandé (données, configuration, script…) | — |
+
+Un document **PDF** ou **Word** est mis en page sur des pages **A4** : titres hiérarchisés, marges,
+numéro de page. Dans un tableau, chaque colonne prend la largeur de son contenu et le texte passe à
+la ligne dans sa cellule — rien ne sort de la page. Au-delà de six colonnes, la page passe en
+**paysage** et le tableau en caractères plus petits ; pour un tableau plus large encore, demandez un
+classeur Excel.
 
 Dans un classeur, les nombres, montants, pourcentages et dates sont de **vraies valeurs** : les
 sommes et les tris fonctionnent. Les codes comme un code postal « 01000 » gardent leur zéro, et les
@@ -81,8 +104,9 @@ voir [Créer une présentation](../outils/creer-une-presentation.md).
 
 ## La version soignée, par un modèle ou par Gamma
 
-La carte d'une **présentation** ou d'un **classeur** porte le bouton **Version soignée**. Le fichier
-n'est plus mis en page automatiquement par MIA : un **modèle** le compose lui-même — ou, pour une
+La carte d'une **présentation**, d'un **classeur**, d'un document **PDF** ou d'un document **Word**
+porte le bouton **Version soignée**. Le fichier n'est plus mis en page automatiquement par MIA : un
+**modèle** le compose lui-même — ou, pour une
 présentation, **Gamma**, si votre organisation l'utilise. Quand les deux sont possibles, un petit
 menu propose **Par …** (le modèle, avec le temps et le coût estimés) et **Par Gamma** ; votre dernier
 choix y est signalé. La version rapide de MIA, immédiate et sans crédit, reste au bouton
@@ -105,21 +129,41 @@ téléphone. Elle dit tout avant que rien ne parte :
   un : les **fichiers joints à la conversation** avant la carte (photos, PDF, classeurs, documents,
   les huit plus récents : une photo peut finir sur sa slide, les chiffres d'un classeur nourrir un
   graphique) et, pour une présentation, le **modèle PowerPoint de l'entreprise** — ses slides
-  d'exemple lui montrent le style maison, sans se retrouver dans le fichier rendu — avec le **logo**.
+  d'exemple lui montrent le style maison, sans se retrouver dans le fichier rendu — avec le **logo** ;
+  pour un document Word, le **modèle Word de l'entreprise** (ses styles, ses en-têtes et pieds de
+  page) ; pour un PDF, le **logo** et la mention de pied de page. Le modèle et le logo ont chacun leur
+  case, cochée selon votre choix sur la carte. Le modèle part **en premier**, puis vos fichiers et
+  votre demande : le modèle IA construit le fichier dans le modèle de l'entreprise.
   Un fichier joint plus tôt dans la conversation est signalé, et décoché d'office. Les fichiers
   envoyés sont effacés chez l'éditeur une fois le fichier reçu.
 - **Une précision pour la mise en page ?** (facultatif) : *« style sobre, un chiffre clé par
   slide »*.
 - **Le coût estimé**, en crédits : la moyenne de vos dernières réalisations du même genre avec ce
-  modèle, sinon une estimation d'après son tarif.
+  modèle, sinon celle des réalisations de votre organisation, sinon une estimation d'après son tarif.
+  Avec un modèle Claude, la fenêtre indique aussi un **plafond** (« arrêt au-delà de … crédits ») :
+  une mise en page qui le dépasse n'est pas poursuivie. Si un fichier est déjà prêt, il vous est
+  livré, avec un mot pour vérifier le rendu ; sinon, la carte le dit et rien de plus n'est consommé.
 
-**Lancer la mise en page** (**Lancer la réalisation** pour un classeur) : comptez **1 à 3 minutes** ;
-un message ⏳ l'annonce, puis un **lien** vers le fichier arrive dans la conversation ; le fichier est
-**gardé 30 jours**. La réalisation est **comptée dans vos crédits**, comme une réponse.
+**Lancer la mise en page** (**Lancer la réalisation** pour un classeur) : comptez **1 à 3 minutes**.
+Une **carte de réalisation** apparaît dans la conversation : le modèle au travail, le temps écoulé,
+l'étape en cours et une barre d'avancement (une estimation : le modèle ne dit pas où il en est).
+Vous pouvez continuer à discuter, changer de conversation ou recharger la page : la carte reprend où
+elle en était. **Arrêter** interrompt la réalisation (ce que le modèle a déjà consommé reste compté).
+Quand le fichier est prêt, la carte devient **Présentation prête** (ou **Classeur prêt**), avec le
+temps qu'il a fallu et un bouton **Télécharger** ; le fichier est **gardé 30 jours** — pendant ce
+temps, vous le retrouvez aussi dans **Mes créations** (tuile **Créations**), parmi vos **versions
+soignées**. La réalisation
+est **comptée dans vos crédits**, comme une réponse. Si elle n'aboutit pas, la carte l'indique et la
+raison s'affiche juste en dessous.
 
 Un classeur réalisé par le modèle garde vos lignes et vos valeurs, ajoute des **formules** là où
 elles servent (totaux, écarts), met en forme et fige l'en-tête, et ajoute un graphique Excel quand
 votre demande en suggère un.
+
+Un document PDF ou Word réalisé par le modèle garde votre texte, son ordre et sa langue. Le modèle
+soigne la mise en page — titre ou page de titre, hiérarchie des titres, tableaux dimensionnés avec
+leur en-tête répété sur chaque page, couleur de votre organisation — et vérifie le rendu avant de
+le rendre. Un document Word reste **modifiable** : vrais styles de titre, listes et tableaux Word.
 
 ### Par Gamma
 
@@ -127,13 +171,14 @@ Après confirmation, la présentation part chez **gamma.app**, qui la met en pag
 illustrations, une carte par slide — **sans réécrire votre texte** ; les notes du présentateur n'y
 vont pas. Comptez **1 à 3 minutes** : un message ⏳ l'annonce, puis le **lien** vers la présentation
 et son **export** (un fichier PowerPoint, ou un PDF selon le réglage de votre organisation) arrivent
-dans la conversation, même si vous êtes passé à une autre. Chaque création consomme des **crédits
-Gamma** de l'organisation, pas vos crédits MIA.
+dans la conversation, même si vous êtes passé à une autre. La présentation rejoint aussi **Mes
+créations**, parmi vos **versions soignées**. Chaque création consomme des **crédits Gamma** de
+l'organisation, pas vos crédits MIA.
 
 ## Ce que MIA ne crée pas
 
-Un ancien classeur .xls, un document .doc ou une présentation .ppt, un fichier Keynote, une archive
-.zip, une image : la carte l'explique et propose le format le plus proche — par exemple
+Un ancien classeur .xls, un document .doc ou une présentation .ppt (MIA lit un .doc ou un .xls que
+vous joignez, mais n'en crée pas), un fichier Keynote, une archive .zip, une image : la carte l'explique et propose le format le plus proche — par exemple
 **Télécharger en PowerPoint (.pptx)** pour une présentation demandée en Keynote. Une image se crée
 avec l'outil **Image** du menu **+**. Voir [Les outils](../outils/index.md).
 
@@ -170,7 +215,8 @@ enregistrement dans Fichiers, envoi par mail ou messagerie.
 | **Version soignée** ne propose pas **Par Gamma** | Votre organisation n'utilise pas Gamma, ou ne vous l'a pas ouvert : voyez avec votre administrateur. |
 | **Version soignée** est grisé | Aucun modèle qui vous est ouvert ne sait fabriquer ce fichier lui-même : téléchargez la version de MIA, ou voyez avec votre administrateur. |
 | « Choisissez le modèle qui réalisera le fichier. » | Seuls des modèles haut de gamme savent le faire pour vous : cochez celui que vous voulez sous **Réalisée par**. |
-| « Le modèle n'a pas rendu de fichier PowerPoint… » ou « …de classeur Excel… » | Relancez **Version soignée**, ou téléchargez la version de MIA. Les crédits déjà consommés par la tentative sont comptés. |
+| « Le modèle n'a pas rendu de fichier PowerPoint… », « …de classeur Excel… » ou « …de document PDF… » | Relancez **Version soignée**, ou téléchargez la version de MIA. Les crédits déjà consommés par la tentative sont comptés. |
+| Vous avez choisi **Version soignée**, mais aucune carte de réalisation n'est apparue | La réponse n'a pas livré de fichier, ou vos crédits sont épuisés (un message le dit) : demandez le fichier à nouveau, ou utilisez le bouton **Version soignée** de sa carte. |
 | Une photo ou un fichier joint n'a pas servi | Vérifiez qu'il était coché dans la fenêtre. Seuls les fichiers joints **avant** la carte, dans la **même** conversation, partent au modèle : joignez-le, demandez à nouveau la présentation, puis **Version soignée** sur la nouvelle carte. |
 | « Ce fichier n'existe plus… » | Le fichier réalisé par le modèle est gardé 30 jours : relancez la réalisation depuis sa carte. |
 | « Cette présentation compte … slides : l'administrateur a fixé à … cartes le maximum… » | Demandez à MIA une version plus courte, ou à l'administrateur de relever ce plafond. |

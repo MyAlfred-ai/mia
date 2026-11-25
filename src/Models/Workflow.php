@@ -219,16 +219,90 @@ final class Workflow
         // la première vérification pose la ligne de base.
         $watch = $wf['is_active'] && WorkflowTriggers::watches($def) ? $now : null;
         $version = $wf['published_version'] + 1;
-        Database::getInstance()->prepare(
-            'UPDATE workflows SET published_json = ?, published_version = ?, published_at = ?, draft_changed = 0,
-                    schedule_next_at = ?, watch_next_at = ?, updated_at = NOW()
-             WHERE id = ? AND user_id = ?'
-        )->execute([
-            self::encode($def), $version, ScheduledTask::sqlUtc($now),
-            $next !== null ? ScheduledTask::sqlUtc($next) : null,
-            $watch !== null ? ScheduledTask::sqlUtc($watch) : null, $id, $userId,
-        ]);
+        $db = Database::getInstance();
+        $own = !$db->inTransaction();
+        if ($own) {
+            $db->beginTransaction();
+        }
+        try {
+            $db->prepare(
+                'UPDATE workflows SET published_json = ?, published_version = ?, published_at = ?, draft_changed = 0,
+                        schedule_next_at = ?, watch_next_at = ?, updated_at = NOW()
+                 WHERE id = ? AND user_id = ?'
+            )->execute([
+                self::encode($def), $version, ScheduledTask::sqlUtc($now),
+                $next !== null ? ScheduledTask::sqlUtc($next) : null,
+                $watch !== null ? ScheduledTask::sqlUtc($watch) : null, $id, $userId,
+            ]);
+            // L'historique des versions : chaque version publiée y reste.
+            $db->prepare(
+                'INSERT INTO workflow_versions (workflow_id, version, name, definition_json, published_at, published_by, recovered)
+                 VALUES (?, ?, ?, ?, ?, ?, 0)
+                 ON DUPLICATE KEY UPDATE name = VALUES(name), definition_json = VALUES(definition_json),
+                    published_at = VALUES(published_at), published_by = VALUES(published_by), recovered = 0'
+            )->execute([$id, $version, self::cleanName((string)$wf['name']), self::encode($def), ScheduledTask::sqlUtc($now), $userId]);
+            if ($own) {
+                $db->commit();
+            }
+        } catch (\Throwable $e) {
+            if ($own && $db->inTransaction()) {
+                $db->rollBack();
+            }
+            throw $e;
+        }
         return $version;
+    }
+
+    /**
+     * Les versions publiées d'un workflow, de la plus récente à la plus
+     * ancienne — sans leur définition (la liste reste légère).
+     *
+     * @return list<array{version: int, name: string, published_at: ?string, recovered: bool, bricks: int}>
+     */
+    public static function versions(int $id, int $userId): array
+    {
+        if (self::findForUser($id, $userId) === null) {
+            return [];
+        }
+        $stmt = Database::getInstance()->prepare(
+            'SELECT version, name, published_at, recovered, CHAR_LENGTH(definition_json) AS size, definition_json
+             FROM workflow_versions WHERE workflow_id = ? ORDER BY version DESC LIMIT 100'
+        );
+        $stmt->execute([$id]);
+        $out = [];
+        foreach ($stmt->fetchAll() as $r) {
+            $def = json_decode((string)$r['definition_json'], true);
+            $out[] = [
+                'version'      => (int)$r['version'],
+                'name'         => (string)$r['name'],
+                'published_at' => $r['published_at'] !== null ? (string)$r['published_at'] : null,
+                'recovered'    => (bool)$r['recovered'],
+                'bricks'       => is_array($def) ? count(WorkflowSpec::flatNodes(WorkflowSpec::normalize($def))) : 0,
+            ];
+        }
+        return $out;
+    }
+
+    /** Une version publiée (sa définition normalisée), ou null. */
+    public static function version(int $id, int $userId, int $version): ?array
+    {
+        if (self::findForUser($id, $userId) === null) {
+            return null;
+        }
+        $stmt = Database::getInstance()->prepare('SELECT version, name, published_at, recovered, definition_json FROM workflow_versions WHERE workflow_id = ? AND version = ?');
+        $stmt->execute([$id, $version]);
+        $r = $stmt->fetch();
+        if (!$r) {
+            return null;
+        }
+        $def = json_decode((string)$r['definition_json'], true);
+        return [
+            'version'      => (int)$r['version'],
+            'name'         => (string)$r['name'],
+            'published_at' => $r['published_at'] !== null ? (string)$r['published_at'] : null,
+            'recovered'    => (bool)$r['recovered'],
+            'definition'   => WorkflowSpec::normalize(is_array($def) ? $def : []),
+        ];
     }
 
     public static function setActive(int $id, int $userId, bool $active, \DateTimeImmutable $now): bool
@@ -335,6 +409,15 @@ final class Workflow
     {
         Database::getInstance()->prepare('UPDATE workflows SET watch_next_at = ? WHERE id = ?')
             ->execute([$next !== null ? ScheduledTask::sqlUtc($next) : null, $id]);
+    }
+
+    /** Avance la prochaine vérification à `$at` (jamais ne la recule). */
+    public static function bringWatchForward(int $id, \DateTimeImmutable $at): void
+    {
+        $t = ScheduledTask::sqlUtc($at);
+        Database::getInstance()->prepare(
+            'UPDATE workflows SET watch_next_at = ? WHERE id = ? AND is_active = 1 AND watch_next_at IS NOT NULL AND watch_next_at > ?'
+        )->execute([$t, $id, $t]);
     }
 
     /** État d'une surveillance : sig, seen, baseline_at, checked_at, error, launched. */

@@ -9,10 +9,15 @@
  * $isAdminManager, $currentUser, $profileDocs (édition seulement, format
  * payload), $boundToolIds, $boundKbIds, $diagram, $success, $error.
  *
- * À droite, le SCHÉMA de l'assistant (modèle, prompt, bases, documents,
- * outils) — celui des tâches programmées, sans déclencheur —, redessiné à
- * chaque geste par le script de la page avec diagram.js + assistant-diagram.js.
- * Données : $diagram (AssistantDiagram::catalog, partage, liaisons fixes).
+ * Même grammaire que la fiche d'une base (kb-pages.css, en violet) : une
+ * barre du haut qui reste en vue (retour, nom qui suit le champ, état,
+ * « Créer l'assistant » ou enregistrement automatique et « Terminé »), un
+ * menu des sections à gauche, puis cinq cartes — Identité, Consigne, Modèle,
+ * Capacités, Connaissances — et la « Vue d'ensemble » : le SCHÉMA de
+ * l'assistant, celui des tâches programmées sans déclencheur, redessiné à
+ * chaque geste (diagram.js + assistant-diagram.js ; données $diagram :
+ * AssistantDiagram::catalog, partage, liaisons fixes). Mise en page de la
+ * fiche (titre, menu, « … ») : assistant-fiche.js.
  * Chaque section et chaque champ réglable porte un id (mpSection*,
  * mpPromptField, mpLlmField, mpTempField, mpKbsField…) : c'est par eux qu'un
  * clic sur un élément du schéma mène au réglage correspondant.
@@ -42,92 +47,142 @@ $pfReadOnly = !$isCreate && empty($canEditProfile);
 $boundToolIds = $boundToolIds ?? [];
 $boundKbIds   = $boundKbIds ?? [];
 $profileDocs  = $profileDocs ?? [];
-// Retour à la liste : sur l'assistant et sa composition.
-$backUrl    = $isCreate ? '/admin/profiles' : '/admin/profiles#assistant-' . (int)$profile['id'];
+// Retour : la liste à la création, la page de l'assistant ensuite (« Terminé »).
+$backUrl    = $isCreate ? '/admin/profiles' : '/admin/profiles/' . (int)$profile['id'];
+// Barre du haut : avatar (ou initiale) et qui le voit.
+$pfHeadAvatar = $pfAvatarGenerated !== '' ? $pfAvatarGenerated : AssistantDiagram::avatarUrl($isCreate ? (string)($prefill['avatar'] ?? '') : (string)($profile['avatar'] ?? ''));
+$pfVisLabel   = AssistantPages::visibilityText($isCreate ? AssistantPages::VIS_PERSONAL : AssistantPages::visibility($profile))['label'];
 $diagramJsVersion          = @filemtime(ROOT . '/public/assets/js/diagram.js') ?: 1;
 $assistantDiagramJsVersion = @filemtime(ROOT . '/public/assets/js/assistant-diagram.js') ?: 1;
+// Documents de référence : les formats des bases, extensions de texte
+// comprises — la même source que la détection côté serveur.
+$acceptDocs = FileExtractor::acceptAttribute(array_keys(KnowledgeBaseDocument::ALLOWED_MIMES));
 ?>
 <!DOCTYPE html>
 <html lang="<?= htmlspecialchars(I18n::locale()) ?>" <?= DisplayPreferences::htmlAttributes() ?>>
 <head>
 <?php require ROOT . '/templates/partials/head-meta.php'; ?><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover"><link rel="icon" href="<?= htmlspecialchars(Settings::get('logo_url', '/assets/img/logo.png')) ?>"><meta name="csrf-token" content="<?= htmlspecialchars(Csrf::token()) ?>"><title><?= htmlspecialchars(Settings::get('app_name', 'MIA')) ?> — <?= htmlspecialchars($pfTitle) ?></title><link rel="stylesheet" href="/assets/css/main.css?v=<?= (int)(@filemtime(ROOT . '/public/assets/css/main.css') ?: 1) ?>">
     <?php require ROOT . "/templates/partials/theme-vars.php"; ?>
+    <link rel="stylesheet" href="/assets/css/kb-pages.css?v=<?= (int)(@filemtime(ROOT . '/public/assets/css/kb-pages.css') ?: 1) ?>">
+    <link rel="stylesheet" href="/assets/css/assistants.css?v=<?= (int)(@filemtime(ROOT . '/public/assets/css/assistants.css') ?: 1) ?>">
 </head>
 <body class="admin-page">
 <?php require ROOT . '/templates/partials/admin-nav.php'; ?>
-<div class="admin-content pf-content">
+<div class="admin-content pf-content kbx-page">
+<div class="kbx kbx-fiche is-asst" id="pfFiche">
 
-    <div class="pf-page-head">
-        <div class="pf-page-head-text">
-            <a href="<?= htmlspecialchars($backUrl) ?>" class="pf-back-link">← <?= te('Tous les assistants') ?></a>
-            <h1 style="margin:0"><?= htmlspecialchars($pfTitle) ?></h1>
-        </div>
-        <div class="mp-active-toggle" title="<?= te('Actif = visible et utilisable dans le chat. Inactif = masqué pour tous les utilisateurs.') ?>">
-            <label class="ios-switch">
-                <input type="checkbox" name="is_active" id="mpIsActive" value="1" form="editProfileForm" <?= $pfActive ? 'checked' : '' ?><?= $pfReadOnly ? ' disabled' : '' ?>>
-                <span class="ios-switch-slider"></span>
-            </label>
-            <span class="mp-active-text<?= $pfActive ? '' : ' is-off' ?>" id="mpActiveText"><?= $pfActive ? te('Actif') : te('Inactif') ?></span>
+    <?php /* Barre du haut, qui reste en vue : retour, nom (il suit le champ),
+             état, et l'issue de la fiche — « Créer l'assistant » à la
+             création ; en modification, l'enregistrement automatique,
+             la relecture d'un prompt posé par script, « … » et « Terminé ». */ ?>
+    <div class="kbx-top">
+        <div class="kbx-top-in">
+            <div class="kbx-crumb">
+                <a href="<?= htmlspecialchars($backUrl) ?>" title="<?= $isCreate ? te('Tous les assistants') : te('Retour à l’assistant') ?>" aria-label="<?= $isCreate ? te('Tous les assistants') : te('Retour à l’assistant') ?>"><?= KbPages::icon('back', '') ?></a>
+                <span class="asx-ava is-head<?= $pfHeadAvatar === '' ? ' is-initial' : '' ?>" id="pfHeadAva" style="--asx-c: <?= htmlspecialchars(AssistantPages::color(['color' => $pfColor])) ?>" aria-hidden="true">
+                    <img src="<?= htmlspecialchars($pfHeadAvatar) ?>" alt=""<?= $pfHeadAvatar === '' ? ' hidden' : '' ?>><span<?= $pfHeadAvatar !== '' ? ' hidden' : '' ?>><?= htmlspecialchars(AssistantPages::initial($pfName)) ?></span>
+                </span>
+                <div>
+                    <small><?= $isCreate ? te('Nouvel assistant') : te('Assistant') ?></small>
+                    <b id="pfFicheTitle" class="<?= $pfName === '' ? 'is-missing' : '' ?>" data-empty="<?= te('Sans nom') ?>"><?= htmlspecialchars($pfName !== '' ? $pfName : t('Sans nom')) ?></b>
+                    <?php if (!$isCreate): ?>
+                    <small id="pfHeadMeta"><span id="pfHeadState" data-on="<?= te('Actif') ?>" data-off="<?= te('Inactif') ?>"><?= $pfActive ? te('Actif') : te('Inactif') ?></span> · <?= htmlspecialchars($pfVisLabel) ?></small>
+                    <?php endif; ?>
+                </div>
+            </div>
+            <div class="kbx-top-tools">
+                <?php if ($isCreate): ?>
+                    <span class="kbx-top-hint"><?= te('L’assistant existe dès que vous cliquez sur « Créer l’assistant ».') ?></span>
+                    <a href="/admin/profiles" class="kbx-btn is-sm"><?= te('Annuler') ?></a>
+                    <button type="submit" class="kbx-btn is-sm is-primary" id="mpSaveBtn" form="editProfileForm"><?= te('Créer l’assistant') ?></button>
+                <?php else: ?>
+                    <?php /* Mode relecture : un modèle collé ou un prompt généré
+                             n'est PAS enregistré tout seul — l'assistant est peut-
+                             être en service, le texte se relit avant d'être
+                             appliqué. L'auto-save du formulaire est suspendu
+                             jusqu'à Enregistrer ou Annuler (cf. JS). */ ?>
+                    <span class="pf-review-bar" id="mpReviewBar" hidden>
+                        <span class="pf-review-note"><?= te('Prompt modifié, pas encore enregistré') ?></span>
+                        <button type="button" class="btn-secondary" id="mpReviewCancel" title="<?= te('Revenir au prompt enregistré') ?>"><?= te('Annuler') ?></button>
+                        <button type="button" class="btn-primary" id="mpReviewSave"><?= te('Enregistrer') ?></button>
+                    </span>
+                    <?php if (!$pfReadOnly): ?>
+                    <span class="kbx-saved" id="mpAutosaveHint"><?php require ROOT . '/templates/partials/autosave-hint.php'; ?></span>
+                    <?php endif; ?>
+                    <?php if (!empty($canDeleteProfile)): ?>
+                        <?php /* « … » : la suppression, loin des réglages courants. */ ?>
+                        <div class="kbf-more">
+                            <button type="button" class="kbf-more-btn" id="pfMoreBtn" aria-haspopup="menu" aria-expanded="false" aria-controls="pfMoreMenu"
+                                    title="<?= te('Plus d\'actions') ?>" aria-label="<?= te('Plus d\'actions') ?>">
+                                <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>
+                            </button>
+                            <div class="kbf-more-menu" id="pfMoreMenu" role="menu" hidden>
+                                <button type="button" role="menuitem" class="kbf-more-item is-danger" id="mpDeleteBtn"><?= te('Supprimer cet assistant') ?></button>
+                            </div>
+                        </div>
+                    <?php endif; ?>
+                    <a href="<?= htmlspecialchars($backUrl) ?>" class="kbx-btn is-sm is-primary"><?= te('Terminé') ?></a>
+                <?php endif; ?>
+            </div>
         </div>
     </div>
 
-    <?php if (!empty($success)): ?><div class="alert alert-success" style="margin-bottom:16px"><?= htmlspecialchars($success) ?></div><?php endif; ?>
-    <?php if (!empty($error)): ?><div class="alert alert-error" style="margin-bottom:16px"><?= htmlspecialchars($error) ?></div><?php endif; ?>
+    <div class="kbx-layout">
+        <nav class="kbx-nav" aria-label="<?= te('Sections de la fiche') ?>">
+            <a href="#identite" class="is-on"><?= KbPages::icon('id', '') ?><span class="kbx-nl"><?= te('Identité') ?></span></a>
+            <a href="#consigne"><?= KbPages::icon('pencil', '') ?><span class="kbx-nl"><?= te('Consigne') ?></span></a>
+            <a href="#modele"><?= KbPages::icon('robot', '') ?><span class="kbx-nl"><?= te('Modèle') ?></span></a>
+            <a href="#capacites"><?= KbPages::icon('cog', '') ?><span class="kbx-nl"><?= te('Capacités') ?></span></a>
+            <a href="#connaissances"><?= KbPages::icon('book', '') ?><span class="kbx-nl"><?= te('Connaissances') ?></span></a>
+            <span class="kbx-nav-sep" aria-hidden="true"></span>
+            <a href="#ensemble"><?= KbPages::icon('map', '') ?><span class="kbx-nl"><?= te('Vue d\'ensemble') ?></span></a>
+        </nav>
+
+        <div class="kbx-sections">
+    <?php if (!empty($success)): ?><div class="alert alert-success"><?= htmlspecialchars($success) ?></div><?php endif; ?>
+    <?php if (!empty($error)): ?><div class="alert alert-error"><?= htmlspecialchars($error) ?></div><?php endif; ?>
     <?php if ($pfReadOnly): ?>
     <div class="admin-readonly-banner" role="status"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg><span><?= teb('{b}Lecture seule.{/b} Votre rôle vous permet de consulter cet assistant, pas de le modifier.') ?></span></div>
     <?php endif; ?>
     <?php if ($prefill !== null): ?>
-    <div class="alert pf-prefill-note" style="margin-bottom:16px"><?= teb('Proposition préparée par MIA dans la conversation : relisez, ajustez ce qui doit l\'être, puis {b}Créer{/b}. La carte de la conversation se fermera d\'elle-même.') ?></div>
+    <div class="alert pf-prefill-note"><?= teb('Proposition préparée par MIA dans la conversation : relisez, ajustez ce qui doit l\'être, puis {b}Créer l’assistant{/b}. La carte de la conversation se fermera d\'elle-même.') ?></div>
     <?php endif; ?>
 
-    <div class="pf-form-layout">
-    <?php /* Schéma de l'assistant tel que saisi : rempli par le script de la
-             page (rien sans JavaScript). Avant la fiche dans le document : sur
-             un écran étroit, il ouvre la page comme un résumé. */ ?>
-    <aside class="sched-diagram-panel is-form pf-diagram-panel" id="pfDiagramPanel" aria-labelledby="pfDiagramTitle" hidden>
-        <div class="sched-diagram-head">
-            <div class="sched-diagram-head-text">
-                <span class="sched-diagram-kicker"><?= te('Aperçu de l\'assistant') ?></span>
-                <h2 id="pfDiagramTitle"></h2>
-            </div>
-        </div>
-        <p class="sched-diagram-hint"><?= te('Cliquez un élément du schéma pour aller à son réglage.') ?></p>
-        <div class="sched-diagram" id="pfDiagram"></div>
-    </aside>
-
-    <div class="pf-form-main">
-    <?php /* Enregistrement automatique en ÉDITION seulement : créer un
-             assistant reste un acte volontaire, avec son bouton « Créer ». */ ?>
+    <?php /* Enregistrement automatique en MODIFICATION seulement : créer un
+             assistant reste un acte volontaire, avec son bouton. */ ?>
     <form method="POST" action="<?= htmlspecialchars($formAction) ?>" id="editProfileForm" enctype="multipart/form-data"
-          <?= ($isCreate || $pfReadOnly) ? '' : 'data-autosave' ?> style="display:flex;flex-direction:column;gap:20px">
+          class="pf-form" <?= ($isCreate || $pfReadOnly) ? '' : 'data-autosave' ?>>
         <?= Csrf::field() ?>
         <?php if ($pfReadOnly): ?><fieldset class="pf-readonly-fieldset" disabled><?php endif; ?>
         <?php if ($prefill !== null): ?>
         <input type="hidden" name="from_action" value="<?= (int)($prefill['from_action'] ?? 0) ?>">
         <?php endif; ?>
 
-        <!-- Section Identité -->
-        <section class="profile-section" id="mpSectionIdentity">
-            <h4><?= te('Identité') ?></h4>
-            <p class="profile-section-hint"><?= te('Comment l\'assistant apparaît à l\'utilisateur dans la liste.') ?></p>
+        <!-- Identité : nom, couleur, description, avatar, actif. -->
+        <section class="kbx-sec" id="identite" aria-labelledby="pfSecIdentity">
+            <div id="mpSectionIdentity">
+            <h2 id="pfSecIdentity"><?= te('Identité') ?></h2>
+            <p class="kbx-lead"><?= te('Comment il apparaît dans la liste des assistants et dans le chat.') ?></p>
 
-            <div style="display:grid;grid-template-columns:1fr 80px;gap:12px">
-                <div class="form-group" style="margin:0">
-                    <label><?= te('Nom') ?> *</label>
-                    <input type="text" name="name" id="mpName" class="form-input" value="<?= htmlspecialchars($pfName) ?>" required>
+            <div class="asx-name-row">
+                <div class="form-group">
+                    <label for="mpName"><?= te('Nom') ?> *</label>
+                    <input type="text" name="name" id="mpName" class="form-input" value="<?= htmlspecialchars($pfName) ?>" required
+                           placeholder="<?= te('Ex. : Juriste, Relances clients…') ?>">
+                    <p class="profile-hint"><?= te('C’est lui qu’on tape après @ dans le chat.') ?></p>
                 </div>
-                <div class="form-group" style="margin:0">
-                    <label><?= te('Couleur') ?></label>
-                    <input type="color" name="color" id="mpColor" class="form-input" value="<?= htmlspecialchars($pfColor) ?>" style="padding:2px 4px;height:38px;cursor:pointer">
+                <div class="form-group">
+                    <label for="mpColor"><?= te('Couleur') ?></label>
+                    <input type="color" name="color" id="mpColor" class="form-input asx-color" value="<?= htmlspecialchars($pfColor) ?>">
                 </div>
             </div>
 
-            <div class="form-group" style="margin:0">
-                <label><?= te('Description') ?></label>
+            <div class="form-group">
+                <label for="mpDescription"><?= te('Description') ?></label>
                 <input type="text" name="description" id="mpDescription" class="form-input"
                        value="<?= htmlspecialchars($pfDescription) ?>"
                        placeholder="<?= te('Ex. : Assistant juridique pour analyser des contrats') ?>">
-                <p class="profile-hint"><?= te('Phrase courte affichée sous le nom dans la liste des assistants. Pas envoyée au modèle.') ?></p>
+                <p class="profile-hint"><?= te('Phrase courte : la liste des assistants l’affiche au survol de l’assistant. Pas envoyée au modèle.') ?></p>
             </div>
 
             <div class="form-group" style="margin:0">
@@ -169,13 +224,26 @@ $assistantDiagramJsVersion = @filemtime(ROOT . '/public/assets/js/assistant-diag
                     </div>
                 </div>
             </div>
+
+            <div class="kbx-divider"></div>
+            <div class="mp-active-toggle">
+                <div class="kbx-row-text">
+                    <span class="mp-active-text<?= $pfActive ? '' : ' is-off' ?>" id="mpActiveText"><?= $pfActive ? te('Actif') : te('Inactif') ?></span>
+                    <small><?= te('Actif : visible et utilisable dans le chat. Inactif : masqué pour tous, réglages gardés.') ?></small>
+                </div>
+                <label class="ios-switch" title="<?= te('Actif = visible et utilisable dans le chat. Inactif = masqué pour tous les utilisateurs.') ?>">
+                    <input type="checkbox" name="is_active" id="mpIsActive" value="1" form="editProfileForm" <?= $pfActive ? 'checked' : '' ?><?= $pfReadOnly ? ' disabled' : '' ?>>
+                    <span class="ios-switch-slider"></span>
+                </label>
+            </div>
+            </div>
         </section>
 
-        <!-- Section Comportement -->
-        <section class="profile-section" id="mpSectionBehavior">
-            <h4><?= te('Comportement') ?></h4>
-            <p class="profile-section-hint"><?= te('Définit le rôle, le ton et les règles données au modèle au début de chaque conversation.') ?></p>
-
+        <!-- Consigne : le prompt système. -->
+        <section class="kbx-sec" id="consigne" aria-labelledby="pfSecPrompt">
+            <div id="mpSectionPrompt">
+            <h2 id="pfSecPrompt"><?= te('Consigne') ?></h2>
+            <p class="kbx-lead"><?= te('Son rôle, son ton et ses règles : le modèle les reçoit au début de chaque conversation.') ?></p>
             <?php
                 // Points de départ du prompt système (cf. PromptStarters) :
                 // icônes des cartes, par nom — repli sur l'initiale du libellé.
@@ -263,9 +331,17 @@ $assistantDiagramJsVersion = @filemtime(ROOT . '/public/assets/js/assistant-diag
                 </div>
             </div>
 
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px" class="pf-two-cols">
-                <div class="form-group" id="mpLlmField" style="margin:0">
-                    <label><?= te('LLM par défaut') ?></label>
+            </div>
+        </section>
+
+        <!-- Modèle : qui répond, et avec quelle température. -->
+        <section class="kbx-sec" id="modele" aria-labelledby="pfSecModel">
+            <div id="mpSectionModel">
+            <h2 id="pfSecModel"><?= te('Modèle') ?></h2>
+            <p class="kbx-lead"><?= te('Le modèle qui lui donne sa voix, et sa liberté de ton.') ?></p>
+            <div class="kbx-fields">
+                <div class="form-group" id="mpLlmField">
+                    <label for="mpDefaultLlm"><?= te('LLM par défaut') ?></label>
                     <select name="default_llm" id="mpDefaultLlm" class="form-select">
                         <option value=""><?= !empty($appDefaultLlmLabel) ? te('Défaut application (actuellement : {modele})', ['modele' => (string)$appDefaultLlmLabel]) : te('Défaut application') ?></option>
                         <?php foreach ($llms as $k => $v): ?>
@@ -274,9 +350,9 @@ $assistantDiagramJsVersion = @filemtime(ROOT . '/public/assets/js/assistant-diag
                     </select>
                     <p class="profile-hint"><?= teb('Modèle {b}imposé{/b} à toutes les conversations de cet assistant : le sélecteur de modèle est masqué, l\'utilisateur ne peut pas en changer. Le modifier ici s\'applique aussi aux conversations déjà ouvertes. « Défaut application » = l\'assistant suit le modèle par défaut de MIA, y compris quand l\'administrateur le change.') ?></p>
                 </div>
-                <div class="form-group" id="mpTempField" style="margin:0">
-                    <label><?= te('Température') ?> <span style="color:var(--text-muted);font-size:12px;font-weight:400">— <?= te('vide = défaut') ?></span></label>
-                    <div style="display:flex;align-items:center;gap:10px">
+                <div class="form-group" id="mpTempField">
+                    <label for="mpTemperature"><?= te('Température') ?> <span class="asx-label-note">— <?= te('vide = défaut') ?></span></label>
+                    <div class="asx-temp-row">
                         <?php /* Le curseur n'a pas de `name` : il pilote le champ
                                  nombre, seul envoyé. Une affectation par script
                                  n'émet aucun évènement — sans le `input`
@@ -284,35 +360,44 @@ $assistantDiagramJsVersion = @filemtime(ROOT . '/public/assets/js/assistant-diag
                                  aucun enregistrement. */ ?>
                         <input type="range" id="mpTempRange" min="0" max="2" step="0.1"
                                value="<?= $pfTemp !== null ? htmlspecialchars((string)$pfTemp) : '0.7' ?>"
-                               style="flex:1;accent-color:var(--accent)"
                                oninput="const t=document.getElementById('mpTemperature');t.value=parseFloat(this.value).toFixed(1);t.dispatchEvent(new Event('input',{bubbles:true}))">
                         <input type="number" name="temperature" id="mpTemperature" min="0" max="2" step="0.1"
                                value="<?= $pfTemp !== null ? htmlspecialchars((string)$pfTemp) : '' ?>"
-                               placeholder="—" style="width:60px;text-align:center" class="form-input"
+                               placeholder="—" class="form-input"
                                oninput="if(this.value!='') document.getElementById('mpTempRange').value=this.value">
-                        <button type="button" id="mpTempReset" class="btn-secondary" style="white-space:nowrap;padding:6px 10px;font-size:12px"
+                        <button type="button" id="mpTempReset" class="btn-secondary"
                                 title="<?= te('Vide le champ : aucune température n\'est envoyée à l\'API (le modèle utilise sa valeur par défaut). Obligatoire pour les modèles GPT-5.x qui refusent ce paramètre.') ?>"
                                 onclick="const t=document.getElementById('mpTemperature');t.value='';document.getElementById('mpTempRange').value=0.7;t.dispatchEvent(new Event('change',{bubbles:true}))">↺ <?= te('Réinitialiser') ?></button>
                     </div>
-                    <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--text-muted);margin-top:4px">
+                    <div class="asx-temp-scale">
                         <span>0 — <?= te('Précis') ?></span><span>1 — <?= te('Équilibré') ?></span><span>2 — <?= te('Créatif') ?></span>
                     </div>
                     <p class="profile-hint"><?= te('Vide / réinitialisé = aucune température envoyée à l\'API (défaut du modèle) — requis pour les modèles de raisonnement type GPT-5.x.') ?></p>
-                    <p id="mpTempNote" class="profile-hint" style="display:none;border-left:3px solid var(--accent);padding:8px 12px;background:rgba(127,127,127,.08);border-radius:6px;margin-top:8px">
+                    <p id="mpTempNote" class="profile-hint asx-temp-note" style="display:none">
                         <?= teb('{b}Ce modèle ne gère pas la température.{/b} Le paramètre est ignoré par l\'API — l\'assistant n\'envoie aucune valeur. Le curseur est désactivé.') ?>
                     </p>
                 </div>
             </div>
+            </div>
+        </section>
 
+        <!-- Capacités : ce qu'il déclenche lui-même en répondant. -->
+        <section class="kbx-sec" id="capacites" aria-labelledby="pfSecTools">
+            <div id="mpSectionTools">
+            <h2 id="pfSecTools"><?= te('Capacités') ?></h2>
+            <p class="kbx-lead"><?= te('Ce qu’il déclenche lui-même en répondant — il faut un modèle qui sait appeler des outils. Chaque outil reste soumis aux autorisations de groupe de la personne.') ?></p>
+            <?php if (empty($imageTools) && empty($n8nTools) && empty($gammaTools)): ?>
+                <p class="kbx-muted asx-empty-tools"><?= te('Aucun outil n’est ouvert pour l’instant : un administrateur en ajoute dans Capacités → Outils. Sans outil, l’assistant rédige et répond.') ?></p>
+            <?php endif; ?>
             <?php if (!empty($imageTools)): ?>
-            <div class="form-group" id="mpToolsGroup" style="margin:14px 0 0;border-top:1px solid var(--border);padding-top:14px">
-                <label><?= te('Capacités — génération d\'image') ?></label>
-                <p class="profile-hint" style="margin:0 0 8px"><?= te('Outils que l\'assistant peut déclencher lui-même pendant la conversation (function-calling). Requiert un LLM qui sait appeler des outils. L\'outil reste soumis aux autorisations de groupe de l\'utilisateur.') ?></p>
-                <p class="profile-hint" style="margin:0 0 8px"><?= teb('Les {b}images{/b} des documents de référence et des bases de connaissances liées servent de modèles : l\'assistant choisit celles que la demande vise (4 au plus) et le générateur les reprend fidèlement — un personnage, un produit, un logo. Il faut un outil qui sait partir d\'une image (GPT Image, Nano Banana, modèles GPT-5.x natifs).') ?></p>
+            <div class="form-group asx-group" id="mpToolsGroup">
+                <h3 class="asx-group-title"><?= te('Génération d’image') ?></h3>
+                <p class="profile-hint asx-group-hint"><?= teb('Les {b}images{/b} des documents de référence et des bases de connaissances liées servent de modèles : l\'assistant choisit celles que la demande vise (4 au plus) et le générateur les reprend fidèlement — un personnage, un produit, un logo. Il faut un outil qui sait partir d\'une image (GPT Image, Nano Banana, modèles GPT-5.x natifs).') ?></p>
                 <div class="mp-opt-list">
                     <?php foreach ($imageTools as $tool): ?>
                     <label class="mp-opt-row">
-                        <input type="checkbox" name="tool_ids[]" value="<?= (int)$tool['id'] ?>" <?= in_array((int)$tool['id'], $boundToolIds, true) ? 'checked' : '' ?>>
+                        <input type="checkbox" name="tool_ids[]" value="<?= (int)$tool['id'] ?>" <?= in_array((int)$tool['id'], $boundToolIds, true) ? 'checked' : '' ?>
+                               data-image-caps="<?= htmlspecialchars((string)json_encode(ImageOptions::capabilitiesOf($tool)), ENT_QUOTES) ?>">
                         <span class="mp-opt-meta">
                             <span class="mp-opt-name"><?= htmlspecialchars($tool['name']) ?></span>
                             <span class="mp-opt-sub"><?= htmlspecialchars($tool['provider']) ?> / <?= htmlspecialchars($tool['model']) ?></span>
@@ -320,13 +405,50 @@ $assistantDiagramJsVersion = @filemtime(ROOT . '/public/assets/js/assistant-diag
                     </label>
                     <?php endforeach; ?>
                 </div>
+                <?php
+                // Options des images de CET assistant : elles précisent celles
+                // de l'outil (vide = ce que règle l'outil). Chaque réglage
+                // n'apparaît que si un outil coché l'accepte (data-image-caps).
+                $pfImageOpts = $isCreate ? ImageOptions::normalize([]) : ImageOptions::ofProfile($profile);
+                $imgLabels   = ImageOptions::labels();
+                ?>
+                <input type="hidden" name="image_options_form" value="1">
+                <div class="tool-img-options" id="mpImageOptions" style="margin-top:10px" hidden>
+                    <div class="tool-img-options-title"><?= te('Options des images de cet assistant') ?></div>
+                    <label class="tool-img-transparent" id="mpImgTransparentWrap">
+                        <input type="checkbox" name="image_transparent" value="1" id="mpImgTransparent" <?= $pfImageOpts['background'] === 'transparent' ? 'checked' : '' ?>>
+                        <span><?= te('Fond transparent') ?></span>
+                    </label>
+                    <p class="tool-img-hint" id="mpImgTransparentHint"><?= te('Le sujet se détache sur un fond vide : logo, pictogramme, produit détouré. Le fichier passe en PNG (ou WebP), seuls formats qui gardent la transparence.') ?></p>
+                    <div style="display:flex;gap:12px;flex-wrap:wrap">
+                        <div class="form-group" style="margin:0;flex:0 0 200px" id="mpImgOutputWrap">
+                            <label for="mpImgOutput"><?= te('Format du fichier') ?></label>
+                            <select name="image_output_format" id="mpImgOutput" class="form-select">
+                                <option value=""><?= te('Celui de l’outil') ?></option>
+                                <?php foreach (ImageOptions::OUTPUT_FORMATS as $of): ?>
+                                <option value="<?= $of ?>" <?= $pfImageOpts['output_format'] === $of ? 'selected' : '' ?>><?= htmlspecialchars($imgLabels['output_formats'][$of]) ?></option>
+                                <?php endforeach; ?>
+                            </select>
+                        </div>
+                        <div class="form-group" style="margin:0;flex:0 0 200px" id="mpImgFormatWrap">
+                            <label for="mpImgFormat"><?= te('Format') ?></label>
+                            <select name="image_format" id="mpImgFormat" class="form-select">
+                                <option value=""><?= te('Celui de l’outil') ?></option>
+                                <?php foreach (ImageOptions::FORMATS as $ff): ?>
+                                <option value="<?= $ff ?>" <?= $pfImageOpts['format'] === $ff ? 'selected' : '' ?>><?= htmlspecialchars($imgLabels['formats'][$ff]) ?></option>
+                                <?php endforeach; ?>
+                            </select>
+                        </div>
+                    </div>
+                    <p class="tool-img-hint" style="margin:8px 0 0"><?= te('Laissés vides, ces réglages suivent ceux de l’outil. Non cochée, la case garde le fond que règle l’outil.') ?></p>
+                </div>
             </div>
             <?php endif; ?>
 
             <?php if (!empty($n8nTools)): ?>
-            <div class="form-group" id="mpN8nGroup" style="margin:14px 0 0;border-top:1px solid var(--border);padding-top:14px">
-                <label><?= te('Capacités — automatisations n8n') ?></label>
-                <p class="profile-hint" style="margin:0 0 8px">
+            <div class="form-group asx-group" id="mpN8nGroup">
+                <h3 class="asx-group-title"><?= te('Automatisations n8n') ?></h3>
+                <p class="profile-hint asx-group-hint">
                     <?= teb('Instances n8n que l\'assistant peut interroger et déclencher pendant la conversation (function-calling, LLM compatible requis). Le périmètre reste borné par le tag de l\'outil, et {b}chaque exécution est soumise à l\'approbation de l\'utilisateur{/b}.') ?>
                 </p>
                 <div class="mp-opt-list">
@@ -347,9 +469,9 @@ $assistantDiagramJsVersion = @filemtime(ROOT . '/public/assets/js/assistant-diag
             <?php endif; ?>
 
             <?php if (!empty($gammaTools)): ?>
-            <div class="form-group" id="mpGammaGroup" style="margin:14px 0 0;border-top:1px solid var(--border);padding-top:14px">
-                <label><?= te('Capacités — présentations Gamma') ?></label>
-                <p class="profile-hint" style="margin:0 0 8px">
+            <div class="form-group asx-group" id="mpGammaGroup">
+                <h3 class="asx-group-title"><?= te('Présentations Gamma') ?></h3>
+                <p class="profile-hint asx-group-hint">
                     <?= teb('Comptes gamma.app avec lesquels l\'assistant peut générer des présentations pendant la conversation (function-calling, LLM compatible requis). {b}Chaque génération est soumise à l\'approbation de l\'utilisateur{/b} et consomme des crédits Gamma (service payant).') ?>
                 </p>
                 <div class="mp-opt-list">
@@ -367,24 +489,22 @@ $assistantDiagramJsVersion = @filemtime(ROOT . '/public/assets/js/assistant-diag
                 </div>
             </div>
             <?php endif; ?>
+            </div>
         </section>
 
-        <!-- Section Connaissances -->
-        <section class="profile-section" id="mpSectionKnowledge">
-            <h4>
-                <svg class="profile-section-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>
-                <?= te('Connaissances') ?>
-            </h4>
-            <p class="profile-section-hint"><?= te('Sources documentaires que l\'assistant consulte pour répondre.') ?></p>
-
+        <!-- Connaissances : bases et documents de référence. -->
+        <section class="kbx-sec" id="connaissances" aria-labelledby="pfSecKnowledge">
+            <div id="mpSectionKnowledge">
+            <h2 id="pfSecKnowledge"><?= te('Connaissances') ?></h2>
+            <p class="kbx-lead"><?= te('Ce qu’il consulte pour répondre : des bases de connaissances, et ses propres documents.') ?></p>
             <?php
                 // Lien vers les bases, posé dans une phrase traduite ENTIÈRE :
                 // `{lien}` reste littéral dans te() (aucune variable passée) et
                 // est remplacé APRÈS l'échappement.
                 $kbAdminLink = '<a href="/admin/knowledge-bases">' . te('Bases de connaissances') . '</a>';
             ?>
-            <div class="form-group" id="mpKbsField" style="margin:0">
-                <label><?= te('Bases de connaissances') ?></label>
+            <div class="form-group asx-group is-first" id="mpKbsField">
+                <h3 class="asx-group-title"><?= te('Bases de connaissances') ?></h3>
                 <?php if (empty($knowledgeBases)): ?>
                     <p class="profile-hint" style="margin:0">
                         <?= str_replace('{lien}', $kbAdminLink, te('Aucune base disponible. Créez-en une dans {lien} — collections de documents vectorisés, partageables entre plusieurs assistants.')) ?>
@@ -398,35 +518,34 @@ $assistantDiagramJsVersion = @filemtime(ROOT . '/public/assets/js/assistant-diag
                             $kbInactive  = empty($kbOpt['is_active']);
                             $kbChecked   = in_array((int)$kbOpt['id'], $boundKbIds, true);
 
-                            // Type de base (rappel visuel, même icônes que la page
-                            // « Bases de connaissances ») : miroir Drive/SharePoint,
-                            // sinon fichiers uploadés manuellement.
+                            // Nature de la base : la même tuile que les pages
+                            // « Bases de connaissances » (logo de la source, livre ou table).
                             $kbSyncActive = !empty($kbOpt['sync_enabled']) && !empty($kbOpt['sync_provider']);
-                            $kbIsSp       = ($kbOpt['sync_provider'] ?? '') === 'sharepoint';
                             $kbOptLive    = KnowledgeBase::isRemote($kbOpt);
-                            if ($kbOptLive) {
+                            $kbOptTable   = KnowledgeBase::isTable($kbOpt);
+                            if ($kbOptTable) {
+                                $kbSrcTitle = t('Table : ses lignes sont lues telles quelles (compter, filtrer, croiser), jamais découpées en extraits');
+                            } elseif ($kbOptLive) {
                                 // Base en direct : elle suit la PERSONNE, pas l'assistant —
                                 // seuls les membres de ses groupes la font interroger.
                                 $kbSrcTitle = t('Cerveau MyBrain, interrogé en direct — seulement pour les personnes qui y ont accès (partage de la base), même à travers cet assistant');
-                                $kbSrcIcon  = '<img src="/assets/img/mybrain.png" alt="MyBrain">';
-                            } elseif ($kbSyncActive && $kbIsSp) {
+                            } elseif ($kbSyncActive && ($kbOpt['sync_provider'] ?? '') === 'sharepoint') {
                                 $kbSrcTitle = t('Source : dossier SharePoint');
-                                $kbSrcIcon  = '<img src="/assets/img/sharepoint.svg" alt="SharePoint">';
                             } elseif ($kbSyncActive) {
                                 $kbSrcTitle = t('Source : dossier Google Drive');
-                                $kbSrcIcon  = '<img src="/assets/img/google-drive.svg" alt="Google Drive">';
                             } else {
                                 $kbSrcTitle = t('Source : fichiers uploadés manuellement');
-                                $kbSrcIcon  = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>';
                             }
                         ?>
                         <label class="mp-opt-row<?= $kbOptSystem ? ' is-locked' : '' ?>"
                                <?= $kbOptSystem ? 'title="' . te('Base système : sa liaison à l\'assistant d\'aide de MIA est posée automatiquement et ne se modifie pas ici.') . '"' : '' ?>>
                             <input type="checkbox" name="kb_ids[]" value="<?= (int)$kbOpt['id'] ?>"<?= $kbOptSystem ? ' disabled' : '' ?><?= $kbChecked && !$kbOptSystem ? ' checked' : '' ?>>
-                            <span class="mp-opt-src" title="<?= htmlspecialchars($kbSrcTitle) ?>"><?= $kbSrcIcon ?></span>
+                            <span class="asx-kb-tile" title="<?= htmlspecialchars($kbSrcTitle) ?>"><?= KbPages::tile($kbOpt) ?></span>
                             <span class="mp-opt-meta">
                                 <span class="mp-opt-name"><?= htmlspecialchars($kbOpt['name']) ?></span>
-                                <span class="mp-opt-sub"><?= $kbOptLive ? te('MyBrain · pour ses groupes seulement') : htmlspecialchars(I18n::plural($kbDocN, '{n} doc', '{n} docs')) ?></span>
+                                <span class="mp-opt-sub"><?= $kbOptTable
+                                    ? htmlspecialchars(t('Table') . ' · ' . WorkTableView::rowsLabel((int)($kbOpt['table_rows'] ?? 0)))
+                                    : ($kbOptLive ? te('MyBrain · pour ses groupes seulement') : htmlspecialchars(I18n::plural($kbDocN, '{n} doc', '{n} docs'))) ?></span>
                             </span>
                             <span class="mp-opt-tags">
                                 <?php if ($kbInactive): ?><span class="mp-opt-badge mp-opt-badge-off"><?= te('Inactive') ?></span><?php endif; ?>
@@ -439,11 +558,11 @@ $assistantDiagramJsVersion = @filemtime(ROOT . '/public/assets/js/assistant-diag
                 <?php endif; ?>
             </div>
 
-            <div id="mpDocumentsSection" style="border-top:1px solid var(--border);padding-top:14px"
+            <div id="mpDocumentsSection" class="asx-group"
                  data-rag-min-budget="<?= (int)$ragMinBudget ?>">
-                <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px">
-                    <h5 style="margin:0;font-size:13px;font-weight:600"><?= te('Documents de référence') ?></h5>
-                    <span id="mpDocumentsTokenTotal" style="font-size:11px;color:var(--text-muted)"></span>
+                <div class="asx-group-head">
+                    <h3 class="asx-group-title"><?= te('Documents de référence') ?></h3>
+                    <span id="mpDocumentsTokenTotal" class="asx-group-meta"></span>
                 </div>
                 <p id="mpDocsBudgetWarn" style="display:none;margin:0 0 8px;font-size:11px;color:#b45309;background:#fffbeb;border:1px solid #fcd34d;border-radius:6px;padding:6px 8px"></p>
                 <p class="profile-hint" style="margin:0 0 10px"><?= te('Fichiers attachés à l\'assistant (PDF, DOCX, XLSX, PPTX, ODT/ODS/ODP, EPUB, HTML, RTF, TXT, MD, CSV, JSON, XML, code, images). Le texte extrait alimente le RAG de l\'assistant ; les images sont montrées au modèle et servent de références à l\'outil image. Max 20 fichiers, 20 Mo/fichier.') ?></p>
@@ -451,66 +570,68 @@ $assistantDiagramJsVersion = @filemtime(ROOT . '/public/assets/js/assistant-diag
                 <?php if ($isCreate): ?>
                 <!-- Création : input multiple soumis avec le formulaire (pas d'AJAX, l'assistant n'existe pas encore). -->
                 <div id="mpDocsCreate">
-                    <input type="file" name="documents[]" id="mpDocsCreateInput" multiple class="form-input"
-                           accept=".pdf,.docx,.xlsx,.pptx,.odt,.ods,.odp,.epub,.html,.htm,.rtf,.txt,.md,.markdown,.csv,.tsv,.json,.xml,.yaml,.yml,.log,.ini,.conf,.php,.js,.ts,.py,.rb,.go,.rs,.java,.c,.cpp,.h,.cs,.sh,.sql,.css,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.openxmlformats-officedocument.presentationml.presentation,application/vnd.oasis.opendocument.text,application/vnd.oasis.opendocument.spreadsheet,application/vnd.oasis.opendocument.presentation,application/epub+zip,text/html,application/rtf,text/plain,text/markdown,image/jpeg,image/png,image/gif,image/webp">
+                    <label class="kb-drop kbf-drop asx-drop" id="mpDocDrop">
+                        <input type="file" name="documents[]" id="mpDocsCreateInput" multiple
+                               accept="<?= htmlspecialchars($acceptDocs) ?>">
+                        <span class="kb-drop-ico" aria-hidden="true"><?= KbPages::icon('upload', '') ?></span>
+                        <span class="kb-drop-text"><?= teb('{b}Déposez vos fichiers ici{/b} ou cliquez pour les choisir') ?></span>
+                    </label>
+                    <ul class="kb-pending-files asx-pending" id="mpPendingFiles" hidden
+                        data-remove="<?= te('Retirer « {nom} »') ?>"
+                        data-units="<?= I18n::locale() === 'en' ? 'KB|MB' : 'Ko|Mo' ?>"></ul>
                     <p class="profile-hint" style="margin-top:6px"><?= te('Les fichiers seront attachés à la création de l\'assistant.') ?></p>
                 </div>
                 <?php else: ?>
                 <!-- Édition : gestion AJAX (l'assistant existe). -->
                 <div id="mpDocsEdit">
-                    <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;margin-bottom:10px">
-                        <div class="form-group" style="margin:0;flex:1;min-width:200px">
-                            <label style="font-size:12px"><?= te('Ajouter un document') ?></label>
-                            <input type="file" id="mpDocFileInput" class="form-input"
-                                   accept=".pdf,.docx,.xlsx,.pptx,.odt,.ods,.odp,.epub,.html,.htm,.rtf,.txt,.md,.markdown,.csv,.tsv,.json,.xml,.yaml,.yml,.log,.ini,.conf,.php,.js,.ts,.py,.rb,.go,.rs,.java,.c,.cpp,.h,.cs,.sh,.sql,.css,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.openxmlformats-officedocument.presentationml.presentation,application/vnd.oasis.opendocument.text,application/vnd.oasis.opendocument.spreadsheet,application/vnd.oasis.opendocument.presentation,application/epub+zip,text/html,application/rtf,text/plain,text/markdown,image/jpeg,image/png,image/gif,image/webp">
-                        </div>
-                        <button type="button" class="btn-primary" id="mpDocUploadBtn" style="padding:8px 14px"><?= te('Uploader') ?></button>
-                    </div>
+                    <label class="kb-drop kbf-drop asx-drop" id="mpDocDrop">
+                        <input type="file" id="mpDocFileInput" multiple data-autosave-skip
+                               accept="<?= htmlspecialchars($acceptDocs) ?>">
+                        <span class="kb-drop-ico" aria-hidden="true"><?= KbPages::icon('upload', '') ?></span>
+                        <span class="kb-drop-text"><?= teb('{b}Déposez vos fichiers ici{/b} ou cliquez pour les choisir') ?></span>
+                    </label>
+                    <p class="asx-drop-busy" id="mpDocBusy" hidden data-label="<?= te('Envoi de « {nom} »…') ?>"></p>
                     <p class="profile-doc-error" id="mpDocError" style="display:none"></p>
                     <div id="mpDocumentsList" style="display:flex;flex-direction:column;gap:6px"></div>
                 </div>
                 <?php endif; ?>
             </div>
+            </div>
         </section>
 
         <?php if ($pfReadOnly): ?></fieldset><?php endif; ?>
+    </form>
 
-        <!-- Barre d'actions -->
-        <div class="card pf-actions-bar">
-            <?php if (!$isCreate && !empty($canDeleteProfile)): ?>
-                <button type="button" class="btn-danger-link" id="mpDeleteBtn"><?= te('Supprimer cet assistant') ?></button>
-            <?php else: ?>
-                <span></span>
-            <?php endif; ?>
-            <div class="pf-actions-right">
-                <?php if ($isCreate): ?>
-                    <a href="/admin/profiles" class="btn-secondary"><?= te('Annuler') ?></a>
-                    <button type="submit" class="btn-primary" id="mpSaveBtn"><?= te('Créer') ?></button>
-                <?php else: ?>
-                    <?php /* Mode relecture : un modèle collé ou un prompt généré
-                             n'est PAS enregistré tout seul — l'assistant est peut-
-                             être en service, le texte se relit avant d'être
-                             appliqué. L'auto-save du formulaire est suspendu
-                             jusqu'à Enregistrer ou Annuler (cf. JS). */ ?>
-                    <span class="pf-review-bar" id="mpReviewBar" hidden>
-                        <span class="pf-review-note"><?= te('Prompt modifié, pas encore enregistré') ?></span>
-                        <button type="button" class="btn-secondary" id="mpReviewCancel" title="<?= te('Revenir au prompt enregistré') ?>"><?= te('Annuler') ?></button>
-                        <button type="button" class="btn-primary" id="mpReviewSave"><?= te('Enregistrer') ?></button>
-                    </span>
-                    <?php if (!$pfReadOnly): ?>
-                    <span class="pf-actions-note" id="mpAutosaveHint"><?php require ROOT . '/templates/partials/autosave-hint.php'; ?></span>
-                    <?php endif; ?>
-                    <a href="<?= htmlspecialchars($backUrl) ?>" class="btn-secondary"><?= te('Retour à la liste') ?></a>
-                <?php endif; ?>
+    <!-- Vue d'ensemble : le schéma de l'assistant, recomposé à chaque geste.
+         Un élément du schéma mène au réglage qui le règle. -->
+    <section class="kbx-sec" id="ensemble" aria-labelledby="pfSecEnsemble">
+        <div class="kbx-sec-h">
+            <div>
+                <h2 id="pfSecEnsemble"><?= te('Vue d\'ensemble') ?></h2>
+                <p class="kbx-lead sched-diagram-hint"><?= $isCreate
+                    ? te('Ce que sera l’assistant, mis à jour à chaque réglage. Touchez un élément pour aller le régler.')
+                    : te('Son modèle, sa consigne, ce qu’il connaît, ses outils et qui le voit. Touchez un élément pour aller le régler.') ?></p>
             </div>
         </div>
-    </form>
-    </div>
-    </div>
+        <div id="pfDiagramPanel" hidden>
+            <div class="kbx-diagram sched-diagram" id="pfDiagram"></div>
+        </div>
+    </section>
+
+    <?php if ($isCreate): ?>
+        <div class="kbx-endbar">
+            <span><?= te('Vous pourrez tout modifier ensuite, depuis sa page.') ?></span>
+            <a href="/admin/profiles" class="kbx-btn"><?= te('Annuler') ?></a>
+            <button type="submit" class="kbx-btn is-primary" form="editProfileForm"><?= te('Créer l’assistant') ?></button>
+        </div>
+    <?php endif; ?>
+        </div><!-- /.kbx-sections -->
+    </div><!-- /.kbx-layout -->
 
     <?php if (!$isCreate && !empty($canDeleteProfile)): ?>
-    <form method="POST" action="/admin/profiles/<?= (int)$profile['id'] ?>/delete" id="deleteProfileForm" style="display:none"><?= Csrf::field() ?></form>
+    <form method="POST" action="/admin/profiles/<?= (int)$profile['id'] ?>/delete" id="deleteProfileForm" hidden><?= Csrf::field() ?></form>
     <?php endif; ?>
+</div>
 </div>
 
 <script>
@@ -592,18 +713,12 @@ window.ASSISTANT_FORM_DIAGRAM = <?= json_encode($diagram, JSON_UNESCAPED_UNICODE
     });
 
     // ── Après un enregistrement automatique ──
-    // La page ne se recharge plus : le titre resterait sur l'ancien nom, et un
-    // avatar tout juste téléversé n'aurait pas encore de vignette dans la
-    // grille (elle est rendue côté serveur). Un nouvel avatar est le seul cas
-    // qui justifie un rechargement complet.
+    // La page ne se recharge pas (le titre de la barre du haut suit déjà le
+    // nom, assistant-fiche.js) ; mais un avatar tout juste téléversé n'a pas
+    // encore de vignette dans la grille (elle est rendue côté serveur) : seul
+    // cas qui justifie un rechargement complet.
     const editForm = document.getElementById('editProfileForm');
     if (editForm) editForm.addEventListener('mia:autosaved', (e) => {
-        const nameField = document.getElementById('mpName');
-        const heading   = document.querySelector('.pf-page-head h1');
-        if (heading && nameField && nameField.value.trim() !== '') {
-            heading.textContent = fill(<?= tj('Modifier — {nom}') ?>, { nom: nameField.value.trim() });
-        }
-
         const avatar = e.detail?.data?.avatar;
         if (!avatar) return;
         const known = Array.from(document.querySelectorAll('input[name="avatar"]'))
@@ -945,7 +1060,7 @@ window.ASSISTANT_FORM_DIAGRAM = <?= json_encode($diagram, JSON_UNESCAPED_UNICODE
         });
     })();
 
-    // ── Schéma de l'assistant, à droite (au-dessus de la fiche sur un écran étroit) ──
+    // ── Schéma de l'assistant, dans la « Vue d'ensemble » au bas de la fiche ──
     // Composé depuis les champs, sous la forme d'AssistantDiagram::spec, et
     // redessiné à chaque geste (balisage identique : rien n'est reposé). Même
     // geste que la fiche d'une tâche programmée : chaque élément du schéma
@@ -960,7 +1075,6 @@ window.ASSISTANT_FORM_DIAGRAM = <?= json_encode($diagram, JSON_UNESCAPED_UNICODE
         if (!conf || !panel || !host || !form || !window.MiaAssistantDiagram) return;
 
         const byId    = (id) => document.getElementById(id);
-        const titleEl = byId('pfDiagramTitle');
 
         // Documents : en édition, la liste de la fiche (téléversés, supprimés,
         // extraction qui avance) ; en création, les fichiers choisis.
@@ -1011,10 +1125,12 @@ window.ASSISTANT_FORM_DIAGRAM = <?= json_encode($diagram, JSON_UNESCAPED_UNICODE
         // ---- Du schéma au réglage ----
         // Cible → section (pour l'intitulé du crayon), bloc à montrer, champ à
         // focaliser. Les intitulés sont les titres des sections, lus dans la page.
-        const sectionTitle = (id) => ((byId(id) && byId(id).querySelector('h4')) ? byId(id).querySelector('h4').textContent : '').trim();
+        const sectionTitle = (id) => ((byId(id) && byId(id).querySelector('h2')) ? byId(id).querySelector('h2').textContent : '').trim();
         const titles = {
             identity:  sectionTitle('mpSectionIdentity'),
-            behavior:  sectionTitle('mpSectionBehavior'),
+            prompt:    sectionTitle('mpSectionPrompt'),
+            model:     sectionTitle('mpSectionModel'),
+            tools:     sectionTitle('mpSectionTools'),
             knowledge: sectionTitle('mpSectionKnowledge'),
         };
         // Une liste de cases : la première cochée, sinon la première modifiable.
@@ -1024,20 +1140,20 @@ window.ASSISTANT_FORM_DIAGRAM = <?= json_encode($diagram, JSON_UNESCAPED_UNICODE
         // Outils : le groupe qui porte un outil coché, sinon le premier proposé.
         const toolGroup = () => {
             const groups = ['mpToolsGroup', 'mpN8nGroup', 'mpGammaGroup'].map(byId).filter(Boolean);
-            return groups.find((g) => g.querySelector('input:checked')) || groups[0] || byId('mpSectionBehavior');
+            return groups.find((g) => g.querySelector('input:checked')) || groups[0] || byId('mpSectionTools');
         };
         const JUMP_TARGETS = {
-            llm:         { section: 'behavior',  el: () => byId('mpLlmField'), field: () => byId('mpDefaultLlm') },
-            temperature: { section: 'behavior',  el: () => byId('mpTempField'), field: () => {
+            llm:         { section: 'model',     el: () => byId('mpLlmField'), field: () => byId('mpDefaultLlm') },
+            temperature: { section: 'model',     el: () => byId('mpTempField'), field: () => {
                 const temp = byId('mpTemperature');
                 return temp && !temp.disabled ? temp : byId('mpDefaultLlm');
             } },
             assistant:   { section: 'identity',  el: () => byId('mpSectionIdentity'), field: () => byId('mpName') },
-            prompt:      { section: 'behavior',  el: () => byId('mpPromptField'), field: () => byId('mpSystemPrompt') },
-            active:      { section: '',          el: () => document.querySelector('.mp-active-toggle'), field: () => byId('mpIsActive') },
+            prompt:      { section: 'prompt',    el: () => byId('mpPromptField'), field: () => byId('mpSystemPrompt') },
+            active:      { section: 'identity',  el: () => document.querySelector('.mp-active-toggle'), field: () => byId('mpIsActive') },
             kbs:         { section: 'knowledge', el: () => byId('mpKbsField') || byId('mpSectionKnowledge'), field: () => firstBox(byId('mpKbsField')) },
             docs:        { section: 'knowledge', el: () => byId('mpDocumentsSection'), field: () => byId('mpDocFileInput') || byId('mpDocsCreateInput') },
-            tools:       { section: 'behavior',  el: toolGroup, field: () => firstBox(toolGroup()) },
+            tools:       { section: 'tools',     el: toolGroup, field: () => firstBox(toolGroup()) },
             knowledge:   { section: 'knowledge', el: () => byId('mpSectionKnowledge') },
         };
         const jumpTitles = {};
@@ -1077,8 +1193,6 @@ window.ASSISTANT_FORM_DIAGRAM = <?= json_encode($diagram, JSON_UNESCAPED_UNICODE
         function paint() {
             timer = null;
             const spec = formSpec();
-            const untitled = (conf.catalog && conf.catalog.labels && conf.catalog.labels.untitled) || '';
-            if (titleEl) titleEl.textContent = spec.name.trim() || untitled;
             panel.hidden = false;
             window.MiaAssistantDiagram.mount(host, spec, conf.catalog, { animate: first, jump: jumpTitles });
             first = false;
@@ -1100,7 +1214,8 @@ window.ASSISTANT_FORM_DIAGRAM = <?= json_encode($diagram, JSON_UNESCAPED_UNICODE
     const docsList         = document.getElementById('mpDocumentsList');
     const docsTokenTotalEl = document.getElementById('mpDocumentsTokenTotal');
     const docFileInput     = document.getElementById('mpDocFileInput');
-    const docUploadBtn     = document.getElementById('mpDocUploadBtn');
+    const docDrop          = document.getElementById('mpDocDrop');
+    const docBusy          = document.getElementById('mpDocBusy');
     const docErrorEl       = document.getElementById('mpDocError');
     let currentDocs        = INITIAL_DOCS.slice();
 
@@ -1125,6 +1240,8 @@ window.ASSISTANT_FORM_DIAGRAM = <?= json_encode($diagram, JSON_UNESCAPED_UNICODE
         return (i === 0 ? n.toString() : n.toFixed(1)) + ' ' + units[i];
     }
 
+    const FILE_KINDS = <?= json_encode(KbPages::fileKinds(), JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) ?>;
+
     function renderDocuments(docs) {
         if (!docsList) return;
         docsList.innerHTML = '';
@@ -1137,6 +1254,14 @@ window.ASSISTANT_FORM_DIAGRAM = <?= json_encode($diagram, JSON_UNESCAPED_UNICODE
             docs.forEach(d => {
                 const row = document.createElement('div');
                 row.className = 'mp-doc-row';
+                // Pastille du format : les mêmes couleurs que les pages des bases (KbPages::fileKind).
+                const ext = String(d.file_name || '').split('.').length > 1
+                    ? String(d.file_name).split('.').pop().toLowerCase() : '';
+                const badge = document.createElement('span');
+                badge.className = 'kbx-ft';
+                badge.dataset.ext = FILE_KINDS[ext] || 'txt';
+                badge.textContent = (ext || 'txt').toUpperCase().slice(0, 4);
+                row.appendChild(badge);
                 const info = document.createElement('div');
                 info.className = 'mp-doc-info';
                 const name = document.createElement('div');
@@ -1266,54 +1391,125 @@ window.ASSISTANT_FORM_DIAGRAM = <?= json_encode($diagram, JSON_UNESCAPED_UNICODE
         if (st === 'pending' || st === 'processing') pollDocStatus(d.id, 0);
     });
 
-    if (docUploadBtn) {
-        docUploadBtn.addEventListener('click', async () => {
-            if (!docFileInput || !docFileInput.files || docFileInput.files.length === 0) {
-                showDocError(<?= tj('Sélectionnez un fichier à uploader.') ?>);
-                return;
-            }
-            const file = docFileInput.files[0];
+    // Dépôt : chaque fichier choisi (ou glissé sur la zone) part aussitôt,
+    // l'un après l'autre ; la ligne apparaît dans la liste dès son arrivée.
+    async function uploadOne(file) {
+        const fd = new FormData();
+        fd.append('csrf_token', getCsrfToken());
+        fd.append('document', file);
+        const r = await fetch('/admin/profiles/' + PROFILE_ID + '/documents', {
+            method: 'POST',
+            body: fd,
+            headers: {
+                'Accept': 'application/json',
+                'X-CSRF-Token': getCsrfToken(),
+                'X-Requested-With': 'XMLHttpRequest',
+            },
+        });
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok || !data.ok) {
+            return file.name + ' : ' + (data.error || <?= tj('Upload impossible.') ?>);
+        }
+        if (data.document) {
+            currentDocs.push(data.document);
+            renderDocuments(currentDocs);
+            const st = data.document.extraction_status || 'done';
+            if (st === 'pending' || st === 'processing') pollDocStatus(data.document.id, 0);
+        }
+        return data.warning ? ('⚠ ' + data.warning) : '';
+    }
+    if (docFileInput) {
+        docFileInput.addEventListener('change', async () => {
+            const files = Array.from(docFileInput.files || []);
+            if (files.length === 0) return;
             showDocError('');
-            docUploadBtn.disabled = true;
-            const originalLabel = docUploadBtn.textContent;
-            docUploadBtn.textContent = <?= tj('Upload…') ?>;
+            docFileInput.disabled = true;
+            if (docDrop) docDrop.classList.add('is-busy');
+            const notes = [];
             try {
-                const fd = new FormData();
-                fd.append('csrf_token', getCsrfToken());
-                fd.append('document', file);
-                const r = await fetch('/admin/profiles/' + PROFILE_ID + '/documents', {
-                    method: 'POST',
-                    body: fd,
-                    headers: {
-                        'Accept': 'application/json',
-                        'X-CSRF-Token': getCsrfToken(),
-                        'X-Requested-With': 'XMLHttpRequest',
-                    },
-                });
-                const data = await r.json().catch(() => ({}));
-                if (!r.ok || !data.ok) {
-                    showDocError(data.error || <?= tj('Upload impossible.') ?>);
-                    return;
-                }
-                if (data.document) {
-                    currentDocs.push(data.document);
-                    renderDocuments(currentDocs);
-                    const st = data.document.extraction_status || 'done';
-                    if (st === 'pending' || st === 'processing') {
-                        pollDocStatus(data.document.id, 0);
+                for (const file of files) {
+                    if (docBusy) {
+                        docBusy.textContent = (docBusy.dataset.label || '').replace('{nom}', file.name);
+                        docBusy.hidden = false;
+                    }
+                    try {
+                        const note = await uploadOne(file);
+                        if (note) notes.push(note);
+                    } catch (e) {
+                        notes.push(file.name + ' : ' + <?= tj('Erreur réseau. Réessayez.') ?>);
                     }
                 }
-                showDocError(data.warning ? ('⚠ ' + data.warning) : '');
-                docFileInput.value = '';
-            } catch (e) {
-                showDocError(<?= tj('Erreur réseau. Réessayez.') ?>);
             } finally {
-                docUploadBtn.disabled = false;
-                docUploadBtn.textContent = originalLabel;
+                showDocError(notes.join('\n'));
+                docFileInput.value = '';
+                docFileInput.disabled = false;
+                if (docDrop) docDrop.classList.remove('is-busy');
+                if (docBusy) docBusy.hidden = true;
             }
         });
     }
 })();
+
+// ---- Options des images de l'assistant (ImageOptions) ----
+// Visibles selon ce qu'acceptent les outils image COCHÉS (data-image-caps) :
+// un réglage qu'aucun d'eux ne prend est masqué et désactivé — jamais posté.
+// Fond transparent : PNG s'enclenche, JPEG (qui ne le garde pas) se grise.
+(function () {
+    const box = document.getElementById('mpImageOptions');
+    if (!box) return;
+    const cb = document.getElementById('mpImgTransparent');
+    const out = document.getElementById('mpImgOutput');
+    const fmt = document.getElementById('mpImgFormat');
+    const inputs = () => [...document.querySelectorAll('#mpToolsGroup input[name="tool_ids[]"][data-image-caps]')];
+    function caps() {
+        const c = { transparent: false, output_formats: [], formats: [] };
+        inputs().filter(i => i.checked).forEach(i => {
+            let x = {};
+            try { x = JSON.parse(i.dataset.imageCaps || '{}'); } catch (e) { x = {}; }
+            c.transparent = c.transparent || !!x.transparent;
+            (x.output_formats || []).forEach(v => { if (!c.output_formats.includes(v)) c.output_formats.push(v); });
+            (x.formats || []).forEach(v => { if (!c.formats.includes(v)) c.formats.push(v); });
+        });
+        return c;
+    }
+    function part(id, on) {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.style.display = on ? '' : 'none';
+        el.querySelectorAll('input, select').forEach(x => { x.disabled = !on || x.dataset.readonly === '1'; });
+    }
+    function limit(sel, allowed) {
+        [...sel.options].forEach(o => { if (o.value !== '') o.hidden = !allowed.includes(o.value); });
+    }
+    function syncTransparent() {
+        const on = cb.checked && !cb.disabled;
+        [...out.options].forEach(o => { if (o.value === 'jpeg') o.disabled = on; });
+        if (on && (out.value === 'jpeg' || out.value === '')) {
+            const keep = [...out.options].find(o => o.value === 'png' && !o.hidden) || [...out.options].find(o => o.value === 'webp' && !o.hidden);
+            if (keep && out.value !== keep.value) {
+                out.value = keep.value;
+                out.dispatchEvent(new Event('change', { bubbles: true }));
+            }
+        }
+    }
+    function sync() {
+        const c = caps();
+        part('mpImgTransparentWrap', c.transparent);
+        document.getElementById('mpImgTransparentHint').style.display = c.transparent ? '' : 'none';
+        part('mpImgOutputWrap', c.output_formats.length > 0);
+        part('mpImgFormatWrap', c.formats.length > 0);
+        limit(out, c.output_formats);
+        limit(fmt, c.formats);
+        box.hidden = !(c.transparent || c.output_formats.length || c.formats.length);
+        syncTransparent();
+    }
+    // Fiche en lecture seule : les contrôles restent grisés quoi qu'il arrive.
+    [cb, out, fmt].forEach(x => { if (x.disabled) x.dataset.readonly = '1'; });
+    inputs().forEach(i => i.addEventListener('change', sync));
+    cb.addEventListener('change', syncTransparent);
+    sync();
+})();
 </script>
+<script src="/assets/js/assistant-fiche.js?v=<?= (int)(@filemtime(ROOT . '/public/assets/js/assistant-fiche.js') ?: 1) ?>"></script>
 </body>
 </html>

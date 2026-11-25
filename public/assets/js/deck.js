@@ -258,6 +258,7 @@
         if (typeof closeMapViewer === 'function') closeMapViewer();
         if (typeof closeVideoViewer === 'function') closeVideoViewer();
         if (typeof closeSourcesViewer === 'function') closeSourcesViewer();
+        if (typeof closeTablesViewer === 'function') closeTablesViewer();
         viewer.classList.add('open');
         if (typeof setViewerLayoutState === 'function') setViewerLayoutState();
     }

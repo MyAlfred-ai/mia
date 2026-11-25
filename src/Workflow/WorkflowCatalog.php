@@ -44,6 +44,7 @@ final class WorkflowCatalog
         'wait'      => '#64748b',
         'notify'    => '#db2777',
         'stop'      => '#dc2626',
+        'call'      => '#0d9488',
         'end'       => '#10a37f',
     ];
 
@@ -63,22 +64,40 @@ final class WorkflowCatalog
         $choices['auto'] = Workflow::autoAllowed();
         // Outils de création (image, page web, carte) ouverts à la personne.
         $choices['creations'] = WorkflowCreations::toolsFor($user);
+        // Ce que la connexion Slack permet (lire, publier, écrire à une
+        // personne, joindre des fichiers) : « À régler » d'une brique Slack.
+        // Lu dans les autorisations enregistrées, sans appel à Slack.
+        try {
+            $slack = UserSlackService::isGloballyEnabled() ? UserSlackService::forUser((int)$user['id']) : null;
+            if ($slack !== null) {
+                $choices['slack'] = $slack->capabilities();
+            }
+        } catch (\Throwable $e) {
+            error_log('[Workflows] autorisations Slack : ' . $e->getMessage());
+        }
         // Livraison et enchaînement : les autres workflows de la personne,
         // les bases qu'elle gère (où ranger un livrable).
         $choices['workflows'] = [];
+        // Chacun avec sa SIGNATURE (WorkflowCall) : ce qu'il attend au départ,
+        // ce que remet son livrable, les workflows qu'il appelle lui-même —
+        // de quoi contrôler une brique « Appeler un workflow ».
         foreach (Workflow::forUser((int)$user['id']) as $w) {
-            $choices['workflows'][$w['id']] = ['name' => $w['name'], 'published' => $w['published'] !== null];
+            $choices['workflows'][$w['id']] = WorkflowCall::signature($w);
         }
         $choices['delivery_kbs'] = [];
         try {
             foreach (KnowledgeBase::forManager($user) as $kb) {
-                if (!KnowledgeBase::isRemote($kb) && empty($kb['is_system'])) {
+                if (KnowledgeBase::holdsDocuments($kb) && empty($kb['is_system'])) {
                     $choices['delivery_kbs'][(int)$kb['id']] = ['name' => (string)$kb['name']];
                 }
             }
         } catch (\Throwable $e) {
             error_log('[Workflows] bases de livraison : ' . $e->getMessage());
         }
+        // Tables permanentes (WorkflowTables) : celles qu'une boucle parcourt,
+        // celles où une livraison écrit.
+        $choices['tables'] = WorkflowTables::loopTables((array)($choices['kbs'] ?? []));
+        $choices['delivery_tables'] = WorkflowTables::deliveryTables($user);
         return $choices;
     }
 
@@ -123,6 +142,8 @@ final class WorkflowCatalog
         }
         $kbs = array_values(array_map(static fn(array $kb): array => [
             'id' => $kb['id'], 'name' => $kb['name'], 'reason' => $kb['reason'], 'live' => $kb['live'], 'docs' => $kb['docs'],
+            // Une table permanente : dite comme telle, avec son nombre de lignes.
+            'table' => !empty($kb['table']), 'rows' => (int)($kb['rows'] ?? 0),
         ], $choices['kbs'] ?? []));
         $tools = [];
         foreach ($choices['tools'] ?? [] as $tool) {
@@ -138,12 +159,21 @@ final class WorkflowCatalog
             $creations[] = [
                 'id' => $tool['id'], 'name' => $tool['name'], 'type' => $tool['type'], 'kind' => $tool['kind'],
                 'reason' => $tool['reason'], 'can_edit' => !empty($tool['can_edit']), 'type_label' => WorkflowCreations::typeLabel((string)$tool['type']),
+                'image_caps' => $tool['image_caps'] ?? null,
             ];
         }
 
         $workflows = [];
         foreach ($choices['workflows'] ?? [] as $id => $w) {
-            $workflows[] = ['id' => (int)$id, 'name' => (string)$w['name'], 'published' => !empty($w['published'])];
+            $workflows[] = [
+                'id' => (int)$id, 'name' => (string)$w['name'], 'published' => !empty($w['published']),
+                // Brique « Appeler un workflow » : ses paramètres, ce qu'il remet.
+                'active' => !array_key_exists('active', $w) || !empty($w['active']), 'color' => (string)($w['color'] ?? ''),
+                'fields' => array_values((array)($w['fields'] ?? [])), 'event' => $w['event'] ?? null,
+                'outputs' => array_values((array)($w['outputs'] ?? [])), 'calls' => array_values((array)($w['calls'] ?? [])),
+                // Sa silhouette : le workflow appelé en miniature, dans la brique.
+                'silhouette' => (string)($w['silhouette'] ?? ''),
+            ];
         }
         $deliveryKbs = [];
         foreach ($choices['delivery_kbs'] ?? [] as $id => $kb) {
@@ -158,12 +188,19 @@ final class WorkflowCatalog
             'tools'       => $tools,
             'creations'   => $creations,
             'workflows'   => $workflows,
+            // MIA : son logo (Marque & apparence) sur les briques que fait le modèle de l'organisation.
+            'mia'         => ['logo' => self::miaLogo()],
             'delivery_kbs' => $deliveryKbs,
+            // Tables permanentes : à parcourir (boucle), où écrire (livraison).
+            'tables'      => array_values((array)($choices['tables'] ?? [])),
+            'delivery_tables' => array_values(array_map(static fn(int $id, array $t): array => ['id' => $id] + $t,
+                array_keys((array)($choices['delivery_tables'] ?? [])), (array)($choices['delivery_tables'] ?? []))),
             'email_fields' => WorkflowSpec::EMAIL_FIELDS,
             // Ce qu'une boucle « pour chaque » sait parcourir (LoopSources).
             'loop_sources' => LoopSources::catalog(),
             'event_names' => WorkflowSpec::EVENT_PIECE_NAMES,
             'targets'     => self::targets($choices),
+            'slack'       => $choices['slack'] ?? null,
             'auto'        => !empty($choices['auto']),
             'colors'      => self::FORM_COLORS,
             'hues'        => self::HUES,
@@ -176,6 +213,7 @@ final class WorkflowCatalog
                 'columns' => LoopSources::MAX_COLUMNS, 'ai_fields' => LoopSources::MAX_AI_FIELDS, 'confirm_over' => WorkflowSpec::LOOP_CONFIRM_OVER,
                 'deliveries' => WorkflowSpec::MAX_DELIVERIES, 'retries' => WorkflowSpec::RETRIES_MAX, 'wait_days' => (int)(WorkflowSpec::WAIT_MAX_SEC / 86400),
                 'routes_min' => WorkflowSpec::MIN_ROUTES, 'routes_max' => WorkflowSpec::MAX_ROUTES, 'filter_days' => WorkflowFilters::DAYS_MAX,
+                'slack_attach' => WorkflowSpec::SLACK_ATTACH_MAX, 'slack_days' => WorkflowSpec::SLACK_DAYS_MAX,
             ],
         ];
     }
@@ -220,7 +258,8 @@ final class WorkflowCatalog
             'gmail', 'outlook'        => t('Préparer ou envoyer un email'),
             'calendar', 'mscalendar'  => t('Créer un évènement'),
             'tasks', 'mstodo'         => t('Créer ou modifier une tâche'),
-            'slack', 'teams'          => t('Publier un message'),
+            'slack'                   => t('Publier ou lire des messages'),
+            'teams'                   => t('Publier un message'),
             'drive'                   => t('Créer ou modifier un document'),
             default                   => '',
         };
@@ -244,10 +283,14 @@ final class WorkflowCatalog
             'document'  => $svg('<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path d="M9 13h6M9 17h4"/>'),
             'slides'    => $svg('<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M12 16v4M8 20h8"/><path d="M7 8h6M7 11h4"/>'),
             'pdf'       => $svg('<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path d="M8.5 16v-4h1.2a1.2 1.2 0 0 1 0 2.4H8.5M13 12v4h.8a2 2 0 0 0 0-4zM17.5 12H16v4M16 14h1.2"/>'),
+            // Un fichier écrit tel quel (brique « Fichier » du menu Créer) : une feuille et des chevrons.
+            'codefile'  => $svg('<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path d="M10 12l-2 2 2 2M14 12l2 2-2 2"/>'),
             'file'      => $svg('<path d="M21.4 11.1l-9.2 9.2a6 6 0 0 1-8.5-8.5l9.2-9.2a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5"/>'),
             'kb'        => $svg('<path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/>'),
             'tool'      => $svg('<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>'),
             'clock'     => ScheduledTask::icon(16),
+            // Déclencheur prévenu à l'arrivée d'un email (push).
+            'bolt'      => $svg('<path d="M13 2L4 14h7l-1 8 9-12h-7z"/>'),
             'chat'      => $svg('<path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/>'),
             'hand'      => $svg('<path d="M18 11V6a2 2 0 0 0-4 0v5"/><path d="M14 10V4a2 2 0 0 0-4 0v6"/><path d="M10 10.5V6a2 2 0 0 0-4 0v8"/><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"/>'),
             'plus'      => $svg('<path d="M12 5v14M5 12h14"/>'),
@@ -293,6 +336,9 @@ final class WorkflowCatalog
             'field'     => $svg('<path d="M4 7V5h16v2"/><path d="M9 19h6"/><path d="M12 5v14"/>'),
             'people'    => $svg('<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>'),
             'logic'     => $svg('<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/><path d="M10 6.5h4a3 3 0 0 1 3 3V14"/>'),
+            // Appeler un workflow : un rail dans un cadre — un workflow dans le workflow.
+            // Appeler un workflow : l'icône de l'espace Workflows (barre latérale), la même partout.
+            'call'      => Workflow::icon(16),
             // Créations : les pictogrammes du menu « + » du chat (image, page web, carte).
             'create'    => $svg('<path d="M21.6 3.6l-1.3-1.3a1.2 1.2 0 0 0-1.7 0L2.4 18.6a1.2 1.2 0 0 0 0 1.7l1.3 1.3a1.2 1.2 0 0 0 1.7 0L21.6 5.4a1.2 1.2 0 0 0 0-1.8z"/><path d="M14 7l3 3"/><path d="M5 6v4M19 14v4M10 2v2M7 8H3M21 16h-4M11 3H9"/>'),
             'image'     => $svg('<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/>'),
@@ -320,6 +366,7 @@ final class WorkflowCatalog
                 'start' => t('Départ'), 'step' => t('Étape'), 'action' => t('Action'), 'create' => t('Création'),
                 'condition' => t('Condition'), 'route' => t('Décision de MIA'), 'loop' => t('Boucle'), 'gate' => t('Validation'),
                 'wait' => t('Attendre'), 'notify' => t('Me prévenir'), 'stop' => t('Arrêter le workflow'), 'end' => t('Livrable'),
+                'call' => t('Appeler un workflow'),
             ],
             'kindHelp' => [
                 'step'      => t('Un assistant lit des pièces et en remet une.'),
@@ -332,6 +379,12 @@ final class WorkflowCatalog
                 'wait'      => t('Patienter une durée, ou jusqu’à une date du dossier.'),
                 'notify'    => t('Un message sur vos appareils, sans IA.'),
                 'stop'      => t('Termine l’exécution au bout d’une voie, proprement, sans livrable.'),
+                'call'      => t('Lance un autre de vos workflows avec ses paramètres, attend sa fin et récupère son résultat.'),
+            ],
+            // Brique « Appeler un workflow » : ce qui se passe quand l'appelé s'arrête avant son livrable.
+            'callStop' => [
+                WorkflowSpec::CALL_STOP_STOP     => t('Arrêter aussi ce workflow'),
+                WorkflowSpec::CALL_STOP_CONTINUE => t('Continuer sans son résultat'),
             ],
             // Statut d'une exécution finie par « Arrêter le workflow ».
             'stopOutcomes' => [
@@ -343,6 +396,7 @@ final class WorkflowCatalog
                 'ai'     => t('Intelligence'),
                 'create' => t('Créer'),
                 'logic'  => t('Logique'),
+                'flows'  => t('Vos workflows'),
                 'tools'  => t('Agir dans un outil'),
                 'people' => t('Vous et le temps'),
             ],
@@ -357,11 +411,21 @@ final class WorkflowCatalog
                 'page'  => t('Une page web complète, illustrée ou non, rédigée avec les pièces.'),
                 'map'   => t('Un itinéraire tracé sur une carte, avec ses étapes.'),
             ],
+            // Brique « Fichier » du groupe Créer : une étape, pas un outil de création.
+            'createFile'     => t('Un fichier'),
+            'createFileHelp' => t('Un fichier de tout format, écrit par l’étape : script Python, Markdown, JSON, CSV, HTML…'),
             'imageFormats' => [
                 ''          => t('Selon l’outil'),
                 'square'    => t('Carré'),
                 'landscape' => t('Paysage'),
                 'portrait'  => t('Portrait'),
+            ],
+            // Fond et format du fichier d'une image (ImageOptions).
+            'imageOutputs' => [
+                ''     => t('Selon l’outil'),
+                'png'  => 'PNG',
+                'jpeg' => 'JPEG',
+                'webp' => 'WebP',
             ],
             'fallback' => [
                 'ask' => t('Me demander'),
@@ -375,7 +439,7 @@ final class WorkflowCatalog
                 'workflow' => t('Un autre workflow se termine'),
             ],
             'eventHelp' => [
-                'email'    => t('Gmail ou Outlook, vérifié toutes les 5 minutes. Seuls les emails arrivés après la publication le lancent.'),
+                'email'    => t('Gmail ou Outlook, dès l’arrivée de l’email (ou vérifié chaque minute). Seuls les emails arrivés après la publication le lancent.'),
                 'file'     => t('Un dossier Google Drive, vérifié toutes les 5 minutes. Chaque nouveau fichier lance une exécution.'),
                 'webhook'  => t('n8n, Zapier, un formulaire ou un script poste du JSON à une adresse secrète.'),
                 'workflow' => t('Son livrable devient la première pièce de celui-ci.'),
@@ -385,15 +449,17 @@ final class WorkflowCatalog
                 'drive' => t('Enregistrer dans Google Drive'),
                 'slack' => t('Publier dans Slack'),
                 'kb'    => t('Ajouter à une base de connaissances'),
+                'table' => t('Écrire dans une table'),
             ],
             'deliveriesShort' => [
-                'email' => t('Email'), 'drive' => t('Drive'), 'slack' => t('Slack'), 'kb' => t('Base'),
+                'email' => t('Email'), 'drive' => t('Drive'), 'slack' => t('Slack'), 'kb' => t('Base'), 'table' => t('Table'),
             ],
             'deliveryHelp' => [
                 'email' => t('Le livrable en message, les documents en pièces jointes.'),
                 'drive' => t('Un Google Doc ou un Google Sheet par pièce.'),
                 'slack' => t('Un message dans un canal.'),
                 'kb'    => t('Pour que vos assistants puissent s’en servir ensuite.'),
+                'table' => t('Ajouter ou mettre à jour des lignes d’une table de vos bases.'),
             ],
             'mailModes' => [
                 'approve' => t('Je relis et j’envoie'),
@@ -404,7 +470,41 @@ final class WorkflowCatalog
                 'approve' => t('Je valide avant'),
                 'auto'    => t('Sans validation'),
             ],
+            // Livraison dans une table : comment ses lignes y entrent.
+            'tableWrites' => [
+                'ajouter'       => t('Ajouter les lignes'),
+                'mettre_a_jour' => t('Mettre à jour les lignes'),
+                'remplacer'     => t('Tout remplacer'),
+            ],
             'units' => ['minutes' => t('minutes'), 'hours' => t('heures'), 'days' => t('jours')],
+            // Une attente d'UNE unité (« 1 minute ») : « 1 minutes » s'affichait sous la brique.
+            'unitsOne' => ['minutes' => t('minute'), 'hours' => t('heure'), 'days' => t('jour')],
+            // Brique Slack : elle publie OU elle lit (WorkflowSpec::normalizeSlack).
+            'slack' => [
+                'modes' => [
+                    WorkflowSpec::SLACK_POST => t('Publier un message'),
+                    WorkflowSpec::SLACK_READ => t('Lire des messages'),
+                ],
+                'modeHelp' => [
+                    WorkflowSpec::SLACK_POST => t('Dans un canal ou à une personne : un texte, des images, des documents.'),
+                    WorkflowSpec::SLACK_READ => t('Un canal, une conversation ou une recherche : MIA en tire une pièce.'),
+                ],
+                'to' => [
+                    WorkflowSpec::SLACK_CHANNEL => t('Dans un canal'),
+                    WorkflowSpec::SLACK_PERSON  => t('À une personne'),
+                ],
+                'from' => [
+                    WorkflowSpec::SLACK_CHANNEL => t('Un canal'),
+                    WorkflowSpec::SLACK_PERSON  => t('Une conversation'),
+                    WorkflowSpec::SLACK_SEARCH  => t('Une recherche'),
+                ],
+                'days' => [
+                    1  => t('Dernières 24 h'),
+                    7  => t('7 derniers jours'),
+                    30 => t('30 derniers jours'),
+                    90 => t('90 derniers jours'),
+                ],
+            ],
             'attachmentTypes' => LoopSources::attachmentTypeLabels(),
             'itemError' => [
                 WorkflowSpec::ITEM_ERROR_CONTINUE => t('Passer au suivant, le marquer en échec'),
@@ -427,7 +527,11 @@ final class WorkflowCatalog
                 'list'     => t('Un élément par ligne.'),
                 'table'    => t('Lignes et colonnes, exportable en Excel.'),
                 'fiche'    => t('Des champs nommés : montant, date, email… Une règle peut les lire.'),
-                'document' => t('Un fichier Word, PDF, PowerPoint ou Excel.'),
+                'document' => t('Un fichier Word, PDF, PowerPoint, Excel — ou tout autre format : Python, Markdown, JSON…'),
+                // Une pièce d'étape faite par un outil de création : l'étape prépare, l'outil fabrique.
+                'image'    => t('Une image faite par un outil Image, d’après ce que l’étape prépare.'),
+                'page'     => t('Une page web faite par un outil Page web, avec le contenu que l’étape rédige.'),
+                'map'      => t('Un itinéraire tracé par un outil Carte, d’après les étapes que l’étape liste.'),
             ],
             'fieldTypes' => [
                 'text' => t('Texte court'), 'longtext' => t('Texte long'), 'number' => t('Nombre'), 'date' => t('Date'),
@@ -438,6 +542,9 @@ final class WorkflowCatalog
                 'yesno' => t('Oui / non'), 'list' => t('Liste'),
             ],
             'docFormats' => array_combine(WorkflowSpec::DOC_FORMATS, array_map([ArtifactContract::class, 'formatLabel'], WorkflowSpec::DOC_FORMATS)),
+            // Les fichiers écrits tels quels (brique « Fichier ») : « Python (.py) ».
+            'fileFormats' => array_combine(WorkflowSpec::FILE_FORMATS, array_map(
+                static fn(string $f): string => ArtifactContract::formatLabel($f) . ' (.' . $f . ')', WorkflowSpec::FILE_FORMATS)),
             'ops'    => $ops,
             'opsFor' => $opsFor,
             'write'  => [
@@ -448,10 +555,31 @@ final class WorkflowCatalog
         ];
     }
 
+    /**
+     * Le logo de MIA tel que l'organisation l'a réglé (Marque & apparence),
+     * sinon celui livré : il marque les briques que fait le modèle de
+     * l'organisation. Une adresse de cette origine seulement.
+     */
+    public static function miaLogo(): string
+    {
+        try {
+            $logo = (string)Settings::get('logo_url', '/assets/img/logo.png');
+        } catch (\Throwable) {
+            $logo = '';
+        }
+        return self::logoPath($logo);
+    }
+
+    /** Une adresse de logo de CETTE origine (chemin « /… »), sinon le logo livré. Pure. */
+    public static function logoPath(string $logo): string
+    {
+        return preg_match('#^/(?!/)[^\s"\'<>]*$#', $logo) ? $logo : '/assets/img/logo.png';
+    }
+
     /** Silhouette d'un workflow (même dessin que MiaWorkflowRail.silhouette). */
     public static function silhouetteHtml(string $seq): string
     {
-        $k = ['d' => 'start', 's' => 'step', 'x' => 'action', 'k' => 'create', 'c' => 'condition', 'a' => 'route', 'l' => 'loop', 'g' => 'gate', 'w' => 'wait', 'n' => 'notify', 'q' => 'stop', 'e' => 'end'];
+        $k = ['d' => 'start', 's' => 'step', 'x' => 'action', 'k' => 'create', 'c' => 'condition', 'a' => 'route', 'l' => 'loop', 'g' => 'gate', 'w' => 'wait', 'n' => 'notify', 'q' => 'stop', 'p' => 'call', 'e' => 'end'];
         $out = '';
         foreach (str_split($seq) as $i => $c) {
             $shape = in_array($c, ['c', 'a'], true) ? 'd' : ($c === 'g' ? 'r' : ($c === 'l' ? 'o' : ''));
@@ -512,80 +640,274 @@ final class WorkflowCatalog
             'file'     => t('Un nouveau fichier'),
             'webhook'  => t('Appel de son adresse'),
             'workflow' => t('Après un autre workflow'),
+            WorkflowCall::TRIGGER => t('Appelé par un workflow'),
             default    => t('À la main'),
         };
     }
 
+    /** Fourchette autour de l'estimation : une réponse plus longue, une pièce plus lourde la font varier. */
+    public const ESTIMATE_LOW  = 0.6;
+    public const ESTIMATE_HIGH = 1.6;
+
     /**
-     * Coût estimé d'une exécution (CreditEstimate : les tarifs qu'applique la
-     * facturation, sur la consommation réelle des réponses de chaque modèle).
-     * Une étape = une réponse de son modèle, plus ses recherches Internet si
-     * elle lit le web ; une création = une génération de son outil ; une
-     * question à MIA (condition, décision) = un appel du modèle auxiliaire.
-     * Avant, la moyenne d'un modèle n'était jamais trouvée (clé
-     * « fournisseur::modèle::modèle » cherchée) : toutes les étapes valaient la
-     * moyenne de tous les modèles, recherches Internet oubliées. Null quand
-     * rien n'est estimable.
+     * Coût estimé d'une exécution, EXPLICITÉ (CreditEstimate : les tarifs
+     * qu'applique la facturation, sur la consommation réelle de chaque modèle).
+     * Une étape = une étape de workflow de son modèle (moyenne des étapes
+     * réelles, sinon une réponse de chat), plus ses recherches Internet si
+     * elle lit le web ; une création = une génération de son outil (et, pour
+     * une image, la rédaction de sa demande) ; une question à MIA (condition,
+     * décision, sortie d'une boucle, repérage des éléments) = un appel du
+     * modèle auxiliaire. Une seule voie est prise : la plus chère est comptée.
+     * Une boucle se paie par tour.
      *
-     * @return array{min: int, max: int}|null
+     * Rendu : `typical` (le plus probable), `min`/`max` (fourchette), `lines`
+     * (ce qui coûte, brique par brique, avec SUR QUOI l'estimation repose),
+     * `notes` (hypothèses et ce qui n'est pas compté), `history` (ce qu'ont
+     * coûté les dernières exécutions terminées — WorkflowRun::recentCredits,
+     * passé par l'appelant). Null quand rien n'est estimable ni mesuré.
+     *
+     * @param array<string,int> $counts tours connus des boucles (fenêtre de lancement)
+     * @param array{runs:int, avg:int, min:int, max:int}|null $history
+     * @return array{min:int, max:int, typical:int, lines:list<array{title:string, credits:int, note:string}>, notes:list<string>, history:?array, html:string}|null
      */
-    public static function estimate(array $def, array $choices, array $counts = []): ?array
+    public static function estimate(array $def, array $choices, array $counts = [], ?array $history = null, int $depth = 0): ?array
     {
-        $judgeLlm = class_exists('SemanticChunker') ? (string)(SemanticChunker::resolveChunkingLlm() ?? '') : '';
-        $judge = $judgeLlm !== '' ? (float)(CreditEstimate::helperCall(UsageSource::WORKFLOW_JUDGE, $judgeLlm) ?? 0) : 0.0;
-        $cost = static function (array $node) use ($choices, $judge): float {
+        $helperLlm = class_exists('SemanticChunker') ? (string)(SemanticChunker::resolveChunkingLlm() ?? '') : '';
+        $judge = $helperLlm !== '' ? (int)(CreditEstimate::helperCall(UsageSource::WORKFLOW_JUDGE, $helperLlm) ?? 0) : 0;
+        $imagePrompt = $helperLlm !== '' ? (int)(CreditEstimate::helperCall(UsageSource::IMAGE_PROMPT, $helperLlm) ?? 0) : 0;
+        $llmLabel = static fn(string $llm): string => (string)($choices['llms'][$llm] ?? (str_contains($llm, '::') ? explode('::', $llm, 2)[1] : $llm));
+
+        /**
+         * Une génération de l'outil d'une création (brique Création, ou pièce
+         * d'une étape) et, pour une image, la rédaction de sa demande.
+         *
+         * @return array{0: int, 1: string}
+         */
+        $creation = static function (?int $toolId, string $kind) use ($imagePrompt): array {
+            $tool = (int)$toolId > 0 ? ChatTool::findById((int)$toolId) : null;
+            if ($tool === null) {
+                return [0, t('Aucun outil choisi : non compté')];
+            }
+            $use = CreditEstimate::toolUse($tool);
+            if ($use === null) {
+                return [0, t('« {outil} » · aucun tarif connu : non compté', ['outil' => (string)$tool['name']])];
+            }
+            $credits = $use['credits'];
+            $note = $use['basis'] === 'history'
+                ? t('« {outil} » · moyenne de ses {n} dernières générations', ['outil' => (string)$tool['name'], 'n' => $use['samples']])
+                : t('« {outil} » · son tarif, sur une génération type', ['outil' => (string)$tool['name']]);
+            if ($kind === 'image' && $imagePrompt > 0) {
+                // La demande d'image est d'abord rédigée par un modèle (prompt visuel).
+                $credits += $imagePrompt;
+                $note .= ' · ' . t('rédaction de la demande comprise');
+            }
+            return [$credits, $note];
+        };
+
+        /** @return array{0: int, 1: string} crédits, sur quoi ils reposent */
+        $cost = static function (array $node) use ($choices, $judge, $llmLabel, $creation, $depth): array {
+            if ($node['type'] === WorkflowSpec::TYPE_CALL) {
+                return self::callCost($node, $choices, $depth);
+            }
             if ($node['type'] === WorkflowSpec::TYPE_STEP || $node['type'] === WorkflowSpec::TYPE_ACTION) {
                 $llm = WorkflowSpec::effectiveLlm($node, $choices);
-                $credits = (float)(CreditEstimate::chatReply($llm)['credits'] ?? 0);
-                if (in_array('web', (array)($node['sources'] ?? []), true)) {
-                    $credits += (float)(CreditEstimate::webSearch($llm) ?? 0) * CreditEstimate::searchesPerReply();
+                $step = $llm !== '' ? CreditEstimate::workflowStep($llm) : null;
+                if ($step === null) {
+                    return [0, t('{modele} · aucun tarif connu : non compté', ['modele' => $llmLabel($llm)])];
                 }
-                return $credits;
+                $credits = (float)$step['credits'];
+                $note = match ($step['basis']) {
+                    'workflow' => t('{modele} · moyenne de {n} étapes de workflow réelles', ['modele' => $llmLabel($llm), 'n' => $step['samples']]),
+                    'model'    => t('{modele} · moyenne de {n} réponses de ce modèle', ['modele' => $llmLabel($llm), 'n' => $step['samples']]),
+                    'instance' => t('{modele} · son tarif, sur la longueur moyenne des réponses de l’organisation', ['modele' => $llmLabel($llm)]),
+                    default    => t('{modele} · son tarif, sur une réponse type (pas encore d’historique)', ['modele' => $llmLabel($llm)]),
+                };
+                if (in_array('web', (array)($node['sources'] ?? []), true) && ($search = CreditEstimate::webSearch($llm)) !== null) {
+                    $credits += $search * CreditEstimate::searchesPerReply();
+                    $note .= ' · ' . t('recherches Internet comprises');
+                }
+                $form = (string)($node['output']['form'] ?? '');
+                if ($node['type'] === WorkflowSpec::TYPE_STEP && WorkflowSpec::isCreationForm($form)) {
+                    // Sa pièce est une création : l'outil la fabrique après le tour.
+                    [$made, $madeNote] = $creation($node['output']['tool_id'] ?? null, $form);
+                    $credits += $made;
+                    $note .= ' · ' . t('puis la création : {detail}', ['detail' => $madeNote]);
+                }
+                return [(int)round($credits), $note];
             }
             if ($node['type'] === WorkflowSpec::TYPE_CREATE) {
-                $tool = (int)($node['tool_id'] ?? 0) > 0 ? ChatTool::findById((int)$node['tool_id']) : null;
-                return (float)(($tool !== null ? CreditEstimate::toolUse($tool) : null)['credits'] ?? 0);
+                return $creation($node['tool_id'] ?? null, (string)($node['kind'] ?? ''));
             }
-            if (($node['type'] === WorkflowSpec::TYPE_CONDITION && $node['mode'] === 'question') || $node['type'] === WorkflowSpec::TYPE_ROUTE) {
-                return $judge;
+            if ($node['type'] === WorkflowSpec::TYPE_CONDITION && ($node['mode'] ?? '') === 'question') {
+                return [$judge, t('Question posée à MIA')];
             }
-            return 0.0;
+            if ($node['type'] === WorkflowSpec::TYPE_ROUTE) {
+                return [$judge, t('Choix de la voie par MIA')];
+            }
+            return [0, ''];
         };
-        $total = 0.0;
-        foreach ($def['nodes'] as $node) {
-            $total += $cost($node);
-            // Une seule voie est prise : on compte la plus chère.
-            $lanes = 0.0;
-            foreach (WorkflowSpec::branchesOf($node) as $l) {
-                $laneCost = 0.0;
-                foreach ($l['nodes'] as $c) {
-                    $laneCost += $cost($c);
-                }
-                $lanes = max($lanes, $laneCost);
+
+        $total = 0;
+        $lines = [];
+        $notes = [];
+        $add = static function (string $title, int $credits, string $note) use (&$lines, &$total): void {
+            $total += $credits;
+            if ($credits > 0 || $note !== '') {
+                $lines[] = ['title' => $title, 'credits' => $credits, 'note' => $note];
             }
-            $total += $lanes;
+        };
+        $assumedLoop = false;
+        foreach ($def['nodes'] as $node) {
+            $title = trim((string)($node['title'] ?? '')) !== '' ? (string)$node['title'] : t('Brique sans titre');
             if ($node['type'] === WorkflowSpec::TYPE_LOOP) {
+                $each = $node['mode'] === WorkflowSpec::LOOP_EACH;
+                $known = $each && isset($counts[$node['key']]);
                 // Une boucle se paie par tour : le nombre d'éléments connu (un
                 // fichier joint à la fenêtre de lancement), sinon la moitié des
                 // éléments permis (au plus 25) pour « pour chaque », deux tours
-                // pour « jusqu'à ». Repérer les éléments avec MIA : un appel.
-                $turns = $node['mode'] === WorkflowSpec::LOOP_EACH
-                    ? (isset($counts[$node['key']]) ? max(0, (int)$counts[$node['key']]) : max(1, min(25, (int)ceil(min((int)$node['max'], Workflow::loopMax()) / 2))))
+                // pour « jusqu'à ».
+                $turns = $each
+                    ? ($known ? max(0, (int)$counts[$node['key']]) : max(1, min(25, (int)ceil(min((int)$node['max'], Workflow::loopMax()) / 2))))
                     : 2;
-                if (($node['source']['kind'] ?? '') === LoopSources::AI) {
-                    $total += $judge;
-                }
+                $perTurn = 0;
                 foreach ($node['body'] as $c) {
-                    $total += $cost($c) * $turns;
+                    $perTurn += $cost($c)[0];
                 }
-                if ($node['mode'] === WorkflowSpec::LOOP_UNTIL && $node['until']['mode'] === 'question') {
-                    $total += $judge * $turns;
+                if (!$each && ($node['until']['mode'] ?? '') === 'question') {
+                    $perTurn += $judge;
+                }
+                $credits = $turns * $perTurn;
+                $note = match (true) {
+                    $known => t('{n} tours (éléments comptés au lancement) × ≈ {c} crédits', ['n' => $turns, 'c' => $perTurn]),
+                    $each  => t('{n} tours supposés × ≈ {c} crédits — le nombre réel suit les éléments trouvés', ['n' => $turns, 'c' => $perTurn]),
+                    default => t('{n} tours supposés (jusqu’à {max}) × ≈ {c} crédits', ['n' => $turns, 'max' => (int)$node['max'], 'c' => $perTurn]),
+                };
+                if (($node['source']['kind'] ?? '') === LoopSources::AI) {
+                    $credits += $judge;
+                    $note .= ' · ' . t('repérage des éléments par MIA compris');
+                }
+                $assumedLoop = $assumedLoop || !$known;
+                $add($title, $credits, $note);
+                continue;
+            }
+            [$credits, $note] = $cost($node);
+            if ($credits > 0 || $note !== '') {
+                $add($title, $credits, $note);
+            }
+            // Une seule voie est prise : on compte la plus chère.
+            $best = 0;
+            $bestLabel = '';
+            foreach (WorkflowSpec::branchesOf($node) as $laneKey => $l) {
+                $laneCost = 0;
+                foreach ($l['nodes'] as $c) {
+                    $laneCost += $cost($c)[0];
+                }
+                if ($laneCost > $best) {
+                    $best = $laneCost;
+                    $bestLabel = WorkflowSpec::laneLabel($node, (string)$laneKey);
                 }
             }
+            if ($best > 0) {
+                $add(t('{titre} — ses voies', ['titre' => $title]), $best, t('la plus chère est comptée : « {voie} »', ['voie' => $bestLabel]));
+            }
         }
-        if ($total <= 0) {
+
+        if ($total <= 0 && $history === null) {
             return null;
         }
-        return ['min' => (int)max(1, floor($total * 0.6)), 'max' => (int)max(1, ceil($total * 1.6))];
+        if ($assumedLoop) {
+            $notes[] = t('Une boucle se paie par tour : son coût réel suit le nombre d’éléments qu’elle traite.');
+        }
+        $notes[] = t('Non compté : les nouveaux essais après une panne, les pièces renvoyées par une validation et les recherches Internet en plus.');
+        $notes[] = t('La fourchette tient compte d’une réponse plus longue ou d’une pièce plus lourde que d’habitude.');
+
+        return [
+            'min'     => $total > 0 ? (int)max(1, floor($total * self::ESTIMATE_LOW)) : 0,
+            'max'     => $total > 0 ? (int)max(1, ceil($total * self::ESTIMATE_HIGH)) : 0,
+            'typical' => CreditEstimate::round($total),
+            // Total brut : le coût d'un workflow APPELÉ par un autre (callCost).
+            'raw'     => $total,
+            'lines'   => $lines,
+            'notes'   => $notes,
+            'history' => $history,
+            'html'    => self::estimateHtml($total, $lines, $notes, $history),
+        ];
+    }
+
+    /**
+     * Coût d'un appel de workflow : celui de l'APPELÉ — la moyenne de ses
+     * dernières exécutions réelles, sinon son estimation (ses propres appels
+     * compris, sans jamais tourner en rond).
+     *
+     * @return array{0: int, 1: string}
+     */
+    private static function callCost(array $node, array $choices, int $depth): array
+    {
+        $id = (int)($node['workflow_id'] ?? 0);
+        $name = (string)($choices['workflows'][$id]['name'] ?? '');
+        if ($id <= 0 || $name === '') {
+            return [0, t('Aucun workflow choisi : non compté')];
+        }
+        try {
+            $recent = WorkflowRun::recentCredits($id);
+            if ($recent !== null) {
+                return [(int)$recent['avg'], I18n::plural((int)$recent['runs'],
+                    '« {nom} » · le coût de sa dernière exécution', '« {nom} » · moyenne de ses {n} dernières exécutions', ['nom' => $name])];
+            }
+            $child = $depth < WorkflowCall::DEPTH_MAX ? Workflow::findById($id) : null;
+            $est = $child !== null && $child['published'] !== null ? self::estimate($child['published'], $choices, [], null, $depth + 1) : null;
+            if ($est !== null && (int)$est['raw'] > 0) {
+                return [(int)$est['raw'], t('« {nom} » · son coût estimé, brique par brique', ['nom' => $name])];
+            }
+        } catch (\Throwable $e) {
+            error_log('[Workflows] coût du workflow appelé #' . $id . ' : ' . $e->getMessage());
+        }
+        return [0, t('« {nom} » · coût inconnu : non compté', ['nom' => $name])];
+    }
+
+    /**
+     * Le bloc « coût d'une exécution » tel que l'éditeur et la fenêtre de
+     * lancement l'affichent — rendu ICI, une fois, traduit et échappé : les
+     * deux scripts le posent tel quel (innerHTML), aucun libellé en JavaScript.
+     *
+     * @param list<array{title:string, credits:int, note:string}> $lines
+     * @param list<string> $notes
+     * @param array{runs:int, avg:int, min:int, max:int}|null $history
+     */
+    public static function estimateHtml(int $total, array $lines, array $notes, ?array $history): string
+    {
+        $e = static fn(string $v): string => htmlspecialchars($v, ENT_QUOTES, 'UTF-8');
+        $c = static fn(int $n): string => class_exists('Format') ? Format::credits($n) : (string)$n;
+        $html = '';
+        if ($total > 0) {
+            $html .= '<b>' . $e(t('≈ {n} crédits par exécution', ['n' => $c(CreditEstimate::round($total))])) . '</b>'
+                . '<span>' . $e(t('Entre {min} et {max} selon la longueur des réponses et des pièces.', [
+                    'min' => $c((int)max(1, floor($total * self::ESTIMATE_LOW))),
+                    'max' => $c((int)max(1, ceil($total * self::ESTIMATE_HIGH))),
+                ])) . '</span>';
+        } else {
+            $html .= '<span>' . $e(t('Coût estimé disponible après quelques conversations sur ces modèles.')) . '</span>';
+        }
+        if ($history !== null) {
+            $html .= '<span class="wf-est-real">' . $e($history['runs'] > 1
+                ? t('Les {n} dernières exécutions ont coûté {avg} crédits en moyenne (de {min} à {max}).', [
+                    'n' => $history['runs'], 'avg' => $c($history['avg']), 'min' => $c($history['min']), 'max' => $c($history['max']),
+                ])
+                : t('La dernière exécution a coûté {n} crédits.', ['n' => $c($history['avg'])])) . '</span>';
+        }
+        if ($lines !== []) {
+            $html .= '<details class="wf-est-detail"><summary>' . $e(t('Détail de l’estimation')) . '</summary><ul>';
+            foreach ($lines as $l) {
+                $html .= '<li><span>' . $e($l['title']) . '</span><b>' . $e($l['credits'] > 0 ? '≈ ' . $c($l['credits']) : '—') . '</b>'
+                    . ($l['note'] !== '' ? '<small>' . $e($l['note']) . '</small>' : '') . '</li>';
+            }
+            $html .= '</ul>';
+            foreach ($notes as $n) {
+                $html .= '<p>' . $e($n) . '</p>';
+            }
+            $html .= '</details>';
+        }
+
+        return '<div class="wf-est">' . $html . '</div>';
     }
 }

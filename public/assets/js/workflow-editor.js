@@ -157,12 +157,32 @@
         return base;
     }
 
+    /** Briques dont le type de fichier s'écrit à la main (« Autre extension… » choisi). */
+    var otherFormat = {};
+
+    /** Ce que fabrique un outil de création (WorkflowSpec::CREATE_KINDS). */
+    var CREATE_KINDS = ['image', 'page', 'map'];
+
     /** Titre et nom de pièce d'une création neuve, par nature. */
     var CREATE_DEFAULTS = {
         image: [T('Créer une image'), T('Image')],
         page:  [T('Créer une page web'), T('Page web')],
         map:   [T('Tracer un itinéraire'), T('Itinéraire')],
     };
+
+    /** Documents rédigés qui s'habillent au modèle de l'entreprise (WorkflowSpec::TEMPLATE_FORMATS). */
+    var TEMPLATE_FORMATS = ['docx', 'pdf', 'pptx'];
+    /** Documents rédigés (Markdown, tableau) : les autres formats sont des fichiers écrits tels quels (ArtifactContract::isRawFile). */
+    var REDACTED_FORMATS = ['docx', 'pdf', 'rtf', 'pptx', 'md', 'xlsx'];
+    function isRawFile(format) { return !!format && REDACTED_FORMATS.indexOf(format) < 0; }
+    /** Extension propre (FileFormats::normalizeExtension) : minuscules, lettres et chiffres, au moins une lettre. */
+    function cleanExt(v) {
+        var e = String(v || '').trim().toLowerCase().replace(/^\.+/, '').replace(/[^a-z0-9]/g, '').slice(0, 10);
+        return /[a-z]/.test(e) ? e : '';
+    }
+    function formatName(f) {
+        return (L.docFormats || {})[f] || (L.fileFormats || {})[f] || ('.' + f);
+    }
 
     /** Premier outil de création en service d'une nature (sinon null). */
     function firstCreationTool(kind) {
@@ -182,11 +202,18 @@
             };
         }
         if (type === 'step') {
-            return {
+            var step = {
                 key: key, type: 'step', title: T('Nouvelle étape'), profile_id: null, llm: '', instruction: '', reads: [], sources: [],
                 kb_ids: [], tool_ids: [], write: 'none', auto_send_mail: false, review: false, filters: blankFilters(),
                 output: { key: newKey('p'), name: uniquePieceName(T('Résultat')), form: 'text' }, on_error: onError,
             };
+            if (preset && preset.file) {
+                // Brique « Fichier » du menu Créer : une étape qui remet un fichier
+                // de tout format, écrit par son modèle (script, Markdown, données…).
+                step.title = T('Créer un fichier');
+                step.output = { key: step.output.key, name: uniquePieceName(T('Fichier')), form: 'document', format: 'md', template: false };
+            }
+            return step;
         }
         if (type === 'action') {
             return { key: key, type: 'action', title: T('Nouvelle action'), target: '', tool_id: null, llm: '', instruction: '', reads: [], write: 'approve', auto_send_mail: false, filters: blankFilters(), on_error: onError };
@@ -241,6 +268,15 @@
         if (type === 'stop') {
             return { key: key, type: 'stop', title: T('Arrêter le workflow'), message: '', outcome: 'done' };
         }
+        if (type === 'call') {
+            // Appeler un workflow : le workflow se choisit dans le volet (ou
+            // dans le menu d'ajout), ses paramètres et sa pièce suivent.
+            return {
+                key: key, type: 'call', title: T('Appeler un workflow'), workflow_id: null, params: {}, on_stop: 'stop',
+                output: { key: newKey('p'), name: uniquePieceName(T('Résultat du workflow')), from: '', form: 'text' },
+                on_error: { retries: 0, then: 'stop' },
+            };
+        }
         // Validation : relit la dernière pièce disponible à cet endroit.
         var avail = Object.keys(availableAt(where));
         return {
@@ -252,7 +288,7 @@
     /** Filtres vides (miroir de WorkflowFilters::blank). */
     function blankFilters() {
         return {
-            mail: { from: '', subject: '', words: '', attachment: false, unread: false, days: 0 },
+            mail: { from: '', subject: '', words: '', attachment: false, unread: false, days: 0, exclude: '', to: '' },
             drive: { folder: '', name: '', kind: '', days: 0 },
             recipients: '',
         };
@@ -326,6 +362,13 @@
         } else {
             html = '<span class="wf-pill ok">' + esc(T('Publié · version {v}', { v: w.published_version })) + '</span>';
         }
+        // L'historique des VERSIONS (celui des lancements est le bouton
+        // « Lancements ») : chaque version publiée se revoit, et le brouillon
+        // peut repartir de l'une d'elles.
+        if (w.published_version > 0) {
+            html += '<button type="button" class="wf-ver-btn" data-versions title="' + esc(T('Historique des versions publiées')) + '">'
+                + icon('history') + esc(T('Versions')) + '<span class="wf-count is-muted">' + esc(String(w.published_version)) + '</span></button>';
+        }
         statusEl.innerHTML = html;
         var n = state.issues.length;
         issueCount.hidden = n === 0;
@@ -387,6 +430,8 @@
 
     function save() {
         clearTimeout(state.saveTimer);
+        // Suppression en route (fenêtre de confirmation) : plus rien à enregistrer.
+        if (state.deleting) { return Promise.resolve(); }
         if (state.saving) { state.pendingSave = true; return Promise.resolve(); }
         state.saving = true;
         setSave('saving', T('Enregistrement…'));
@@ -404,7 +449,7 @@
             setSave('', T('Brouillon enregistré'));
             renderRail();
             renderStatus();
-            if (state.selected === null) { renderInspector(); } else { refreshNodeIssues(); }
+            if (state.selected === null) { renderInspector(); } else if (state.selected !== VERSIONS) { refreshNodeIssues(); }
             if (state.pendingSave) { state.pendingSave = false; return save(); }
             return null;
         }).catch(function () {
@@ -467,6 +512,112 @@
         if (key !== null) { spotlight(spot); }
     }
 
+    /** Dépose le document de référence d'un champ Fichier du départ. */
+    function uploadReference(i, input) {
+        var f = state.def.start.fields[i];
+        var file = input.files && input.files[0];
+        if (!f || !file) { return; }
+        var fd = new FormData();
+        fd.append('file', file);
+        setSave('saving', T('Envoi du document…'));
+        fetch('/workflows/' + state.workflow.id + '/reference', { method: 'POST', body: fd, headers: { Accept: 'application/json', 'X-CSRF-Token': csrf() } })
+            .then(function (r) { return r.json().catch(function () { return { ok: false }; }); })
+            .then(function (j) {
+                if (!j.ok || !j.reference) { setSave('error', j.error || T('Le document n’a pas pu être envoyé.')); return; }
+                f.reference = j.reference;
+                changed({ inspector: true });
+            })
+            .catch(function () { setSave('error', T('Le document n’a pas pu être envoyé.')); });
+    }
+
+    // ------------------------------------------------------------------
+    // Historique des versions (retour du 2026-11-04)
+    // ------------------------------------------------------------------
+
+    var VERSIONS = '__versions';
+
+    function openVersions() {
+        state.highlight = null;
+        state.selected = VERSIONS;
+        state.versions = state.versions || { list: null, view: null, error: '' };
+        renderRail();
+        renderInspector();
+        setDrawer(true);
+        var tz = '';
+        try { tz = Intl.DateTimeFormat().resolvedOptions().timeZone || ''; } catch (err) { tz = ''; }
+        fetch('/workflows/' + state.workflow.id + '/versions' + (tz ? '?tz=' + encodeURIComponent(tz) : ''), { headers: { Accept: 'application/json' } })
+            .then(function (r) { return r.json(); })
+            .then(function (j) {
+                state.versions.list = j.ok ? (j.versions || []) : [];
+                state.versions.error = j.ok ? '' : (j.error || '');
+                if (state.selected === VERSIONS) { renderInspector(); }
+            })
+            .catch(function () { state.versions.list = []; state.versions.error = T('Réseau indisponible — réessayez.'); if (state.selected === VERSIONS) { renderInspector(); } });
+    }
+
+    function versionLines(lines) {
+        return '<ol class="wf-ver-rail">' + (lines || []).map(function (l) {
+            return '<li data-kind="' + esc(l.kind || 'step') + '"><span class="wf-ver-ic">' + icon(l.kind === 'create' ? 'image' : (l.kind || 'step')) + '</span><span><b>' + esc(l.title || '') + '</b>'
+                + (l.sub ? '<small>' + esc(l.sub) + '</small>' : '') + '</span></li>';
+        }).join('') + '</ol>';
+    }
+
+    function versionsPanel() {
+        var v = state.versions || {};
+        // Même tête que les autres volets : sans le bouton Fermer, le volet
+        // (plein écran au téléphone) ne se refermait qu'avec Échap.
+        var head = '<div class="wf-ins-head"><div class="wf-ins-kicker">' + icon('history') + esc(T('Versions')) + closeBtn() + '</div>'
+            + '<h3>' + esc(T('Versions publiées')) + '</h3><p class="wf-hint">' + esc(T('Chaque publication est gardée. Revoyez-en une, ou faites-en repartir le brouillon : la version en service ne change qu’à la prochaine publication.')) + '</p></div>';
+        if (v.list === null || v.list === undefined) { return head + '<p class="wf-hint">' + esc(T('Chargement…')) + '</p>'; }
+        if (v.error) { return head + '<p class="wf-hint">' + esc(v.error) + '</p>'; }
+        if (!v.list.length) { return head + '<p class="wf-hint">' + esc(T('Aucune version publiée pour l’instant.')) + '</p>'; }
+        var items = v.list.map(function (x) {
+            var open = v.view && v.view.version === x.version;
+            var meta = [x.date ? (x.recovered ? T('lancée le {date}', { date: x.date }) : T('publiée le {date}', { date: x.date })) : '',
+                window.tn ? window.tn(x.bricks, '{n} brique', '{n} briques') : String(x.bricks)].filter(Boolean).join(' · ');
+            return '<li class="wf-ver' + (open ? ' is-open' : '') + '"><div class="wf-ver-head"><b>' + esc(T('Version {v}', { v: x.version })) + '</b>'
+                + (x.current ? '<span class="wf-pill ok">' + esc(T('En service')) + '</span>' : '')
+                + (x.recovered ? '<span class="wf-pill" title="' + esc(T('Reconstituée depuis une de ses exécutions : elle a été publiée avant l’historique des versions.')) + '">' + esc(T('Reconstituée')) + '</span>' : '') + '</div>'
+                + '<small>' + esc(meta) + '</small>'
+                + '<div class="wf-chips"><button type="button" class="wf-btn sm" data-ver-view="' + x.version + '">' + icon('eye') + esc(open ? T('Masquer') : T('Revoir')) + '</button>'
+                + (can.edit === false ? '' : '<button type="button" class="wf-btn sm" data-ver-restore="' + x.version + '">' + icon('retry') + esc(T('Repartir de cette version')) + '</button>') + '</div>'
+                + (open ? (v.view.lines ? (v.view.objective ? '<p class="wf-hint">' + esc(v.view.objective) + '</p>' : '') + versionLines(v.view.lines)
+                    + (v.view.same_as_draft ? '<p class="wf-hint">' + esc(T('Le brouillon est identique à cette version.')) + '</p>' : '') : '<p class="wf-hint">' + esc(T('Chargement…')) + '</p>') : '')
+                + '</li>';
+        }).join('');
+        return head + '<ul class="wf-vers">' + items + '</ul>';
+    }
+
+    function viewVersion(n) {
+        var v = state.versions;
+        if (v.view && v.view.version === n) { v.view = null; renderInspector(); return; }
+        v.view = { version: n };
+        renderInspector();
+        fetch('/workflows/' + state.workflow.id + '/versions/' + n, { headers: { Accept: 'application/json' } })
+            .then(function (r) { return r.json(); })
+            .then(function (j) {
+                if (!state.versions.view || state.versions.view.version !== n) { return; }
+                state.versions.view = j.ok ? j.version : { version: n, lines: [], objective: j.error || '' };
+                if (state.selected === VERSIONS) { renderInspector(); }
+            });
+    }
+
+    function restoreVersion(n) {
+        if (!window.confirm(T('Le brouillon va repartir de la version {v} : ce que vous avez changé depuis sera remplacé. La version en service ne change pas tant que vous ne publiez pas. Continuer ?', { v: n }))) { return; }
+        clearTimeout(state.saveTimer);
+        var go = function () {
+            if (state.saving) { setTimeout(go, 200); return; }
+            fetch('/workflows/' + state.workflow.id + '/versions/' + n + '/restore', { method: 'POST', headers: { Accept: 'application/json', 'X-CSRF-Token': csrf() } })
+                .then(function (r) { return r.json(); })
+                .then(function (j) {
+                    if (!j.ok) { setSave('error', j.error || T('Réseau indisponible — réessayez.')); return; }
+                    window.location.reload();
+                })
+                .catch(function () { setSave('error', T('Réseau indisponible — réessayez.')); });
+        };
+        go();
+    }
+
     /** Les réglages du workflow. */
     function openOverview(spot) {
         if (!(state.open && state.selected === null)) { state.highlight = null; }
@@ -484,7 +635,9 @@
             node.title = preset.title || node.title;
             var tg = (cat.targets || []).filter(function (t) { return t.key === preset.target; })[0];
             node.tool_id = tg && tg.kind === 'tool' && tg.tools[0] ? tg.tools[0].id : null;
+            if (preset.target === 'slack') { node.slack = slackDefaults(); }
         }
+        if (preset && preset.workflow) { pickCall(node, preset.workflow, availableAt(where)); }
         var list = listAt(where);
         list.splice(where.index, 0, node);
         state.selected = node.key;
@@ -607,16 +760,32 @@
         if (!creates.length) {
             creates = [item('create', { label: T('Créer une image ou une page'), help: T('Aucun outil de création ne vous est ouvert : un administrateur les ouvre à vos groupes dans Outils.'), off: true, disabled: true })];
         }
+        // Un fichier de tout format (Python, Markdown, JSON…) : écrit par le
+        // modèle de l'étape, sans outil — toujours proposé.
+        creates.unshift(item('step', { label: L.createFile || T('Un fichier'), help: L.createFileHelp || '', ic: icon('codefile'), hue: h.create, sfile: true }));
+        // Vos workflows : chacun s'appelle comme une brique (les six premiers,
+        // publiés d'abord) ; au-delà, on choisit dans le volet.
+        var others = callableWorkflows().slice().sort(function (a, b) { return (b.published ? 1 : 0) - (a.published ? 1 : 0); });
+        var flows = others.slice(0, 6).map(function (w) {
+            return item('call', { label: w.name, help: w.published ? T('Appeler ce workflow, récupérer son résultat') : T('Pas encore publié'), hue: w.color || h.call, wid: w.id });
+        });
+        if (!others.length) {
+            flows = [item('call', { help: T('Créez d’abord un autre workflow : c’est lui que cette brique appellera.'), off: true, disabled: true })];
+        } else if (others.length > 6) {
+            flows.push(item('call', { label: T('Un autre workflow…'), help: H.call || '' }));
+        }
         var groups = [
             { key: 'ai', items: [item('step'), inner ? null : item('route')] },
             { key: 'create', items: creates },
             { key: 'logic', items: inner
                 ? [where.lane === 'body' ? item('condition', { help: T('Trier les éléments : si non, passer à l’élément suivant.') }) : null, item('wait'), canStop ? item('stop') : null]
                 : [item('condition'), item('loop'), item('wait')] },
+            { key: 'flows', items: flows },
             { key: 'tools', items: (cat.targets || []).map(function (t) {
                 return item('action', {
                     label: t.label, help: t.available ? (t.verb || (K.action || '')) : (t.reason || ''), ic: t.icon,
-                    target: t.key, title: t.verb || t.label, off: !t.available,
+                    // Slack publie OU lit : son titre se règle avec le mode.
+                    target: t.key, title: t.key === 'slack' ? T('Publier dans Slack') : (t.verb || t.label), off: !t.available,
                 });
             }).concat([item('action', { label: T('Autre action'), help: H.action || '' })]) },
             { key: 'people', items: [item('gate'), item('notify')] },
@@ -638,7 +807,7 @@
         addPop.innerHTML = '<div class="h">' + esc(head) + '</div>'
             + '<label class="wf-addpop-search">' + icon('search') + '<input type="search" placeholder="' + esc(T('Chercher une brique ou un outil…')) + '" aria-label="' + esc(T('Chercher une brique ou un outil…')) + '"></label>'
             + '<div class="wf-addpop-list">' + groups.map(function (g) {
-                return '<section data-group="' + g.key + '"><h5>' + icon(({ ai: 'spark', create: 'create', logic: 'logic', tools: 'tool' })[g.key] || 'people')
+                return '<section data-group="' + g.key + '"><h5>' + icon(({ ai: 'spark', create: 'create', logic: 'logic', tools: 'tool', flows: 'call' })[g.key] || 'people')
                     + esc((L.groups || {})[g.key] || g.key) + '</h5>' + g.items.map(function (it) {
                         var i = flat.push(it) - 1;
                         return '<button type="button" role="menuitem" data-i="' + i + '" style="--hue:' + esc(it.hue || 'var(--accent)') + '"' + (it.off ? ' class="is-off"' : '') + '>'
@@ -656,7 +825,7 @@
             var it = flat[+b.getAttribute('data-i')];
             if (it.disabled) { return; }
             closeAddMenu();
-            insertNode(it.kind, where, it.target ? { target: it.target, title: it.title } : (it.ckind ? { kind: it.ckind } : null));
+            insertNode(it.kind, where, it.target ? { target: it.target, title: it.title } : (it.ckind ? { kind: it.ckind } : (it.sfile ? { file: true } : (it.wid ? { workflow: it.wid } : null))));
         });
         var search = addPop.querySelector('input');
         search.addEventListener('input', function () {
@@ -908,7 +1077,9 @@
         var head = accept === 'email' ? T('Adresses du dossier') : T('Pièces du dossier disponibles ici');
         mentionPop.innerHTML = '<div class="h">' + icon('at') + esc(head) + '</div>' + (list.length ? list.slice(0, 40).map(function (p, i) {
             var nature = p.form === 'field' ? T('Champ · {type}', { type: (L.ficheTypes || {})[p.ftype] || p.ftype }) : (p.item ? T('Élément en cours') : (F[p.form] || p.form));
-            var name = p.form === 'field' ? '<span class="wf-mp-parent">' + esc(p.parent) + FIELD_SEP + '</span>' + esc(p.label) : esc(p.name);
+            // Le NOM du champ reste lisible, c'est la Fiche qui se raccourcit : « Informations
+            // de départ › Cl… » ne disait plus de quel champ il s'agissait (recette du 2026-11-09).
+            var name = p.form === 'field' ? '<span class="wf-mp-parent">' + esc(p.parent) + FIELD_SEP + '</span><span class="wf-mp-label">' + esc(p.label) + '</span>' : esc(p.name);
             return '<button type="button" role="option" data-k="' + esc(p.key) + '" class="' + (p.form === 'field' ? 'is-field' : '') + (i === 0 ? ' is-on' : '') + '" style="--c:' + esc(p.color) + '">'
                 + '<span class="wf-mp-ic">' + icon(p.form === 'field' ? 'field' : (p.form === 'file' ? 'file' : p.form)) + '</span><span class="wf-mp-name">' + name + '</span><small>' + esc(nature) + '</small></button>';
         }).join('') : '<p class="wf-mp-none">' + esc(accept === 'email'
@@ -999,6 +1170,7 @@
         var t = String(target || '');
         if (t.indexOf('field:') === 0) { return 'fields'; }
         if (t.indexOf('delivery:') === 0) { return t; }
+        if (t.indexOf('param:') === 0) { return 'params'; }
         var map = {
             llm: current() && current().type === 'action' ? 'llm' : 'profile', schedule: 'trigger', returns_to: 'options', collect: 'output',
             filters: current() && current().type === 'step' ? 'sources' : 'filters', nodes: 'issues',
@@ -1026,6 +1198,14 @@
     function radio(act, val, on, title, small, off) {
         return '<button type="button" class="wf-radio' + (on ? ' is-on' : '') + (off ? ' is-off' : '') + '" data-act="' + esc(act) + '" data-val="' + esc(val) + '"'
             + (off ? ' aria-disabled="true"' : '') + '><i></i><b>' + esc(title) + '</b>' + (small ? '<small>' + esc(small) + '</small>' : '') + '</button>';
+    }
+    /**
+     * Un « ? » qui porte une aide (règle, exemples) : affichée au survol, au
+     * clavier ou au toucher dans UNE bulle posée sur la page (wf-bubble).
+     */
+    function hintDot(label, hint, examples) {
+        var text = hint + (examples ? '\n' + T('Exemples : {ex}', { ex: examples }) : '');
+        return '<span class="wf-hint-dot" tabindex="0" role="img" data-hint="' + esc(text) + '" aria-label="' + esc(T('Aide : {champ}', { champ: label })) + '">?</span>';
     }
     function check(bind, on, label, small) {
         return '<label class="wf-check"><input type="checkbox" data-bind="' + esc(bind) + '"' + (on ? ' checked' : '') + '><span>' + esc(label)
@@ -1058,6 +1238,10 @@
             var head = insHost.querySelector('.wf-ins-head');
             if (head) { head.insertAdjacentHTML('afterend', html); }
         }
+        // Appel d'un workflow : l'alerte de chaque paramètre, sous son champ.
+        insHost.querySelectorAll('[data-param-issues]').forEach(function (el) {
+            el.innerHTML = paramAlerts(state.selected, el.getAttribute('data-param-issues'));
+        });
     }
 
     function headFor(kind, hue, titleBind, titleVal) {
@@ -1076,12 +1260,13 @@
         closeMention();
         var key = state.selected;
         if (key === null) { insHost.innerHTML = overview(); return; }
+        if (key === VERSIONS) { insHost.innerHTML = versionsPanel(); return; }
         if (key === 'start') { insHost.innerHTML = startInspector(); afterStart(); afterInspector(); return; }
         if (key === 'end') { insHost.innerHTML = endInspector(); afterInspector(); return; }
         var at = find(key);
         if (!at) { state.selected = null; insHost.innerHTML = overview(); return; }
         var n = at.node;
-        var inspect = { step: stepInspector, action: actionInspector, create: createInspector, condition: conditionInspector, route: routeInspector, loop: loopInspector, gate: gateInspector, wait: waitInspector, notify: notifyInspector, stop: stopInspector }[n.type] || gateInspector;
+        var inspect = { step: stepInspector, action: actionInspector, create: createInspector, condition: conditionInspector, route: routeInspector, loop: loopInspector, gate: gateInspector, wait: waitInspector, notify: notifyInspector, stop: stopInspector, call: callInspector }[n.type] || gateInspector;
         insHost.innerHTML = inspect(n) + brickTools(n, at);
         afterInspector();
     }
@@ -1131,8 +1316,10 @@
             }).join('')
             : '<div class="wf-allgood">' + icon('check') + esc(T('Rien à régler : le workflow peut être publié.')) + '</div>';
 
-        var est = state.estimate
-            ? '<div class="wf-est"><b>' + esc(T('≈ {min} à {max} crédits par exécution', { min: state.estimate.min, max: state.estimate.max })) + '</b><span>' + esc(T('Estimé sur les réponses récentes des mêmes modèles.')) + '</span></div>'
+        // Rendu par le serveur (WorkflowCatalog::estimateHtml) : traduit, échappé,
+        // brique par brique — le même bloc que la fenêtre de lancement.
+        var est = state.estimate && state.estimate.html
+            ? state.estimate.html
             : '<div class="wf-est"><span>' + esc(T('Coût estimé disponible après quelques conversations sur ces modèles.')) + '</span></div>';
         var writes = 0;
         var gates = 0;
@@ -1177,6 +1364,42 @@
     }
 
     // --- Départ
+
+    /**
+     * Les options d'un champ Choix, toujours une LISTE. Le champ de saisie
+     * les tient en une ligne (« Rouge, Vert, Bleu ») : la ligne ne doit
+     * jamais remplacer la liste — un `.join` sur une chaîne arrêtait le
+     * rendu du volet, et le serveur jetait les options.
+     */
+    function choiceOptions(f) {
+        return Array.isArray(f.options) ? f.options : [];
+    }
+
+    function parseChoiceOptions(text) {
+        var out = [];
+        String(text || '').split(',').forEach(function (s) {
+            s = s.trim();
+            if (s !== '' && out.indexOf(s) < 0) { out.push(s); }
+        });
+        return out;
+    }
+
+    /** La valeur par défaut d'un champ Choix : une de ses options, ou aucune. */
+    function choiceDefaultOptions(f) {
+        return '<option value="">' + esc(T('Aucune valeur par défaut')) + '</option>' + choiceOptions(f).map(function (o) {
+            return '<option value="' + esc(o) + '"' + (o === f.default ? ' selected' : '') + '>' + esc(o) + '</option>';
+        }).join('');
+    }
+
+    /** Les options ont changé : la liste des valeurs par défaut suit, sans redessiner le volet. */
+    function syncChoiceDefault(i) {
+        var f = state.def.start.fields[i];
+        if (!f || f.type !== 'choice') { return; }
+        if (f.default && choiceOptions(f).indexOf(f.default) < 0) { f.default = ''; }
+        var sel = insHost.querySelector('select[data-field="' + i + '"][data-prop="default"]');
+        if (sel) { sel.innerHTML = choiceDefaultOptions(f); }
+    }
+
     function startInspector() {
         var s = state.def.start;
         var types = L.fieldTypes || {};
@@ -1184,10 +1407,21 @@
             var opts = Object.keys(types).map(function (t) { return '<option value="' + t + '"' + (t === f.type ? ' selected' : '') + '>' + esc(types[t]) + '</option>'; }).join('');
             var extra = '';
             if (f.type === 'choice') {
-                extra += '<input class="wf-input" data-field="' + i + '" data-prop="options" placeholder="' + esc(T('Options, séparées par des virgules')) + '" value="' + esc((f.options || []).join(', ')) + '">';
-            }
-            if (f.type !== 'file') {
+                extra += '<input class="wf-input" data-field="' + i + '" data-prop="options" placeholder="' + esc(T('Options, séparées par des virgules')) + '" value="' + esc(choiceOptions(f).join(', ')) + '">'
+                    + '<select class="wf-select" data-field="' + i + '" data-prop="default" aria-label="' + esc(T('Valeur par défaut')) + '">' + choiceDefaultOptions(f) + '</select>';
+            } else if (f.type !== 'file') {
                 extra += '<input class="wf-input" data-field="' + i + '" data-prop="default" placeholder="' + esc(T('Valeur par défaut')) + '" value="' + esc(f.default || '') + '">';
+            } else {
+                // Document de référence : fourni d'office à chaque lancement
+                // (un modèle, un texte de loi, nos références) et cité avec @.
+                var ref = f.reference || null;
+                extra += '<div class="wf-field-ref">'
+                    + (ref ? '<span class="wf-field-ref-name">' + icon('file') + esc(ref.name) + '</span>'
+                        + '<button type="button" class="wf-btn sm ghost" data-act="ref-del" data-val="' + i + '">' + esc(T('Retirer')) + '</button>' : '')
+                    + '<label class="wf-btn sm"><input type="file" data-ref-upload="' + i + '" hidden>' + icon('plus') + esc(ref ? T('Remplacer') : T('Fournir un document de référence')) + '</label>'
+                    + '<small class="wf-hint">' + esc(ref
+                        ? T('Joint d’office à chaque lancement : citez-le avec @ dans les consignes. Au lancement, on peut le remplacer.')
+                        : T('Facultatif : un document toujours le même (un modèle, un texte de référence, nos références), joint d’office à chaque lancement.')) + '</small></div>';
             }
             extra += '<input class="wf-input" data-field="' + i + '" data-prop="help" placeholder="' + esc(T('Aide sous le champ')) + '" value="' + esc(f.help || '') + '">';
             return '<div class="wf-field-row wide"><input class="wf-input" data-field="' + i + '" data-prop="label" value="' + esc(f.label) + '" placeholder="' + esc(T('Nom du champ')) + '">'
@@ -1215,91 +1449,272 @@
                 }).join('') + '<option value="last"' + (sched.rule.day === 'last' ? ' selected' : '') + '>' + esc(T('le dernier jour')) + '</option></select>' : '')
                 + '<div class="wf-row2"><input type="time" class="wf-input" data-act-change="time" value="' + esc(sched.rule.time || '08:00') + '"><span class="wf-sched-say" id="wfSchedSay">' + esc(state.scheduleText || '') + '</span></div></div>';
         }
-        var trig = [T('À la main')];
-        if (s.chat) { trig.push(T('Depuis le chat')); }
-        if (sched) { trig.push(state.scheduleText || T('Programmé')); }
         return headFor('start', (cat.hues || {}).start, 'start.title', s.title)
             + issuesHtml('start')
+            + sec('trigger', T('Quand démarre-t-il ?'), '<div class="wf-ways">'
+                + way({ ic: 'hand', title: T('Quand vous le lancez'), sub: esc(T('Bouton « Lancer » de sa page : toujours possible.')),
+                    ctrl: '<span class="wf-way-always">' + esc(T('Toujours')) + '</span>', on: true })
+                + way({ ic: 'chat', title: T('Depuis le chat'), sub: esc(T('Tapez « @ » dans la zone de saisie ; un fichier joint devient sa première pièce.')), bind: 'start.chat', on: !!s.chat })
+                + way({ ic: 'clock', title: T('À heure fixe'), sub: esc(T('Il démarre seul, au rythme choisi, avec les valeurs par défaut.')), bind: 'start.schedule', on: !!sched, body: schedHtml })
+                + eventWay(s)
+                + '</div>', '', 'start')
             + sec('fields', T('Ce que vous fournissez au lancement'), (rows || '<p class="wf-hint">' + esc(T('Aucun champ : le workflow démarre sans rien demander.')) + '</p>')
                 + '<button type="button" class="wf-btn sm" data-act="field-add">' + icon('plus') + esc(T('Ajouter un champ')) + '</button>'
                 + '<p class="wf-hint">' + esc(T('Un fichier devient une pièce à lui seul ; les autres champs forment ensemble une Fiche.')) + '</p>', '', 'fiche')
-            + (hasFiche ? sec('fiche', T('Nom de la Fiche de départ'), '<input class="wf-input" data-bind="start.fiche_name" value="' + esc(s.fiche_name) + '">') : '')
-            + choice({
-                id: 'trigger', title: T('Comment il démarre'), ic: 'start', summary: esc(trig.join(' · ')),
-                body: '<div class="wf-mini">' + icon('hand') + esc(T('À la main, depuis la page du workflow : toujours possible.')) + '</div>'
-                    + check('start.chat', s.chat, T('Depuis le chat'), T('« @ » dans la zone de saisie propose ce workflow ; un fichier joint devient la première pièce.'))
-                    + check('start.schedule', !!sched, T('Programmé'), T('Il démarre seul, au rythme choisi, avec les valeurs par défaut.'))
-                    + schedHtml,
-            })
-            + eventSection(s);
+            + startAdvanced(s, hasFiche);
+    }
+
+    /**
+     * Une façon de démarrer : une ligne (icône, nom, une phrase) et son
+     * interrupteur ; allumée, ce qui se règle s'ouvre dessous. La ligne
+     * entière est l'étiquette de l'interrupteur (au doigt, on touche la ligne).
+     */
+    function way(o) {
+        var txt = '<span class="wf-way-ic">' + icon(o.ic) + '</span><span class="wf-way-txt"><b>' + esc(o.title) + '</b>'
+            + '<small' + (o.subId ? ' id="' + esc(o.subId) + '"' : '') + '>' + o.sub + '</small></span>';
+        var row = o.bind
+            ? '<label class="wf-way-row">' + txt + '<input type="checkbox" class="wf-switch" role="switch" data-bind="' + esc(o.bind) + '"'
+                + (o.on ? ' checked' : '') + ' aria-label="' + esc(o.title) + '"></label>'
+            : '<div class="wf-way-row">' + txt + (o.ctrl || '') + '</div>';
+        return '<div class="wf-way' + (o.on ? ' is-on' : '') + (o.bind ? '' : ' is-fixed') + '"' + (o.sec ? ' data-sec="' + esc(o.sec) + '"' : '') + '>'
+            + row + (o.on && o.body ? '<div class="wf-way-body">' + o.body + '</div>' : '') + '</div>';
     }
 
     /** Démarrer sur un évènement : un email, un fichier, un appel, la fin d'un autre workflow. */
-    function eventSection(s) {
+    function eventWay(s) {
         var ev = s.event || null;
-        var kind = ev ? ev.kind : '';
+        var Le = L.events || {};
+        return way({
+            sec: 'event', ic: 'bolt', title: T('Quand quelque chose arrive'), bind: 'start.event', on: !!ev, subId: 'wfEventSub',
+            sub: ev ? esc(Le[ev.kind] || ev.kind) : esc(T('Un email, un fichier dans Drive, un appel d’un logiciel ou la fin d’un autre workflow.')),
+            body: ev ? eventBody(ev) : '',
+        });
+    }
+
+    /** Une étape de réglage de l'évènement : un titre en question, puis de quoi y répondre. */
+    function evStep(ic, title, body, help) {
+        return '<div class="wf-evstep"><div class="wf-evstep-h">' + icon(ic) + '<span>' + esc(title) + '</span>' + (help || '') + '</div>' + body + '</div>';
+    }
+
+    function eventBody(ev) {
+        var kind = ev.kind;
         var Le = L.events || {};
         var Lh = L.eventHelp || {};
-        var icons = { '': 'hand', email: 'mail', file: 'folder', webhook: 'webhook', workflow: 'chain' };
-        var tiles = ['', 'email', 'file', 'webhook', 'workflow'].map(function (k) {
-            return tile({ act: 'event', val: k, on: kind === k, ic: icon(icons[k]), label: Le[k] || k, small: k ? (Lh[k] || '') : T('Seulement à la main, depuis le chat ou programmé.') });
-        }).join('');
+        var icons = { email: 'mail', file: 'folder', webhook: 'webhook', workflow: 'chain' };
+        var kinds = '<div class="wf-tiles cols-2 wf-ev-kinds">' + ['email', 'file', 'webhook', 'workflow'].map(function (k) {
+            return tile({ act: 'event', val: k, on: kind === k, ic: icon(icons[k]), label: Le[k] || k });
+        }).join('') + '</div>'
+            + (Lh[kind] ? '<p class="wf-hint">' + esc(Lh[kind]) + '</p>' : '');
         var detail = '';
-        var pm = pieceMap();
-        var piece = pm.evenement ? R.pieceChip(pm.evenement, '') : '';
         if (kind === 'email') {
-            ev.filters = ev.filters || blankFilters();
-            var srcs = ['gmail', 'outlook'].map(function (src) {
-                var st = sourceState(src);
-                return tile({ act: 'evsource', val: src, on: ev.source === src, ic: ((cat.sources || []).filter(function (x) { return x.key === src; })[0] || {}).icon || icon('mail'),
-                    label: src === 'gmail' ? 'Gmail' : 'Outlook', small: st === 'ok' ? '' : (st === 'off' ? T('Non relié') : T('Non proposé')), off: st === 'none' && ev.source !== src });
-            }).join('');
-            detail = '<div class="wf-tiles">' + srcs + '</div>'
-                + '<div class="wf-filter">' + '<div class="wf-filter-h">' + icon('filter') + esc(T('Seulement les emails…')) + '</div>'
-                + '<div class="wf-row2"><label class="wf-lab-in"><span>' + esc(T('De')) + '</span><input class="wf-input" data-bind="start.event.filters.mail.from" value="' + esc(ev.filters.mail.from || '') + '" placeholder="client@exemple.fr"></label>'
-                + '<label class="wf-lab-in"><span>' + esc(T('Objet contient')) + '</span><input class="wf-input" data-bind="start.event.filters.mail.subject" value="' + esc(ev.filters.mail.subject || '') + '" placeholder="' + esc(T('devis')) + '"></label></div>'
-                + check('start.event.filters.mail.attachment', !!ev.filters.mail.attachment, T('Avec une pièce jointe'))
-                + '<label class="wf-lab">' + esc(T('Recherche avancée (facultative)')) + '</label><input class="wf-input" data-bind="start.event.query" value="' + esc(ev.query || '') + '" placeholder="' + esc(ev.source === 'outlook' ? 'hasAttachments:true' : 'label:clients -from:noreply') + '">'
-                + '<p class="wf-hint">' + esc(ev.source === 'outlook'
-                    ? T('Mots ou recherche Outlook. Vide : tout email de la boîte de réception.')
-                    : T('Recherche Gmail (label:, -from:…). Vide : tout email de la boîte de réception.')) + '</p></div>';
+            detail = emailEvent(ev);
         } else if (kind === 'file') {
-            ev.filters = ev.filters || blankFilters();
-            detail = '<label class="wf-lab">' + esc(T('Dossier Google Drive')) + '</label><input class="wf-input" data-bind="start.event.folder" value="' + esc(ev.folder || '') + '" placeholder="' + esc(T('Lien du dossier, ou son chemin : Clients/À traiter')) + '">'
-                + (sourceState('drive') === 'off' ? '<div class="wf-todo">' + icon('alert') + '<div>' + esc(T('Reliez d’abord ce service dans Réglages → Comptes connectés.')) + '</div></div>' : '')
-                + '<div class="wf-filter"><div class="wf-filter-h">' + icon('filter') + esc(T('Seulement les fichiers…')) + '</div>'
-                + kindSeg('start.event.filters.drive.kind', ev.filters.drive.kind || '')
-                + '<label class="wf-lab-in"><span>' + esc(T('Dont le nom contient')) + '</span><input class="wf-input" data-bind="start.event.filters.drive.name" value="' + esc(ev.filters.drive.name || '') + '" placeholder="' + esc(T('facture')) + '"></label></div>'
-                + '<p class="wf-hint">' + esc(T('Chaque fichier qui y apparaît lance une exécution ; son texte devient la première pièce. Les fichiers déjà là ne lancent rien.')) + '</p>';
+            detail = fileEvent(ev);
         } else if (kind === 'webhook') {
-            detail = '<div class="wf-hook" id="wfHook"><div class="wf-hook-url"><input class="wf-input" id="wfHookUrl" readonly value="' + esc(state.hookUrl || '') + '" placeholder="' + esc(T('Préparation de l’adresse…')) + '">'
-                + '<button type="button" class="wf-btn sm" data-act="hook-copy">' + icon('copy') + esc(T('Copier')) + '</button></div>'
-                + '<p class="wf-hint">' + esc(T('Une adresse secrète : qui la connaît peut lancer le workflow. Postez du JSON ; ses champs remplissent ceux du départ (par leur nom), le tout devient la pièce « {piece} ».', { piece: (pm.evenement || {}).name || '' })) + '</p>'
-                + '<pre class="wf-code" id="wfHookExample">' + esc(hookExample()) + '</pre>'
-                + '<button type="button" class="wf-btn ghost sm" data-act="hook-renew">' + icon('retry') + esc(T('Changer d’adresse')) + '</button></div>';
+            detail = evStep('link', T('Son adresse'), '<div class="wf-hook" id="wfHook"><div class="wf-hook-url"><input class="wf-input" id="wfHookUrl" readonly value="' + esc(state.hookUrl || '') + '" placeholder="' + esc(T('Préparation de l’adresse…')) + '">'
+                + '<button type="button" class="wf-btn sm" data-act="hook-copy">' + icon('copy') + esc(T('Copier')) + '</button></div></div>',
+                hintDot(T('Son adresse'), T('Une adresse secrète : qui la connaît peut lancer le workflow. Postez du JSON ; ses champs remplissent ceux du départ (par leur nom), le tout devient la pièce « {piece} ».', { piece: (pieceMap().evenement || {}).name || '' })));
         } else if (kind === 'workflow') {
             var others = (cat.workflows || []).filter(function (w) { return w.id !== state.workflow.id; });
-            detail = others.length
+            detail = evStep('chain', T('Après quel workflow ?'), others.length
                 ? '<select class="wf-select" data-bind="start.event.workflow_id"><option value="">' + esc(T('Choisir le workflow…')) + '</option>' + others.map(function (w) {
                     return '<option value="' + w.id + '"' + (ev.workflow_id === w.id ? ' selected' : '') + '>' + esc(w.name + (w.published ? '' : ' — ' + T('pas encore publié'))) + '</option>';
-                }).join('') + '</select><p class="wf-hint">' + esc(T('Quand il se termine, son livrable devient la première pièce de celui-ci.')) + '</p>'
-                : '<p class="wf-hint">' + esc(T('Créez d’abord un autre workflow.')) + '</p>';
+                }).join('') + '</select>'
+                : '<p class="wf-hint">' + esc(T('Créez d’abord un autre workflow.')) + '</p>');
         }
-        var watch = state.workflow.watch;
-        var status = '';
-        if (kind && (kind === 'email' || kind === 'file') && watch && state.workflow.published && !state.workflow.draft_changed) {
-            status = watch.error
-                ? '<div class="wf-todo block">' + icon('alert') + '<div>' + esc(T('Surveillance interrompue : {cause}', { cause: watch.error })) + '</div></div>'
-                : '<div class="wf-mini">' + icon('check') + esc(watch.checked ? T('Surveillé · dernière vérification {d}', { d: watch.checked }) : T('Surveillé dès la publication')) + '</div>';
+        return '<div class="wf-evstep"><div class="wf-evstep-h">' + icon('bolt') + '<span>' + esc(T('Ce qui le lance')) + '</span></div>' + kinds + '</div>'
+            + detail
+            + '<p class="wf-say" id="wfEventSay">' + eventSentence(ev) + '</p>'
+            + (kind === 'email' ? filterTestBlock() : '')
+            + eventStatus(ev);
+    }
+
+    // Placeholders courts (ils doivent tenir dans le champ) ; règle et
+    // exemples dans l'infobulle du « ? ».
+    function fin(key, label, placeholder, hint, examples) {
+        var em = ((state.def.start.event || {}).filters || {}).mail || {};
+        return '<label class="wf-lab-in"><span>' + esc(label) + hintDot(label, hint, examples) + '</span><input class="wf-input" data-bind="start.event.filters.mail.' + key + '" value="' + esc(em[key] || '') + '" placeholder="' + esc(placeholder) + '"></label>';
+    }
+
+    function emailEvent(ev) {
+        ev.filters = ev.filters || blankFilters();
+        ev.filters.mail = ev.filters.mail || blankFilters().mail;
+        var em = ev.filters.mail;
+        var srcs = ['gmail', 'outlook'].map(function (src) {
+            var st = sourceState(src);
+            return tile({ act: 'evsource', val: src, on: ev.source === src, ic: ((cat.sources || []).filter(function (x) { return x.key === src; })[0] || {}).icon || icon('mail'),
+                label: src === 'gmail' ? 'Gmail' : 'Outlook', small: st === 'ok' ? T('Relié') : (st === 'off' ? T('Non relié') : T('Non proposé')), off: st === 'none' && ev.source !== src });
+        }).join('');
+        var srcName = ev.source === 'outlook' ? 'Outlook' : 'Gmail';
+        var relink = sourceState(ev.source) === 'off'
+            ? '<div class="wf-todo">' + icon('alert') + '<div>' + esc(T('Reliez votre compte {nom} pour que MIA voie vos emails.', { nom: srcName }))
+                + ' <a class="wf-link" href="/settings/connections#connector-' + esc(ev.source) + '" target="_blank" rel="noopener">' + esc(T('Relier {nom}', { nom: srcName })) + '</a></div></div>'
+            : '';
+        var more = moreCriteria(ev);
+        return evStep('inbox', T('Dans quelle boîte ?'), '<div class="wf-tiles cols-2">' + srcs + '</div>' + relink)
+            + evStep('filter', T('Quels emails ?'),
+                '<div class="wf-row2">'
+                + fin('from', T('De'), '@client.fr', T('Qui envoie l’email : une adresse, un domaine ou un nom. Plusieurs valeurs séparées par des virgules : l’une suffit.'), T('paul@client.fr · @client.fr · Dupont, @fournisseur.com'))
+                + fin('subject', T('Objet contient'), T('devis'), T('Tous les mots d’une valeur doivent figurer dans l’objet ; une virgule sépare les possibilités.'), T('devis · demande de devis, commande'))
+                + '</div>'
+                + check('start.event.filters.mail.attachment', !!em.attachment, T('Avec une pièce jointe'), T('Une image collée dans le texte ne compte pas.'))
+                + choice({
+                    id: 'event-more', sub: true, ic: 'filter', title: T('Plus de critères'), empty: !more.length,
+                    summary: more.length ? esc(more.join(' · ')) : esc(T('Sauf certains expéditeurs, adresse de réception, mots du texte…')),
+                    body: '<div class="wf-row2">'
+                        + fin('exclude', T('Sauf de'), 'noreply', T('Expéditeurs à ignorer, même s’ils remplissent les autres champs.'), T('noreply · newsletter@exemple.fr, @pub.com'))
+                        + fin('to', T('Adressés à'), T('factures@…'), T('L’adresse qui reçoit l’email (destinataire ou copie) : utile pour une boîte partagée ou un alias.'), T('factures@votre-entreprise.fr · @support.votre-entreprise.fr'))
+                        + '</div>'
+                        + fin('words', T('Contient les mots'), T('urgent'), T('Cherchés dans l’objet et le corps de l’email ; une virgule sépare les possibilités.'), T('urgent · relance, rappel'))
+                        + '<label class="wf-lab-in"><span>' + esc(T('Recherche avancée')) + (ev.source === 'outlook'
+                            ? hintDot(T('Recherche avancée'), T('Mots ou syntaxe de recherche Outlook, en plus des champs ci-dessus. Vide : toute la boîte de réception.'), 'hasAttachments:true · subject:facture')
+                            : hintDot(T('Recherche avancée'), T('Syntaxe de recherche Gmail, en plus des champs ci-dessus. Vide : toute la boîte de réception.'), 'label:clients · -from:noreply · has:attachment')) + '</span>'
+                        + '<input class="wf-input" data-bind="start.event.query" value="' + esc(ev.query || '') + '" placeholder="' + esc(ev.source === 'outlook' ? 'hasAttachments:true' : 'label:clients') + '"></label>',
+                }),
+                hintDot(T('Quels emails ?'), T('Le workflow ne démarre que pour les emails qui remplissent TOUS les champs renseignés ; un champ vide ne filtre rien. Majuscules et accents ne comptent pas.')));
+    }
+
+    /** Les critères secondaires renseignés, en mots (résumé de « Plus de critères »). */
+    function moreCriteria(ev) {
+        var m = ((ev.filters || {}).mail) || {};
+        var out = [];
+        if (m.exclude) { out.push(T('sauf de {qui}', { qui: toDisplay(m.exclude) })); }
+        if (m.to) { out.push(T('adressés à {qui}', { qui: toDisplay(m.to) })); }
+        if (m.words) { out.push('« ' + toDisplay(m.words) + ' »'); }
+        if (ev.query) { out.push(T('recherche « {q} »', { q: ev.query })); }
+        return out;
+    }
+
+    function fileEvent(ev) {
+        ev.filters = ev.filters || blankFilters();
+        ev.filters.drive = ev.filters.drive || blankFilters().drive;
+        var d = ev.filters.drive;
+        return evStep('folder', T('Quel dossier surveiller ?'),
+            '<input class="wf-input" data-bind="start.event.folder" value="' + esc(ev.folder || '') + '" placeholder="' + esc(T('Clients/À traiter')) + '" aria-label="' + esc(T('Dossier Google Drive')) + '">'
+                + (sourceState('drive') === 'off' ? '<div class="wf-todo">' + icon('alert') + '<div>' + esc(T('Reliez d’abord ce service dans Réglages → Comptes connectés.'))
+                    + ' <a class="wf-link" href="/settings/connections#connector-drive" target="_blank" rel="noopener">' + esc(T('Relier {nom}', { nom: 'Google Drive' })) + '</a></div></div>' : ''),
+            hintDot(T('Quel dossier surveiller ?'), T('Le lien du dossier Google Drive (copié depuis Drive), ou son chemin depuis « Mon Drive ».'), T('Clients/À traiter · https://drive.google.com/drive/folders/…')))
+            + evStep('filter', T('Quels fichiers ?'), kindSeg('start.event.filters.drive.kind', d.kind || '')
+                + '<label class="wf-lab-in"><span>' + esc(T('Dont le nom contient')) + '</span><input class="wf-input" data-bind="start.event.filters.drive.name" value="' + esc(d.name || '') + '" placeholder="' + esc(T('facture')) + '"></label>');
+    }
+
+    /**
+     * Le déclencheur en une phrase : ce qui lancera le workflow, avec les
+     * valeurs saisies en gras. Recalculée à chaque frappe.
+     */
+    function eventSentence(ev) {
+        var vals = [];
+        var b = function (v) { vals.push(v); return '\u0001' + (vals.length - 1) + '\u0002'; };
+        var alt = function (text, quote) {
+            return String(text || '').split(',').map(function (x) { return toDisplay(x.trim()); }).filter(Boolean).map(function (x) {
+                return b(quote ? '« ' + x + ' »' : x);
+            }).join(' ' + T('ou') + ' ');
+        };
+        var s = '';
+        if (ev.kind === 'email') {
+            var m = (ev.filters || {}).mail || {};
+            var parts = [];
+            if (m.from) { parts.push(T('envoyé par {qui}', { qui: alt(m.from) })); }
+            if (m.to) { parts.push(T('adressé à {qui}', { qui: alt(m.to) })); }
+            if (m.subject) { parts.push(T('dont l’objet contient {mots}', { mots: alt(m.subject, true) })); }
+            if (m.words) { parts.push(T('qui contient {mots}', { mots: alt(m.words, true) })); }
+            if (m.attachment) { parts.push(T('avec une pièce jointe')); }
+            if (ev.query) { parts.push(T('qui répond à la recherche {q}', { q: b('« ' + ev.query + ' »') })); }
+            if (m.exclude) { parts.push(T('sauf s’il vient de {qui}', { qui: alt(m.exclude) })); }
+            s = T('Démarre pour chaque nouvel email reçu dans {boite}', { boite: b(ev.source === 'outlook' ? 'Outlook' : 'Gmail') })
+                + (parts.length ? ', ' + parts.join(', ') + '.' : '. ' + T('Aucun critère : tous les emails comptent.'));
+        } else if (ev.kind === 'file') {
+            var d = (ev.filters || {}).drive || {};
+            if (!String(ev.folder || '').trim()) {
+                s = T('Indiquez le dossier : chaque nouveau fichier qui y arrive lancera le workflow.');
+            } else {
+                s = T('Démarre pour chaque nouveau fichier déposé dans {dossier}', { dossier: b('« ' + (ev.folder_name || ev.folder) + ' »') })
+                    + (d.kind ? ' (' + T('{genre} seulement', { genre: b((L.driveKinds || {})[d.kind] || d.kind) }) + ')' : '')
+                    + (d.name ? ', ' + T('dont le nom contient {mots}', { mots: b('« ' + d.name + ' »') }) : '') + '.';
+            }
+        } else if (ev.kind === 'webhook') {
+            s = T('Démarre à chaque appel de son adresse ; les données reçues deviennent sa première pièce.');
+        } else if (ev.kind === 'workflow') {
+            var w = (cat.workflows || []).filter(function (x) { return x.id === ev.workflow_id; })[0];
+            s = w ? T('Démarre quand {nom} se termine ; son livrable devient sa première pièce.', { nom: b('« ' + w.name + ' »') }) : T('Choisissez le workflow qui le lance.');
         }
-        var summary = kind ? esc(Le[kind] || kind) + (kind === 'email' || kind === 'file' ? filterSummaryHtml(ev.filters) : '') : esc(Le[''] || '');
-        return choice({
-            id: 'event', title: T('Démarrer sur un évènement'), ic: 'webhook', summary: summary, empty: !kind,
-            body: '<div class="wf-tiles">' + tiles + '</div>'
-                + (kind ? '<div class="wf-event-detail">' + detail
-                    + '<div class="wf-row2" style="grid-template-columns:minmax(0,1fr) auto;margin-top:8px"><input class="wf-input" data-bind="start.event.piece_name" value="' + esc(ev.piece_name || '') + '" aria-label="' + esc(T('Nom de la pièce')) + '">' + piece + '</div>'
-                    + status + '</div>' : ''),
-        });
+        return '<span class="wf-say-ic">' + icon('bolt') + '</span><span>' + esc(s).replace(/\u0001(\d+)\u0002/g, function (m, i) { return '<b>' + esc(vals[+i]) + '</b>'; }) + '</span>';
+    }
+
+    /** Après une frappe : la phrase et les résumés suivent, sans redessiner le volet (le focus reste). */
+    function refreshEventSay() {
+        var ev = state.def.start.event;
+        if (!ev) { return; }
+        var say = $('#wfEventSay');
+        if (say) { say.innerHTML = eventSentence(ev); }
+        if (ev.kind === 'email') {
+            var more = moreCriteria(ev);
+            var sum = insHost.querySelector('.wf-choice[data-sec="event-more"] .wf-choice-sum');
+            if (sum) {
+                sum.classList.toggle('is-empty', !more.length);
+                sum.textContent = more.length ? more.join(' · ') : T('Sauf certains expéditeurs, adresse de réception, mots du texte…');
+            }
+        }
+    }
+
+    function filterTestBlock() {
+        return '<div class="wf-ftest"><button type="button" class="wf-btn sm" data-act="ftest">' + icon('check') + esc(T('Tester sur mes derniers emails')) + '</button>'
+            + hintDot(T('Tester sur mes derniers emails'), T('Lit les {n} derniers emails de votre boîte de réception et dit, pour chacun, s’il lancerait le workflow — ou pourquoi il serait écarté. Rien n’est lancé ni gardé ; le brouillon en cours est essayé, sans publier.', { n: 10 }))
+            + '<div class="wf-ftest-out' + (state.filterTestStale ? ' is-stale' : '') + '" id="wfFilterTest" aria-live="polite">'
+            + (state.filterTest && state.filterTestStale ? staleNote() : '') + (state.filterTest || '') + '</div></div>';
+    }
+
+    /** La surveillance d'une boîte ou d'un dossier : en service, à publier, en panne. */
+    function eventStatus(ev) {
+        if (ev.kind !== 'email' && ev.kind !== 'file') { return ''; }
+        var w = state.workflow;
+        var watch = w.watch;
+        if (!w.published) {
+            return '<div class="wf-mini wf-watch">' + icon('clock') + esc(T('La surveillance commence quand vous publiez le workflow.')) + '</div>';
+        }
+        if (w.draft_changed) {
+            return '<div class="wf-mini wf-watch">' + icon('clock') + esc(T('Vos changements comptent une fois publiés ; d’ici là, la version publiée surveille.')) + '</div>';
+        }
+        if (!watch) { return ''; }
+        var out = watch.error
+            ? '<div class="wf-todo block">' + icon('alert') + '<div>' + esc(T('Surveillance interrompue : {cause}', { cause: watch.error })) + '</div></div>'
+            : '<div class="wf-mini wf-watch">' + icon('check') + esc(watch.checked ? T('Surveillé · dernière vérification {d}', { d: watch.checked }) : T('Surveillé dès la publication')) + '</div>';
+        // Boîte mail : prévenue à l'arrivée (push) ou vérifiée chaque minute — le texte vient du serveur.
+        if (ev.kind === 'email' && watch.push && watch.push.text) {
+            out += '<div class="wf-mini wf-push is-' + esc(watch.push.state || '') + '">' + icon(watch.push.state === 'live' ? 'bolt' : 'clock') + esc(watch.push.text) + '</div>';
+        }
+        return out;
+    }
+
+    /**
+     * Ce qui ne sert qu'aux habitués : le nom des pièces que le départ
+     * remet, l'exemple d'appel d'une adresse. Replié, résumé sur une ligne.
+     */
+    function startAdvanced(s, hasFiche) {
+        var ev = s.event || null;
+        if (!hasFiche && !ev) { return ''; }
+        var pm = pieceMap();
+        var body = '';
+        var sum = [];
+        if (ev) {
+            var p = pm.evenement;
+            body += '<label class="wf-lab-in"><span>' + esc(T('Nom de la pièce remise par l’évènement'))
+                + hintDot(T('Nom de la pièce remise par l’évènement'), T('Les briques suivantes la citent par ce nom (« @ » dans une consigne). Vide : le nom proposé par MIA.')) + '</span>'
+                + '<span class="wf-row2 wf-row-chip"><input class="wf-input" data-bind="start.event.piece_name" value="' + esc(ev.piece_name || '') + '" placeholder="' + esc(p ? p.name : '') + '" aria-label="' + esc(T('Nom de la pièce')) + '">'
+                + (p ? R.pieceChip(p, '') : '') + '</span></label>';
+            if (p) { sum.push(T('Pièce « {nom} »', { nom: p.name })); }
+            if (ev.kind === 'webhook') {
+                body += '<div class="wf-lab-in"><span>' + esc(T('Exemple d’appel')) + '</span><pre class="wf-code" id="wfHookExample">' + esc(hookExample()) + '</pre></div>'
+                    + '<button type="button" class="wf-btn ghost sm" data-act="hook-renew">' + icon('retry') + esc(T('Changer d’adresse')) + '</button>';
+            }
+        }
+        if (hasFiche) {
+            body += '<label class="wf-lab-in"><span>' + esc(T('Nom de la Fiche de départ'))
+                + hintDot(T('Nom de la Fiche de départ'), T('La pièce qui regroupe les champs remplis au lancement ; les briques la citent par ce nom.')) + '</span>'
+                + '<input class="wf-input" data-bind="start.fiche_name" value="' + esc(s.fiche_name) + '"></label>';
+            sum.push(T('Fiche « {nom} »', { nom: s.fiche_name || '' }));
+        }
+        return choice({ id: 'start-adv', ic: 'settings', title: T('Options avancées'), summary: esc(sum.join(' · ')), body: body });
     }
 
     function hookExample() {
@@ -1308,6 +1723,52 @@
         fields.slice(0, 3).forEach(function (f) { body[f.key] = f.type === 'number' ? 1 : (f.label || f.key); });
         if (!fields.length) { body.message = T('Bonjour'); }
         return 'curl -X POST ' + (state.hookUrl || '<adresse>') + " \\\n  -H 'Content-Type: application/json' \\\n  -d '" + JSON.stringify(body) + "'";
+    }
+
+    // --- Essai des filtres « email reçu »
+
+    /**
+     * Les derniers emails de la boîte, jugés par les filtres en cours de
+     * saisie (le serveur applique la règle de la surveillance et rend le
+     * résultat tout fait). Rien n'est lancé.
+     */
+    function runFilterTest(btn) {
+        var out = $('#wfFilterTest');
+        var ev = state.def.start.event;
+        if (!out || !ev || ev.kind !== 'email') { return; }
+        btn.disabled = true;
+        state.filterTestStale = false;
+        out.classList.remove('is-stale');
+        out.innerHTML = '<p class="wf-ftest-wait">' + esc(T('Lecture de vos derniers emails…')) + '</p>';
+        var tz = '';
+        try { tz = Intl.DateTimeFormat().resolvedOptions().timeZone || ''; } catch (err) { tz = ''; }
+        fetch('/workflows/' + state.workflow.id + '/email-test', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Accept: 'application/json', 'X-CSRF-Token': csrf() },
+            body: JSON.stringify({ event: ev, timezone: tz }),
+        }).then(function (r) { return r.json(); }).then(function (j) {
+            state.filterTest = j.ok ? j.html : '<p class="wf-ftest-err">' + esc(j.error || T('Essai impossible pour le moment.')) + '</p>';
+        }).catch(function () {
+            state.filterTest = '<p class="wf-ftest-err">' + esc(T('Essai impossible pour le moment.')) + '</p>';
+        }).then(function () {
+            btn.disabled = false;
+            var o = $('#wfFilterTest');
+            if (o) { o.innerHTML = state.filterTest; }
+        });
+    }
+
+    /** Les filtres ont changé depuis l'essai : son résultat ne dit plus ce qui partirait. */
+    function staleFilterTest() {
+        if (!state.filterTest || state.filterTestStale) { return; }
+        state.filterTestStale = true;
+        var o = $('#wfFilterTest');
+        if (o) {
+            o.classList.add('is-stale');
+            o.insertAdjacentHTML('afterbegin', staleNote());
+        }
+    }
+    function staleNote() {
+        return '<p class="wf-ftest-stale">' + esc(T('Filtres modifiés depuis l’essai : relancez-le.')) + '</p>';
     }
 
     function loadHook(renew) {
@@ -1324,6 +1785,33 @@
                 var ex = $('#wfHookExample');
                 if (ex) { ex.textContent = hookExample(); }
             }).catch(function () {});
+    }
+
+    /**
+     * Allume, change ou éteint l'évènement qui lance le workflow (kind '' =
+     * éteint). Les réglages d'un genre quitté sont gardés le temps de la
+     * page : revenir à l'email retrouve ses filtres, rallumer l'interrupteur
+     * retrouve le dernier évènement.
+     */
+    function setEvent(kind) {
+        var start = state.def.start;
+        var stash = state.eventStash || (state.eventStash = {});
+        if (start.event) {
+            stash[start.event.kind] = start.event;
+            stash.last = start.event.kind;
+        }
+        if (!kind) {
+            start.event = null;
+        } else {
+            start.event = stash[kind] || {
+                kind: kind, source: sourceState('outlook') === 'ok' && sourceState('gmail') !== 'ok' ? 'outlook' : 'gmail', query: '', folder: '', folder_name: '',
+                workflow_id: null, piece_name: '', timezone: (Intl.DateTimeFormat().resolvedOptions().timeZone || ''), filters: blankFilters(),
+            };
+        }
+        state.filterTest = '';
+        state.filterTestStale = false;
+        changed({ inspector: true });
+        afterStart();
     }
 
     function afterStart() {
@@ -1415,6 +1903,8 @@
         var d = f.drive || {};
         var parts = [];
         if (m.from) { parts.push(T('de {qui}', { qui: toDisplay(m.from) })); }
+        if (m.exclude) { parts.push(T('sauf de {qui}', { qui: toDisplay(m.exclude) })); }
+        if (m.to) { parts.push(T('adressés à {qui}', { qui: toDisplay(m.to) })); }
         if (m.subject) { parts.push(T('objet « {objet} »', { objet: toDisplay(m.subject) })); }
         if (m.words) { parts.push('« ' + toDisplay(m.words) + ' »'); }
         if (m.attachment) { parts.push(T('avec pièce jointe')); }
@@ -1430,7 +1920,7 @@
 
     // --- Étape
     function assistantTiles(n) {
-        var tiles = [tile({ act: 'profile', val: '', on: n.profile_id === null, ic: icon('mia'), label: 'MIA', small: T('Sans assistant, modèle au choix') })];
+        var tiles = [tile({ act: 'profile', val: '', on: n.profile_id === null, ic: R.miaLogo(cat), label: 'MIA', small: T('Sans assistant, modèle au choix') })];
         (cat.profiles || []).forEach(function (p) {
             var av = p.avatar ? '<img src="' + esc(p.avatar) + '" alt="">' : '<span style="font-weight:700;color:' + esc(p.color || 'inherit') + '">' + esc((p.name || '?').charAt(0)) + '</span>';
             tiles.push(tile({ act: 'profile', val: String(p.id), on: n.profile_id === p.id, ic: av, label: p.name, small: p.model, title: p.description }));
@@ -1447,7 +1937,7 @@
     /** Résumé « qui fait le travail » : l'avatar, le nom, le modèle. */
     function whoSummary(n) {
         var p = n.profile_id ? (cat.profiles || []).filter(function (x) { return x.id === n.profile_id; })[0] : null;
-        return '<span class="wf-sum-who">' + R.avatar(p || null, cat) + '<b>' + esc(p ? p.name : 'MIA') + '</b><small>' + esc(p ? (p.model || '') : llmLabel(n.llm)) + '</small></span>';
+        return '<span class="wf-sum-who">' + R.avatar(p || null, cat, n.llm) + '<b>' + esc(p ? p.name : 'MIA') + '</b><small>' + esc(p ? (p.model || '') : llmLabel(n.llm)) + '</small></span>';
     }
 
     function llmSelect(n, onlyTools) {
@@ -1458,13 +1948,21 @@
         return '<select class="wf-select" data-bind="node.llm">' + opts + '</select>';
     }
 
+    /** Sous-titre d'une base : sa raison d'être grisée, « En direct », « Table · N lignes »… */
+    function kbSmall(kb) {
+        if (kb.reason) { return kb.reason; }
+        if (kb.live) { return T('En direct'); }
+        if (kb.table) { return T('Table · {lignes}', { lignes: window.tn ? window.tn(kb.rows || 0, '{n} ligne', '{n} lignes') : String(kb.rows || 0) }); }
+        return T('Base de connaissances');
+    }
+
     function sourceTiles(n) {
         var t = (cat.sources || []).map(function (s) {
             return tile({ act: 'source', val: s.key, on: (n.sources || []).indexOf(s.key) >= 0, ic: s.icon, label: s.label, small: s.connected ? '' : T('Non relié'), off: false });
         });
         (cat.kbs || []).forEach(function (kb) {
             var on = (n.kb_ids || []).indexOf(kb.id) >= 0;
-            t.push(tile({ act: 'kb', val: String(kb.id), on: on, ic: icon('kb'), label: kb.name, small: kb.reason || (kb.live ? T('En direct') : T('Base de connaissances')), off: !!kb.reason && !on }));
+            t.push(tile({ act: 'kb', val: String(kb.id), on: on, ic: icon(kb.table ? 'table' : 'kb'), label: kb.name, small: kbSmall(kb), off: !!kb.reason && !on }));
         });
         (cat.tools || []).forEach(function (tool) {
             var on = (n.tool_ids || []).indexOf(tool.id) >= 0;
@@ -1473,39 +1971,88 @@
         return t.length ? '<div class="wf-tiles">' + t.join('') + '</div>' : '<p class="wf-hint">' + esc(T('Aucune source disponible.')) + '</p>';
     }
 
+    /**
+     * Bases de connaissances consultées par une QUESTION à MIA (condition,
+     * décision) : « correspond-il à notre offre ? » — MIA lit aussi la
+     * présentation de l'entreprise (Organisation → Entreprise).
+     */
+    function kbChoice(n) {
+        n.kb_ids = n.kb_ids || [];
+        var kbs = cat.kbs || [];
+        var names = kbs.filter(function (kb) { return n.kb_ids.indexOf(kb.id) >= 0; }).map(function (kb) { return kb.name; });
+        var tiles = kbs.map(function (kb) {
+            var on = n.kb_ids.indexOf(kb.id) >= 0;
+            return tile({ act: 'kb', val: String(kb.id), on: on, ic: icon(kb.table ? 'table' : 'kb'), label: kb.name, small: kbSmall(kb), off: !!kb.reason && !on });
+        });
+        return choice({
+            id: 'kbs', title: T('Ce que MIA sait de nous'), ic: 'kb',
+            summary: esc(names.length ? names.join(', ') : T('La présentation de l’entreprise seulement')),
+            body: '<p class="wf-hint">' + esc(T('MIA lit toujours la présentation de l’entreprise (Organisation → Entreprise). Ajoutez les bases où sont votre offre, vos références ou vos règles : elle s’en sert pour répondre.')) + '</p>'
+                + (tiles.length ? '<div class="wf-tiles">' + tiles.join('') + '</div>' : '<p class="wf-hint">' + esc(T('Aucune base de connaissances disponible.')) + '</p>'),
+        });
+    }
+
     /** Résumé « peut consulter » : les pictos et noms des sources, bases et outils retenus. */
     function sourcesSummary(n) {
         var parts = [];
         (cat.sources || []).forEach(function (s) { if ((n.sources || []).indexOf(s.key) >= 0) { parts.push('<span class="wf-sum-src">' + s.icon + esc(s.label) + '</span>'); } });
-        (cat.kbs || []).forEach(function (kb) { if ((n.kb_ids || []).indexOf(kb.id) >= 0) { parts.push('<span class="wf-sum-src">' + icon('kb') + esc(kb.name) + '</span>'); } });
+        (cat.kbs || []).forEach(function (kb) { if ((n.kb_ids || []).indexOf(kb.id) >= 0) { parts.push('<span class="wf-sum-src">' + icon(kb.table ? 'table' : 'kb') + esc(kb.name) + '</span>'); } });
         (cat.tools || []).forEach(function (tool) { if ((n.tool_ids || []).indexOf(tool.id) >= 0) { parts.push('<span class="wf-sum-src">' + icon('tool') + esc(tool.name) + '</span>'); } });
         return parts.length ? parts.join('') + filterSummaryHtml(n.filters) : esc(T('Rien : elle lit seulement les pièces du dossier'));
     }
 
+    /** Libellés de la validation d'une brique Slack qui publie : un message, pas « des actions ». */
+    function slackWriteLabels() {
+        return { approve: T('Je valide le message avant qu’il parte'), auto: T('Publier sans validation') };
+    }
+
     function writeRadios(n, act) {
-        var W = L.write || {};
-        var modes = act === 'action' ? ['approve', 'auto'] : ['none', 'approve', 'auto'];
-        var small = {
+        var W = act === 'slack' ? slackWriteLabels() : (L.write || {});
+        var modes = act === 'action' || act === 'slack' ? ['approve', 'auto'] : ['none', 'approve', 'auto'];
+        var small = act === 'slack' ? {
+            approve: T('Une carte montre le message et ses fichiers ; il part à votre clic, le workflow attend.'),
+            auto: cat.auto ? T('Le message part seul, aussitôt. À réserver aux messages sans risque.') : T('Retiré par l’administrateur.'),
+        } : {
             none: T('Elle lit ses sources et remet sa pièce, rien d’autre.'),
             approve: T('Elle prépare des actions (emails, évènements…) ; une carte attend votre accord, le workflow aussi.'),
             auto: cat.auto ? T('Elle agit seule dans les outils reliés. À réserver aux gestes sans risque.') : T('Retiré par l’administrateur.'),
         };
         return modes.map(function (m) { return radio('write', m, n.write === m, W[m] || m, small[m], m === 'auto' && !cat.auto); }).join('')
-            + (n.write === 'auto' ? check('node.auto_send_mail', n.auto_send_mail, T('Envoyer réellement les emails'), T('Sinon, un email est préparé en brouillon.')) : '');
+            + (n.write === 'auto' && act !== 'slack' ? check('node.auto_send_mail', n.auto_send_mail, T('Envoyer réellement les emails'), T('Sinon, un email est préparé en brouillon.')) : '');
     }
-    function writeSummary(n) {
+    function writeSummary(n, act) {
         var ic = { none: 'eye', approve: 'gate', auto: 'send' }[n.write] || 'eye';
-        return '<span class="wf-sum-mode wf-w-' + esc(n.write) + '">' + icon(ic) + esc((L.write || {})[n.write] || n.write) + '</span>'
-            + (n.write === 'auto' && n.auto_send_mail ? ' <small>' + esc(T('emails envoyés')) + '</small>' : '');
+        var W = act === 'slack' ? slackWriteLabels() : (L.write || {});
+        return '<span class="wf-sum-mode wf-w-' + esc(n.write) + '">' + icon(ic) + esc(W[n.write] || n.write) + '</span>'
+            + (n.write === 'auto' && n.auto_send_mail && act !== 'slack' ? ' <small>' + esc(T('emails envoyés')) + '</small>' : '');
     }
 
-    function outputEditor(n) {
+    function outputEditor(n, opts) {
+        opts = opts || {};
         var o = n.output;
         var forms = ['text', 'list', 'table', 'fiche', 'document'];
         var ft = forms.map(function (f) {
             return tile({ act: 'form', val: f, on: o.form === f, ic: icon(f), label: (L.forms || {})[f] || f, col: true, title: (L.formHelp || {})[f] });
         }).join('');
+        // Une création, faite par un outil ouvert à la personne : une tuile par
+        // nature, grisée avec sa raison quand aucun outil n'est en service.
+        var ct = opts.noCreation ? '' : CREATE_KINDS.map(function (k) {
+            var why = creationUnavailable(k);
+            var off = !!why && o.form !== k;
+            var none = !(cat.creations || []).some(function (t) { return t.kind === k; });
+            return tile({ act: 'form', val: k, on: o.form === k, ic: icon(k), label: (L.forms || {})[k] || k, col: true,
+                small: off ? (none ? T('Aucun outil ouvert') : why) : '', off: off, title: why || (L.formHelp || {})[k] });
+        }).join('');
+        var made = R.isCreationForm(o.form);
         var extra = '';
+        if (made) {
+            var mtool = creationToolOf(o.form, o.tool_id);
+            extra = '<div class="wf-sec-inner">'
+                + '<p class="wf-hint">' + esc(T('L’étape rédige la demande avec son assistant et ses sources ; cet outil fabrique ensuite la pièce.')) + '</p>'
+                + creationToolTiles(o.form, o.tool_id, 'otool')
+                + creationOptionsBody(o.form, mtool, o.options || {}, 'oformat', 'node.output.options.style')
+                + '</div>';
+        }
         if (o.form === 'fiche') {
             var types = L.ficheTypes || {};
             extra = '<div class="wf-sec-inner">' + (o.fields || []).map(function (f, i) {
@@ -1517,19 +2064,117 @@
                 + '<p class="wf-hint">' + esc(T('Des champs nommés et typés : une condition par règle peut les lire, une action y prendre un destinataire.')) + '</p></div>';
         }
         if (o.form === 'document') {
+            // Le type de fichier : un document rédigé, un fichier courant, ou
+            // toute autre extension de fichier texte, écrite à la main.
             var fmts = L.docFormats || {};
-            extra = '<div class="wf-row2"><select class="wf-select" data-bind="node.output.format">' + Object.keys(fmts).map(function (f) {
-                return '<option value="' + f + '"' + (f === o.format ? ' selected' : '') + '>' + esc(fmts[f]) + '</option>';
-            }).join('') + '</select>' + check('node.output.template', o.template !== false, T('Au modèle de l’entreprise')) + '</div>';
+            var files = L.fileFormats || {};
+            var other = !(fmts[o.format] || files[o.format]) || !!otherFormat[n.key];
+            var opts2 = function (map) {
+                return Object.keys(map).map(function (f) {
+                    return '<option value="' + esc(f) + '"' + (!other && f === o.format ? ' selected' : '') + '>' + esc(map[f]) + '</option>';
+                }).join('');
+            };
+            extra = '<div class="wf-row2"><select class="wf-select" data-ofmt-select aria-label="' + esc(T('Type de fichier')) + '">'
+                + '<optgroup label="' + esc(T('Documents')) + '">' + opts2(fmts) + '</optgroup>'
+                + '<optgroup label="' + esc(T('Fichiers')) + '">' + opts2(files) + '</optgroup>'
+                + '<option value="__other"' + (other ? ' selected' : '') + '>' + esc(T('Autre extension…')) + '</option></select>'
+                + (TEMPLATE_FORMATS.indexOf(o.format) >= 0 ? check('node.output.template', o.template !== false, T('Au modèle de l’entreprise')) : '') + '</div>'
+                + (other ? '<div class="wf-row2"><input class="wf-input" data-ofmt value="' + esc(o.format || '') + '" placeholder="' + esc(T('Extension : conf, env, rb, go…')) + '" aria-label="' + esc(T('Extension du fichier')) + '"></div>' : '')
+                + (isRawFile(o.format) ? '<p class="wf-hint">' + esc(T('L’étape écrit le contenu exact du fichier, prêt à l’emploi : décrivez dans la consigne ce qu’il doit faire ou contenir.')) + '</p>' : '');
         }
         var fieldsTxt = o.form === 'fiche' && (o.fields || []).length ? ' · ' + (o.fields || []).map(function (f) { return f.label; }).filter(Boolean).join(', ') : '';
-        var fmtTxt = o.form === 'document' ? ' · ' + ((L.docFormats || {})[o.format] || o.format) : '';
+        var fmtTxt = o.form === 'document' ? ' · ' + formatName(o.format) : '';
+        var toolTxt = made ? ' · ' + ((creationToolOf(o.form, o.tool_id) || {}).name || T('outil à choisir')) : '';
         return '<div class="wf-row2" style="grid-template-columns:minmax(0,1fr) auto"><input class="wf-input" data-bind="node.output.name" value="' + esc(o.name) + '" placeholder="' + esc(T('Nom de la pièce')) + '">'
             + R.pieceChip(pieceMap()[o.key] || { key: o.key, name: T('nouvelle pièce'), color: '#999' }, '') + '</div>'
             + choice({
-                id: 'form', sub: true, title: T('Forme'), ic: o.form, summary: esc(((L.forms || {})[o.form] || o.form) + fmtTxt + fieldsTxt),
-                body: '<div class="wf-tiles cols-5">' + ft + '</div>' + extra,
+                id: 'form', sub: true, title: T('Forme'), ic: o.form, warn: made && !creationToolOf(o.form, o.tool_id),
+                summary: esc(((L.forms || {})[o.form] || o.form) + fmtTxt + fieldsTxt + toolTxt),
+                body: (opts.noCreation ? '<div class="wf-tiles cols-5">' + ft + '</div>'
+                    : '<p class="wf-hint">' + esc(T('Rédigée par l’étape :')) + '</p><div class="wf-tiles cols-5">' + ft + '</div>'
+                    + '<p class="wf-hint">' + esc(T('Faite par un outil de création :')) + '</p><div class="wf-tiles cols-5">' + ct + '</div>') + extra,
             });
+    }
+
+    /** Raison pour laquelle aucune création d'une nature n'est possible ('' : un outil est en service). */
+    function creationUnavailable(kind) {
+        var tools = (cat.creations || []).filter(function (t) { return t.kind === kind; });
+        if (!tools.length) { return T('Aucun outil de ce type ne vous est ouvert : un administrateur les ouvre à vos groupes dans Outils.'); }
+        if (tools.some(function (t) { return !t.reason; })) { return ''; }
+        return tools[0].reason || '';
+    }
+
+    function creationToolOf(kind, id) {
+        return (cat.creations || []).filter(function (t) { return t.kind === kind && t.id === id; })[0] || null;
+    }
+
+    /** Les outils d'une nature de création, en tuiles (`act` : ctool pour une brique Création, otool pour la pièce d'une étape). */
+    function creationToolTiles(kind, toolId, act) {
+        var tiles = (cat.creations || []).filter(function (t) { return t.kind === kind; }).map(function (t) {
+            return tile({ act: act, val: t.id, on: toolId === t.id, ic: icon(kind), label: t.name, small: t.reason || t.type_label, off: !!t.reason && toolId !== t.id });
+        }).join('');
+        return tiles ? '<div class="wf-tiles">' + tiles + '</div>' : '<p class="wf-hint">' + esc(T('Aucun outil de ce type ne vous est ouvert : un administrateur les ouvre à vos groupes dans Outils.')) + '</p>';
+    }
+
+    /**
+     * Ce qu'un outil image accepte (ImageOptions, catalogue) : fond
+     * transparent, formats du fichier, orientations. Sans outil connu, tout
+     * est proposé — le générateur écarte ce que l'outil refuse.
+     */
+    function imageCapsOf(tool) {
+        var c = tool && tool.image_caps;
+        return c ? c : { transparent: true, output_formats: ['png', 'jpeg', 'webp'], formats: ['square', 'landscape', 'portrait'] };
+    }
+
+    /** Résumé des options d'une image : format, fond, fichier. */
+    function imageOptionsSummary(options) {
+        var o = options || {};
+        var parts = [];
+        if (o.format) { parts.push((L.imageFormats || {})[o.format] || o.format); }
+        if (o.background === 'transparent') { parts.push(T('Fond transparent')); }
+        if (o.output_format) { parts.push((L.imageOutputs || {})[o.output_format] || o.output_format); }
+        return parts.join(' · ');
+    }
+
+    /** Réglages d'une création : format, fond et fichier d'une image ; style des illustrations d'une page illustrée. */
+    function creationOptionsBody(kind, tool, options, formatAct, styleBind) {
+        if (kind === 'image') {
+            var F = L.imageFormats || {};
+            var O = L.imageOutputs || {};
+            var caps = imageCapsOf(tool);
+            var fmt = options.format || '';
+            var out = options.output_format || '';
+            var transparent = options.background === 'transparent';
+            // Préfixe des réglages : `c…` pour la brique Création, `o…` pour l'étape qui remet une image.
+            var base = formatAct === 'oformat' ? 'node.output.options' : 'node.options';
+            var outAct = formatAct === 'oformat' ? 'ooutput' : 'coutput';
+            var formats = [''].concat((caps.formats || []));
+            var outputs = [''].concat((caps.output_formats || []));
+            var html = '';
+            if ((caps.formats || []).length) {
+                html += '<label class="wf-lab">' + esc(T('Format')) + '</label><div class="wf-seg wf-seg-wrap">' + formats.map(function (f) {
+                    return '<button type="button" data-act="' + formatAct + '" data-val="' + esc(f) + '"' + (fmt === f ? ' class="is-on"' : '') + '>' + esc(F[f] || f) + '</button>';
+                }).join('') + '</div>';
+            }
+            if (caps.transparent) {
+                html += check(base + '.background', transparent, T('Fond transparent'),
+                    T('Le sujet se détache sur un fond vide : logo, pictogramme, produit détouré. Le fichier passe en PNG (ou WebP), seuls formats qui gardent la transparence.'));
+            }
+            if ((caps.output_formats || []).length) {
+                // Fond transparent : seuls PNG et WebP le gardent.
+                html += '<label class="wf-lab">' + esc(T('Format du fichier')) + '</label><div class="wf-seg wf-seg-wrap">' + outputs.map(function (f) {
+                    var off = transparent && (f === 'jpeg' || f === '');
+                    return '<button type="button" data-act="' + outAct + '" data-val="' + esc(f) + '"' + (out === f ? ' class="is-on"' : '') + (off ? ' aria-disabled="true" disabled' : '') + '>' + esc(O[f] || f) + '</button>';
+                }).join('') + '</div>';
+            }
+            return html + '<p class="wf-hint">' + esc(tool && !tool.can_edit
+                ? T('Cet outil ne part pas d’une image : il crée toujours une image neuve.')
+                : T('Une image citée ou lue (créée plus tôt, ou reçue au départ) sert d’image de départ : l’outil la reprend ou s’en inspire.')) + '</p>';
+        }
+        if (kind === 'page' && tool && tool.type === 'html_illustrated') {
+            return '<input class="wf-input" data-bind="' + styleBind + '" value="' + esc(options.style || '') + '" maxlength="200" placeholder="' + esc(T('Par exemple : aquarelle douce, tons pastel')) + '">';
+        }
+        return '';
     }
 
     function readsChoice(n, avail, title) {
@@ -1551,20 +2196,41 @@
         return out;
     }
 
+    /**
+     * Une étape qui lit l'email reçu au départ reçoit ses pièces jointes en
+     * fichiers (WorkflowEventFiles) : le dire là où l'on règle ce qu'elle lit,
+     * pour qu'on ne cherche pas à cocher la messagerie dans « Peut consulter ».
+     */
+    function eventFilesHint(n) {
+        var ev = state.def.start.event;
+        if (!ev || ev.kind !== 'email') { return ''; }
+        if (mentionsOf(n).concat(n.reads || []).indexOf('evenement') < 0) { return ''; }
+        var piece = (pieceMap().evenement || {}).name || T('Email reçu');
+        return '<p class="wf-hint wf-event-files">' + esc(T('Les pièces jointes de « {piece} » sont jointes à cette étape : elle les lit en entier, sans cocher {service} dans « Peut consulter ».', {
+            piece: piece, service: ev.source === 'outlook' ? 'Outlook' : 'Gmail',
+        })) + '</p>';
+    }
+
     function stepInspector(n) {
         var avail = Object.keys(availableFor(n.key));
         return headFor('step', (cat.hues || {}).step, 'node.title', n.title)
             + issuesHtml(n.key)
-            + sec('instruction', T('Consigne'), mentionField({ id: 'wfIns', path: 'node.instruction', at: n.key, rows: 120, placeholder: T('Ce que l’étape doit faire, en une ou deux phrases. Tapez @ pour citer une pièce du dossier.') }), T('envoyée telle quelle à chaque exécution'), 'pencil')
+            + sec('instruction', T('Consigne'), mentionField({ id: 'wfIns', path: 'node.instruction', at: n.key, rows: 120, placeholder: n.output && n.output.form === 'document' && isRawFile(n.output.format)
+                ? T('Ce que doit faire ou contenir le fichier : son but, ses entrées, ses règles. Tapez @ pour citer une pièce du dossier.')
+                : T('Ce que l’étape doit faire, en une ou deux phrases. Tapez @ pour citer une pièce du dossier.') }), T('envoyée telle quelle à chaque exécution'), 'pencil')
             + choice({ id: 'profile', title: T('Qui fait le travail'), ic: 'user', summary: whoSummary(n), body: assistantTiles(n) + (n.profile_id === null ? llmSelect(n, false) : '') })
             + readsChoice(n, avail)
+            + eventFilesHint(n)
             + choice({
                 id: 'sources', title: T('Peut consulter'), ic: 'search', summary: sourcesSummary(n), empty: !(n.sources || []).length && !(n.kb_ids || []).length && !(n.tool_ids || []).length,
                 body: sourceTiles(n) + filtersEditor(n, n.sources || [], n.write !== 'none'),
             })
             + choice({ id: 'write', title: T('Ce qu’elle peut faire dans les outils'), ic: 'send', summary: writeSummary(n), body: writeRadios(n, 'step') })
             + sec('output', T('Remet au dossier'), outputEditor(n)
-                + check('node.review', n.review, T('Je relis la pièce avant la suite'), T('Une validation s’ouvre après l’étape : approuver, corriger, renvoyer avec une remarque.')), '', 'inbox')
+                + check('node.review', n.review, T('Je relis la pièce avant la suite'), R.isCreationForm(n.output.form)
+                    // Une création ne se corrige pas à la main : elle se renvoie.
+                    ? T('Une validation s’ouvre après la création : approuver, ou renvoyer avec une remarque pour qu’elle soit refaite.')
+                    : T('Une validation s’ouvre après l’étape : approuver, corriger, renvoyer avec une remarque.')), '', 'inbox')
             + onErrorSection(n);
     }
 
@@ -1580,26 +2246,18 @@
         }).map(function (k) {
             return tile({ act: 'ckind', val: k, on: n.kind === k, ic: icon(k), label: CK[k] || k, small: (L.createHelp || {})[k] || '', col: true });
         }).join('');
-        var toolTiles = tools.map(function (t) {
-            return tile({ act: 'ctool', val: t.id, on: n.tool_id === t.id, ic: icon(n.kind), label: t.name, small: t.reason || t.type_label, off: !!t.reason && n.tool_id !== t.id });
-        }).join('');
         var opts = '';
         if (n.kind === 'image') {
-            var F = L.imageFormats || {};
-            var fmt = (n.options || {}).format || '';
+            var sumImg = imageOptionsSummary(n.options);
             opts = choice({
-                id: 'options', title: T('Format'), ic: 'image', summary: esc(F[fmt] || ''), empty: !fmt,
-                body: '<div class="wf-seg wf-seg-wrap">' + Object.keys(F).map(function (f) {
-                    return '<button type="button" data-act="cformat" data-val="' + esc(f) + '"' + (fmt === f ? ' class="is-on"' : '') + '>' + esc(F[f]) + '</button>';
-                }).join('') + '</div><p class="wf-hint">' + esc(tool && !tool.can_edit
-                    ? T('Cet outil ne part pas d’une image : il crée toujours une image neuve.')
-                    : T('Une image citée ou lue (créée plus tôt, ou reçue au départ) sert d’image de départ : l’outil la reprend ou s’en inspire.')) + '</p>',
+                id: 'options', title: T('Format et fond'), ic: 'image', summary: esc(sumImg), empty: !sumImg,
+                body: creationOptionsBody('image', tool, n.options || {}, 'cformat', ''),
             });
         } else if (n.kind === 'page' && tool && tool.type === 'html_illustrated') {
             var style = (n.options || {}).style || '';
             opts = choice({
                 id: 'options', title: T('Style des illustrations'), ic: 'image', summary: esc(style || T('Celui de l’outil')), empty: !style,
-                body: '<input class="wf-input" data-bind="node.options.style" value="' + esc(style) + '" maxlength="200" placeholder="' + esc(T('Par exemple : aquarelle douce, tons pastel')) + '">',
+                body: creationOptionsBody('page', tool, n.options || {}, '', 'node.options.style'),
             });
         }
         var placeholder = {
@@ -1613,7 +2271,7 @@
             + choice({
                 id: 'tool', title: T('Avec quel outil'), ic: 'tool', warn: !tool,
                 summary: tool ? '<span class="wf-sum-src">' + icon(n.kind) + esc(tool.name + ' · ' + tool.type_label) + '</span>' : esc(T('À choisir')), empty: !tool,
-                body: toolTiles ? '<div class="wf-tiles">' + toolTiles + '</div>' : '<p class="wf-hint">' + esc(T('Aucun outil de ce type ne vous est ouvert : un administrateur les ouvre à vos groupes dans Outils.')) + '</p>',
+                body: creationToolTiles(n.kind, n.tool_id, 'ctool'),
             })
             + sec('instruction', T('Ce qu’il faut créer'), mentionField({ id: 'wfIns', path: 'node.instruction', at: n.key, rows: 110, placeholder: placeholder }), T('un champ de Fiche cité est remplacé par sa valeur'), 'pencil')
             + opts
@@ -1669,19 +2327,115 @@
             id: 'filters', title: T('Filtres'), ic: 'filter', summary: filterSummaryHtml(n.filters) || esc(T('Aucun : tout ce que l’outil voit')), empty: !R.hasFilter(n),
             body: filtersEditor(n, conn, true),
         }) : '';
+        var targetChoice = choice({
+            id: 'target', title: T('Dans quel outil'), ic: 'tool', warn: !tg,
+            summary: tg ? '<span class="wf-sum-src">' + tg.icon + esc(tg.label + (tool ? ' · ' + tool.name : '')) + '</span>' : esc(T('À choisir')), empty: !tg,
+            body: (targets ? '<div class="wf-tiles">' + targets + '</div>' : '<p class="wf-hint">' + esc(T('Aucun outil relié : reliez un service dans Réglages → Comptes connectés.')) + '</p>') + toolSel,
+        });
+        if (n.target === 'slack') {
+            return slackInspector(n, targetChoice, avail);
+        }
         return headFor('action', (cat.hues || {}).action, 'node.title', n.title)
             + issuesHtml(n.key)
-            + choice({
-                id: 'target', title: T('Dans quel outil'), ic: 'tool', warn: !tg,
-                summary: tg ? '<span class="wf-sum-src">' + tg.icon + esc(tg.label + (tool ? ' · ' + tool.name : '')) + '</span>' : esc(T('À choisir')), empty: !tg,
-                body: (targets ? '<div class="wf-tiles">' + targets + '</div>' : '<p class="wf-hint">' + esc(T('Aucun outil relié : reliez un service dans Réglages → Comptes connectés.')) + '</p>') + toolSel,
-            })
+            + targetChoice
             + sec('instruction', T('Ce que l’action fait'), mentionField({ id: 'wfIns', path: 'node.instruction', at: n.key, rows: 110, placeholder: T('Par exemple : prépare un email à l’adresse de @[Contexte] avec @[Synthèse].') }), '', 'pencil')
             + filters
             + readsChoice(n, avail)
             + choice({ id: 'write', title: T('Ce que fait l’action'), ic: 'send', summary: writeSummary(n), body: writeRadios(n, 'action') })
             + choice({ id: 'llm', title: T('Modèle'), ic: 'spark', summary: esc(llmLabel(n.llm)), body: llmSelect(n, true) + '<p class="wf-hint">' + esc(T('L’action est menée par MIA avec ce modèle ; il doit savoir piloter les connecteurs.')) + '</p>' })
             + onErrorSection(n);
+    }
+
+    // --- Brique Slack : elle publie OU elle lit (WorkflowSpec::normalizeSlack)
+    function slackDefaults() {
+        return { mode: 'post', where: 'channel', channel: '', person: '', query: '', days: 7, attach: [] };
+    }
+
+    /**
+     * Le volet d'une brique Slack : d'abord le choix qui commande tout —
+     * publier ou lire —, puis les seuls réglages de ce mode. Publier : où (un
+     * canal, une personne), le message, les pièces jointes, la validation.
+     * Lire : où (un canal, une conversation, une recherche), sur quelle
+     * période, ce qu'il faut en retenir, la pièce remise.
+     */
+    function slackInspector(n, targetChoice, avail) {
+        var S = L.slack || {};
+        var s = n.slack || (n.slack = slackDefaults());
+        var post = s.mode !== 'read';
+        var caps = cat.slack || null;
+        var modeTiles = '<div class="wf-tiles wf-slack-modes">' + ['post', 'read'].map(function (m) {
+            return tile({ act: 'smode', val: m, on: (m === 'read') === !post, ic: icon(m === 'post' ? 'send' : 'eye'), label: (S.modes || {})[m] || m, small: (S.modeHelp || {})[m] || '' });
+        }).join('') + '</div>';
+        var html = headFor('action', (cat.hues || {}).action, 'node.title', n.title)
+            + issuesHtml(n.key)
+            + targetChoice
+            + sec('slack_mode', T('Ce que fait la brique'), modeTiles, T('l’un ou l’autre'), 'route')
+            + slackWhere(n, s, post, caps);
+        if (post) {
+            var pm = pieceMap();
+            var attachable = avail.filter(function (k) { return pm[k]; });
+            var noFiles = caps && !caps.files;
+            html += sec('instruction', T('Le message'), mentionField({
+                id: 'wfIns', path: 'node.instruction', at: n.key, rows: 100,
+                placeholder: T('Ce que dit le message. Tapez @ pour y insérer une pièce telle quelle, ou un champ de Fiche.'),
+            }), T('MIA l’écrit d’après cette consigne'), 'pencil')
+                + choice({
+                    id: 'attach', title: T('Pièces jointes'), ic: 'file', warn: !!(noFiles && (s.attach || []).length),
+                    summary: chipsSummary(s.attach, T('Aucune : le message seul')), empty: !(s.attach || []).length,
+                    body: '<p class="wf-hint">' + esc(T('Jointes en fichiers au message : une image telle quelle, un document en Word ou PDF, un tableau en Excel.')) + '</p>'
+                        + chipToggles('sattach', attachable, s.attach || [])
+                        + (noFiles ? '<p class="wf-hint is-warn">' + esc(T('Votre connexion Slack ne permet pas encore de joindre des fichiers : reconnectez Slack dans Réglages → Comptes connectés.')) + '</p>' : ''),
+                })
+                + readsChoice(n, avail)
+                + choice({ id: 'write', title: T('Avant de publier'), ic: 'send', summary: writeSummary(n, 'slack'), body: writeRadios(n, 'slack') })
+                + choice({ id: 'llm', title: T('Modèle'), ic: 'spark', summary: esc(llmLabel(n.llm)), body: llmSelect(n, true) + '<p class="wf-hint">' + esc(T('MIA écrit le message avec ce modèle ; il doit savoir piloter les connecteurs.')) + '</p>' })
+                + onErrorSection(n);
+            return html;
+        }
+        var D = S.days || {};
+        var daySeg = '<div class="wf-seg wf-seg-wrap">' + Object.keys(D).map(function (d) {
+            return '<button type="button" data-act="sdays" data-val="' + esc(d) + '"' + (+s.days === +d ? ' class="is-on"' : '') + '>' + esc(D[d]) + '</button>';
+        }).join('') + (Object.keys(D).indexOf(String(s.days)) < 0 ? '<button type="button" class="is-on" data-act="sdays" data-val="' + esc(String(s.days)) + '">' + esc(T('{n} jours', { n: s.days })) + '</button>' : '') + '</div>';
+        if (!n.output) { n.output = { key: newKey('p'), name: uniquePieceName(T('Messages Slack')), form: 'text' }; }
+        html += choice({ id: 'days', title: T('Sur quelle période'), ic: 'clock', summary: esc(D[s.days] || T('{n} jours', { n: s.days })), body: daySeg })
+            + sec('instruction', T('Ce qu’il faut en retenir'), mentionField({
+                id: 'wfIns', path: 'node.instruction', at: n.key, rows: 80,
+                placeholder: T('Par exemple : les décisions prises et qui s’en charge. Vide : un résumé fidèle des échanges.'),
+            }), T('facultatif'), 'pencil')
+            + sec('output', T('Remet au dossier'), outputEditor(n, { noCreation: true }), '', 'inbox')
+            + choice({ id: 'llm', title: T('Modèle'), ic: 'spark', summary: esc(llmLabel(n.llm)), body: llmSelect(n, true) + '<p class="wf-hint">' + esc(T('Les messages sont lus avant ; le modèle n’en tire que la pièce — tout modèle convient.')) + '</p>' })
+            + onErrorSection(n);
+        return html;
+    }
+
+    /** Où publier (un canal, une personne) ou lire (un canal, une conversation, une recherche). */
+    function slackWhere(n, s, post, caps) {
+        var S = L.slack || {};
+        var opts = (post ? S.to : S.from) || {};
+        var seg = '<div class="wf-seg wf-seg-wrap">' + Object.keys(opts).map(function (w) {
+            return '<button type="button" data-act="swhere" data-val="' + esc(w) + '"' + (s.where === w ? ' class="is-on"' : '') + '>'
+                + icon(w === 'person' ? 'user' : (w === 'search' ? 'search' : 'chat')) + esc(opts[w]) + '</button>';
+        }).join('') + '</div>';
+        var field;
+        var hint;
+        if (s.where === 'person') {
+            field = mentionField({ id: 'wfSlackPerson', path: 'node.slack.person', at: n.key, input: true, accept: 'value',
+                placeholder: T('Marie Dupont, @marie ou marie@exemple.fr — ou @ pour citer un champ') });
+            hint = post ? T('Un message direct, que cette personne seule verra. Son nom, son pseudo Slack ou son adresse — l’adresse d’une Fiche, par exemple.')
+                : T('Votre conversation directe avec cette personne.');
+            if (post && caps && !caps.direct) {
+                hint += ' ' + T('Votre connexion Slack ne permet pas encore d’écrire à une personne : reconnectez Slack dans Réglages → Comptes connectés.');
+            }
+        } else if (s.where === 'search') {
+            field = mentionField({ id: 'wfSlackQuery', path: 'node.slack.query', at: n.key, input: true, accept: 'value',
+                placeholder: T('Par exemple : budget in:#projets from:@marie') });
+            hint = T('Dans tout ce que vous voyez dans Slack. La syntaxe de Slack est acceptée (in:, from:).');
+        } else {
+            field = mentionField({ id: 'wfSlackChannel', path: 'node.slack.channel', at: n.key, input: true, accept: 'value',
+                placeholder: T('#general — comme il s’écrit dans Slack') });
+            hint = post ? T('Un canal dont vous êtes membre : le message y est visible de tous.') : T('Un canal dont vous êtes membre.');
+        }
+        return sec('slack', post ? T('Où publier') : T('Où lire'), seg + field + '<p class="wf-hint">' + esc(hint) + '</p>', '', post ? 'send' : 'eye');
     }
 
     // --- Condition
@@ -1694,6 +2448,7 @@
             body = sec('question', T('La question'), mentionField({ id: 'wfQ', path: 'node.question', at: n.key, rows: 80, placeholder: T('Une question fermée : oui ou non. Citez les pièces avec @.') })
                 + '<p class="wf-hint">' + esc(T('MIA répond oui ou non, avec sa raison, visible dans l’exécution.')) + '</p>', '', 'spark')
                 + readsChoice(n, Object.keys(avail), T('En s’appuyant aussi sur'))
+                + kbChoice(n)
                 + choice({
                     id: 'doubt', title: T('Si MIA hésite'), ic: 'hand', summary: esc(n.doubt === 'no' ? T('Prendre « non »') : T('Me demander')),
                     body: radio('doubt', 'ask', n.doubt === 'ask', T('Me demander'), T('Une validation s’ouvre avec ce que MIA a vu.'))
@@ -1778,6 +2533,7 @@
             + sec('routes', T('Les voies'), '<div class="wf-routes">' + cards + '</div>' + add
                 + '<p class="wf-hint">' + esc(T('Décrivez chaque scénario : MIA choisit par le nom et la description. Les briques de chaque voie s’ajoutent sur le rail.')) + '</p>', T('{n} au plus', { n: lim.routes_max || 6 }), 'route')
             + readsChoice(n, avail, T('En s’appuyant aussi sur'))
+            + kbChoice(n)
             + choice({
                 id: 'fallback', title: T('Si MIA ne sait pas choisir'), ic: 'hand', summary: esc(fb ? T('Prendre « {voie} »', { voie: fb.label || '…' }) : T('Me demander')),
                 body: radio('fallback', 'ask', !fb, T('Me demander'), T('Une validation s’ouvre : vous choisissez la voie, avec ce que MIA a vu.'))
@@ -1786,10 +2542,20 @@
             + onErrorSection(n);
     }
 
-    /** Éditeur d'une règle sur des champs de Fiche (condition, sortie d'une boucle). `prefix` : rule | urule. */
+    /**
+     * Éditeur d'une règle sur des champs de Fiche (condition, filtre et sortie
+     * d'une boucle). `prefix` : rule | frule | urule.
+     *
+     * Une règle répond OUI ou NON : ses conditions se COMBINENT (toutes, ou au
+     * moins une). La phrase de tête le dit avant les lignes, et la combinaison
+     * en fait partie — retour du 2026-11-04 : trois conditions « Départ est
+     * égal à Oui / Non / Peut-être » jointes par « Toutes » ne pouvaient
+     * jamais être vraies, la personne pensait décrire trois réponses.
+     */
     function ruleEditor(rule, avail, prefix) {
         var fiches = Object.keys(avail).map(function (k) { return avail[k]; }).filter(function (p) { return p.form === 'fiche'; });
-        var rows = (rule.items || []).map(function (it, i) {
+        var items = rule.items || [];
+        var rows = items.map(function (it, i) {
             var fieldOpts = fiches.map(function (p) {
                 return '<optgroup label="' + esc(p.name) + '">' + (p.fields || []).map(function (f) {
                     var v = p.key + '|' + f.key;
@@ -1802,17 +2568,49 @@
             var ops = ((L.opsFor || {})[type] || []).map(function (o) { return '<option value="' + o + '"' + (o === it.op ? ' selected' : '') + '>' + esc((L.ops || {})[o] || o) + '</option>'; }).join('');
             var noValue = ['empty', 'notempty', 'yes', 'no'].indexOf(it.op) >= 0;
             var inputType = type === 'number' ? 'number' : type === 'date' ? 'date' : 'text';
+            var options = f && Array.isArray(f.options) ? f.options.filter(function (o) { return String(o) !== ''; }) : [];
+            var value;
+            if (noValue) {
+                value = '<span></span>';
+            } else if (options.length && (it.op === 'eq' || it.op === 'ne')) {
+                // Un Choix : ses options, pas une saisie libre (une faute de
+                // frappe rendrait la condition toujours fausse).
+                var known = options.some(function (o) { return String(o) === String(it.value); });
+                value = '<select class="wf-select" data-' + prefix + '="' + i + '" data-prop="value">'
+                    + (known ? '' : '<option value="' + esc(it.value) + '" selected>' + esc(it.value === '' ? T('Valeur…') : it.value) + '</option>')
+                    + options.map(function (o) { return '<option value="' + esc(o) + '"' + (String(o) === String(it.value) ? ' selected' : '') + '>' + esc(o) + '</option>'; }).join('')
+                    + '</select>';
+            } else {
+                value = '<input class="wf-input" type="' + inputType + '" data-' + prefix + '="' + i + '" data-prop="value" value="' + esc(it.value) + '">';
+            }
             return '<div class="wf-rule-row"><select class="wf-select" data-' + prefix + '="' + i + '" data-prop="field"><option value="">' + esc(T('Champ…')) + '</option>' + fieldOpts + '</select>'
                 + '<select class="wf-select" data-' + prefix + '="' + i + '" data-prop="op">' + ops + '</select>'
-                + (noValue ? '<span></span>' : '<input class="wf-input" type="' + inputType + '" data-' + prefix + '="' + i + '" data-prop="value" value="' + esc(it.value) + '">')
-                + '<button type="button" class="wf-tool danger" data-act="' + prefix + '-del" data-val="' + i + '">' + icon('trash') + '</button></div>';
+                + value
+                + '<button type="button" class="wf-tool danger" data-act="' + prefix + '-del" data-val="' + i + '" title="' + esc(T('Retirer cette condition')) + '" aria-label="' + esc(T('Retirer cette condition')) + '">' + icon('trash') + '</button></div>';
         }).join('');
         var bindJoin = prefix === 'rule' ? 'node.rule.join' : (prefix === 'frule' ? 'node.filter.rule.join' : 'node.until.rule.join');
+        var joinSel = '<select class="wf-select wf-rule-join" data-bind="' + bindJoin + '" aria-label="' + esc(T('Comment se combinent les conditions')) + '">'
+            + '<option value="all"' + (rule.join !== 'any' ? ' selected' : '') + '>' + esc(T('toutes ces conditions sont vraies')) + '</option>'
+            + '<option value="any"' + (rule.join === 'any' ? ' selected' : '') + '>' + esc(T('au moins une de ces conditions est vraie')) + '</option></select>';
+        var yes = prefix === 'rule' ? T('« Si oui »') : (prefix === 'frule' ? T('l’élément est gardé') : T('la boucle s’arrête'));
+        var lead = '';
+        if (items.length > 1) {
+            // Phrase en ligne (pas de flex) : le texte se replie mot à mot autour
+            // de la liste, et l'espace insécable colle « ; » à la liste — une
+            // ligne ne commence jamais par un point-virgule.
+            lead = '<div class="wf-rule-lead"><span>' + esc(prefix === 'rule' ? T('Le workflow prend la voie {voie} quand', { voie: yes }) : T('{suite} quand', { suite: yes.charAt(0).toUpperCase() + yes.slice(1) })) + '</span> ' + joinSel
+                + (prefix === 'rule' ? '<span>\u00a0' + esc(T('; sinon, la voie « Si non ».')) + '</span>' : '<span>.</span>') + '</div>';
+        } else if (items.length === 1 && prefix === 'rule') {
+            lead = '<p class="wf-rule-lead">' + esc(T('Le workflow prend la voie « Si oui » quand cette condition est vraie ; sinon, la voie « Si non ».')) + '</p>';
+        }
+        var limit = (cat.limits || {}).rule;
         return (fiches.length || prefix === 'frule' ? '' : '<p class="wf-hint">' + esc(T('Une règle lit les champs d’une Fiche remise avant elle. Ajoutez une étape qui remet une Fiche, ou un champ au départ.')) + '</p>')
+            + lead
             + rows
-            + ((rule.items || []).length < (cat.limits || {}).rule && fiches.length ? '<button type="button" class="wf-btn sm" data-act="' + prefix + '-add">' + icon('plus') + esc(T('Ajouter une condition')) + '</button>' : '')
-            + ((rule.items || []).length > 1 ? '<select class="wf-select" data-bind="' + bindJoin + '"><option value="all"' + (rule.join === 'all' ? ' selected' : '') + '>' + esc(T('Toutes les conditions')) + '</option><option value="any"' + (rule.join === 'any' ? ' selected' : '') + '>' + esc(T('Au moins une')) + '</option></select>' : '')
-            + '<p class="wf-hint">' + esc(T('Une règle se calcule sans IA : même réponse à chaque fois, aucun crédit.')) + '</p>';
+            + (items.length < limit && fiches.length ? '<button type="button" class="wf-btn sm" data-act="' + prefix + '-add">' + icon('plus') + esc(items.length ? T('Ajouter une condition') : T('Ajouter la condition')) + '</button>' : '')
+            + '<p class="wf-hint">' + esc(prefix === 'rule'
+                ? T('Une condition répond oui ou non : ses conditions se combinent en UNE réponse. Plusieurs réponses possibles pour un même champ ? Choisissez « au moins une », ou une Décision de MIA pour plus de deux voies. Une règle se calcule sans IA : même réponse à chaque fois, aucun crédit.')
+                : T('Une règle se calcule sans IA : même réponse à chaque fois, aucun crédit.')) + '</p>';
     }
 
     // --- Validation
@@ -1953,7 +2751,20 @@
         var out = '';
         var readsPiece = R.readsPiece(src);
         if (def.drive) {
-            out += fromSeg(n, [['piece', T('Une pièce du dossier'), 'inbox'], ['drive', T('Un fichier Google Drive'), 'cloud']]);
+            var froms = [['piece', T('Une pièce du dossier'), 'inbox'], ['drive', T('Un fichier Google Drive'), 'cloud']];
+            // Les lignes d'une table permanente (Bases de connaissances).
+            if (def.tables && ((cat.tables || []).length || src.from === 'table')) { froms.push(['table', T('Une table de vos bases'), 'table']); }
+            out += fromSeg(n, froms);
+        }
+        var fromTable = kind === 'rows' && src.from === 'table';
+        if (fromTable) {
+            var tbls = cat.tables || [];
+            out += '<label class="wf-lbl">' + esc(T('La table parcourue')) + '</label>' + (tbls.length || src.table_id
+                ? '<select class="wf-select" data-act-change="loop-table"><option value="">' + esc(T('Choisir une table…')) + '</option>' + tbls.map(function (t) {
+                    return '<option value="' + t.id + '"' + (src.table_id === t.id ? ' selected' : '') + '>' + esc(t.name + ' — ' + (window.tn ? window.tn(t.rows, '{n} ligne', '{n} lignes') : t.rows)) + '</option>';
+                }).join('') + (src.table_id && !tbls.some(function (t) { return t.id === src.table_id; }) ? '<option value="' + src.table_id + '" selected>' + esc(src.table || T('Table indisponible')) + '</option>' : '') + '</select>'
+                : '<p class="wf-hint wf-hint-warn">' + esc(T('Aucune table dans vos bases de connaissances : créez-en une (Bases de connaissances → Nouvelle table).')) + '</p>')
+                + '<p class="wf-hint">' + esc(T('La table est relue au lancement de la boucle, avec vos droits : ses lignes du moment, jusqu’à {n} tours.', { n: (cat.limits || {}).each_max || 200 })) + '</p>';
         }
         if (kind === 'attachments') {
             out += fromSeg(n, [['piece', T('L’email reçu'), 'mail'], ['search', T('Les emails d’une recherche'), 'search']]);
@@ -1970,7 +2781,7 @@
                     : (kind === 'rows' || kind === 'slides' || kind === 'pages' || kind === 'sections'
                         ? T('Aucun fichier avant la boucle : ajoutez un champ Fichier au départ, ou lisez un fichier Google Drive.')
                         : T('Aucune pièce à parcourir avant la boucle : ajoutez une étape qui en remet une.'))) + '</p>');
-        } else if (def.drive || def.folder) {
+        } else if ((def.drive || def.folder) && !fromTable) {
             out += '<label class="wf-lbl">' + esc(def.folder ? T('Le dossier Google Drive') : T('Le fichier Google Drive')) + '</label>'
                 + mentionField({ id: 'wfLoopDrive', path: 'node.source.drive', at: n.key, input: true, accept: 'value', placeholder: def.folder ? T('Lien, nom ou chemin : Clients/Factures 2026') : T('Lien, nom ou chemin : Suivi/Clients.xlsx') });
         }
@@ -1996,16 +2807,20 @@
             var headOpts = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(function (h) {
                 return '<option value="' + h + '"' + ((src.header || 0) === h ? ' selected' : '') + '>' + esc(h === 0 ? T('En-tête détecté') : T('En-tête ligne {n}', { n: h })) + '</option>';
             }).join('');
-            out += '<div class="wf-row2"><input class="wf-input" data-bind="node.source.sheet" value="' + esc(src.sheet || '') + '" placeholder="' + esc(T('Onglet (le premier si vide)')) + '" aria-label="' + esc(T('Onglet')) + '">'
-                + '<select class="wf-select" data-bind="node.source.header" aria-label="' + esc(T('Ligne d’en-tête')) + '">' + headOpts + '</select></div>';
+            if (!fromTable) {
+                out += '<div class="wf-row2"><input class="wf-input" data-bind="node.source.sheet" value="' + esc(src.sheet || '') + '" placeholder="' + esc(T('Onglet (le premier si vide)')) + '" aria-label="' + esc(T('Onglet')) + '">'
+                    + '<select class="wf-select" data-bind="node.source.header" aria-label="' + esc(T('Ligne d’en-tête')) + '">' + headOpts + '</select></div>';
+            }
             out += '<label class="wf-lbl">' + esc(T('Les colonnes que les briques citent')) + '</label>'
                 + columnsEditor(n, src.columns || (src.columns = []), 'lcol', 'lcol', T('Ajouter une colonne'));
             if ((src.columns || []).length) {
                 out += '<label class="wf-lbl">' + esc(T('La colonne qui nomme chaque ligne')) + '</label><select class="wf-select" data-bind="node.source.label"><option value="">' + esc(T('La première colonne')) + '</option>'
                     + src.columns.map(function (c) { return '<option value="' + esc(c.key) + '"' + (src.label === c.key ? ' selected' : '') + '>' + esc(c.label) + '</option>'; }).join('') + '</select>';
             }
-            out += '<p class="wf-hint">' + esc(T('Une colonne se retrouve dans le fichier par son nom (sans tenir compte des majuscules ni des accents). Une colonne absente arrête la boucle avant le premier tour, sans rien dépenser.')) + '</p>';
-            out += sampleBlock(n, 'rows');
+            out += '<p class="wf-hint">' + esc(fromTable
+                ? T('Les colonnes de la table, reprises quand vous la choisissez. Une colonne renommée ou supprimée depuis arrête la boucle avant le premier tour, sans rien dépenser.')
+                : T('Une colonne se retrouve dans le fichier par son nom (sans tenir compte des majuscules ni des accents). Une colonne absente arrête la boucle avant le premier tour, sans rien dépenser.')) + '</p>';
+            if (!fromTable) { out += sampleBlock(n, 'rows'); }
         }
         if (kind === 'slides' || kind === 'pages' || kind === 'sections') {
             out += sampleBlock(n, kind);
@@ -2102,8 +2917,8 @@
                         + '<p class="wf-hint">' + esc(T('À chaque nouveau tour, l’étape reprend sa version précédente et sait pourquoi elle ne suffisait pas.')) + '</p>',
                 });
         }
-        // Ce que la boucle rassemble : une étape ; « jusqu'à » suit aussi une création (R.loopCollect).
-        var outs = (n.body || []).filter(function (c) { return c.output && (c.type === 'step' || (c.type === 'create' && n.mode === 'until')); });
+        // Ce que la boucle rassemble : une pièce rédigée ; « jusqu'à » suit aussi une création (R.loopCollect).
+        var outs = (n.body || []).filter(function (c) { return R.loopCollectable(n, c); });
         var collect = R.loopCollect(n);
         var collectSel = outs.length > 1
             ? '<select class="wf-select" data-bind="node.collect">' + outs.map(function (c) {
@@ -2196,6 +3011,209 @@
             + body;
     }
 
+    // --- Appeler un workflow
+    /** Le workflow qu'appelle une brique (catalogue), ou null. */
+    function calledWorkflow(n) { return R.findWorkflow(cat, n.workflow_id); }
+
+    /** Les autres workflows de la personne : ceux qu'une brique peut appeler. */
+    function callableWorkflows() {
+        return (cat.workflows || []).filter(function (w) { return w.id !== state.workflow.id; });
+    }
+
+    /** Nom donné d'office à la pièce récupérée (remplacé tant que la personne ne l'a pas réécrit). */
+    var callAutoNames = {};
+
+    /**
+     * La pièce récupérée, recopiée du livrable de l'appelé (miroir de
+     * WorkflowCall::outputShape) : sa forme, ses champs, son format. `from`
+     * vide : tout le livrable, en un texte.
+     */
+    function setCallOutput(n, wf, from) {
+        var src = ((wf && wf.outputs) || []).filter(function (p) { return p.key === from; })[0];
+        var old = n.output || { key: newKey('p'), name: '' };
+        var auto = !old.name || old.name === callAutoNames[n.key] || old.name.indexOf(T('Résultat du workflow')) === 0;
+        var out = { key: old.key, name: old.name, from: src ? src.key : '', form: src ? src.form : 'text' };
+        if (src && src.form === 'fiche') { out.fields = clone(src.fields || []); }
+        if (src && src.form === 'document') { out.format = src.format || 'docx'; }
+        n.output = out;
+        if (auto) {
+            n.output.name = '';
+            n.output.name = uniquePieceName(src ? src.name : (wf ? T('Résultat de « {nom} »', { nom: wf.name }).slice(0, 80) : T('Résultat du workflow')));
+            callAutoNames[n.key] = n.output.name;
+        }
+    }
+
+    /**
+     * Paramètres proposés d'office : un champ du départ de l'appelé reçoit le
+     * champ de Fiche (ou, pour un fichier, la pièce) du dossier qui porte le
+     * même nom — le plus souvent, il n'y a plus qu'à vérifier.
+     */
+    function autoParams(wf, avail) {
+        var params = {};
+        var byName = {};
+        Object.keys(avail || {}).forEach(function (k) {
+            var p = avail[k];
+            if (!byName['p:' + fold(p.name)]) { byName['p:' + fold(p.name)] = '@{' + k + '}'; }
+            (p.fields || []).forEach(function (f) {
+                if (!byName['f:' + fold(f.label)]) { byName['f:' + fold(f.label)] = '@{' + k + '.' + f.key + '}'; }
+            });
+        });
+        ((wf && wf.fields) || []).forEach(function (f) {
+            var hit = byName[(f.type === 'file' ? 'p:' : 'f:') + fold(f.label)];
+            if (hit) { params[f.key] = hit; }
+        });
+        return params;
+    }
+
+    /** Choisir (ou changer) le workflow appelé : son titre, ses paramètres et sa pièce suivent. */
+    function pickCall(n, id, avail) {
+        var prev = calledWorkflow(n);
+        var wf = R.findWorkflow(cat, id);
+        if (!wf) { return; }
+        var autoTitles = [T('Appeler un workflow')].concat(prev ? [T('Appeler {nom}', { nom: prev.name }).slice(0, 120)] : []);
+        if (!n.title || autoTitles.indexOf(n.title) >= 0) { n.title = T('Appeler {nom}', { nom: wf.name }).slice(0, 120); }
+        n.workflow_id = wf.id;
+        n.params = autoParams(wf, avail);
+        // Une seule pièce dans son livrable : c'est elle, sous sa forme ; sinon tout le livrable.
+        setCallOutput(n, wf, (wf.outputs || []).length === 1 ? wf.outputs[0].key : '');
+    }
+
+    /** Ce qu'attend un workflow, en une ligne (tuile du choix). */
+    function callSignature(w) {
+        var need = (w.fields || []).length + (w.event ? 1 : 0);
+        var give = (w.outputs || []).length;
+        return [
+            need === 0 ? T('Aucun paramètre') : (need === 1 ? T('1 paramètre') : T('{n} paramètres', { n: need })),
+            give === 0 ? '' : (give === 1 ? T('remet « {piece} »', { piece: w.outputs[0].name }) : T('remet {n} pièces', { n: give })),
+        ].filter(Boolean).join(' · ');
+    }
+
+    /** Alertes « À régler » d'un paramètre (cible `param:<clé>`), posées sous son champ. */
+    function paramAlerts(nodeKey, fieldKey) {
+        return state.issues.filter(function (i) { return i.node === nodeKey && i.target === 'param:' + fieldKey; }).map(function (i) {
+            return '<p class="wf-call-alert' + (i.level === 'block' ? ' block' : '') + '">' + icon('alert') + '<span>' + esc(i.text) + '</span></p>';
+        }).join('');
+    }
+
+    /** Un paramètre : son nom, sa nature, sa valeur (un texte qui cite le dossier, ou une pièce pour un fichier). */
+    function callParam(n, f, avail, wf) {
+        var FT = L.fieldTypes || {};
+        var value = String((n.params || {})[f.key] || '');
+        var id = 'wfCallP_' + f.key;
+        var head = '<div class="wf-call-param-head"><b>' + esc(f.label || f.key) + '</b><span class="wf-call-type">' + esc(FT[f.type] || f.type) + '</span>'
+            + (f.required ? '<em>' + esc(T('obligatoire')) + '</em>' : '')
+            + (f.help ? hintDot(f.label || f.key, f.help) : '') + '</div>';
+        var field;
+        if (f.type === 'file') {
+            // Un fichier : une pièce du dossier, transmise telle quelle (document, image, fichier reçu…).
+            var current = (value.match(/^@\{([a-z0-9_]+)\}$/) || [])[1] || '';
+            var keys = Object.keys(avail);
+            field = keys.length || current
+                ? '<select class="wf-select" data-act-change="call-file" data-val="' + esc(f.key) + '"><option value="">'
+                    + esc(f.reference ? T('Son document de référence') : (f.required ? T('Choisir une pièce…') : T('Aucun fichier'))) + '</option>'
+                    + keys.map(function (k) { return '<option value="' + esc(k) + '"' + (k === current ? ' selected' : '') + '>' + esc(avail[k].name) + '</option>'; }).join('')
+                    + (current && !avail[current] ? '<option value="' + esc(current) + '" selected>' + esc(T('Pièce indisponible ici')) + '</option>' : '')
+                    + '</select>'
+                : '<p class="wf-hint">' + esc(T('Aucune pièce avant cette brique : ajoutez un champ Fichier au départ, ou une étape qui remet un document.')) + '</p>';
+        } else {
+            var typed = f.type !== 'text' && f.type !== 'longtext';
+            var placeholder = f['default'] !== '' && f['default'] !== undefined && f['default'] !== null
+                ? T('Par défaut : {v}', { v: f['default'] })
+                : (f.required ? T('Une valeur, ou @ pour citer le dossier') : T('Facultatif'));
+            field = mentionField({ id: id, path: 'node.params.' + f.key, at: n.key, accept: typed ? 'value' : 'any', input: f.type !== 'longtext', rows: 64, placeholder: placeholder });
+            // Un choix, un oui / non : ses valeurs, d'un clic.
+            var quick = f.type === 'choice' ? (f.options || []) : (f.type === 'yesno' ? [T('oui'), T('non')] : []);
+            if (quick.length) {
+                field += '<div class="wf-call-opts">' + quick.map(function (o) {
+                    return '<button type="button" class="wf-call-opt' + (value === o ? ' is-on' : '') + '" data-act="call-opt" data-val="' + esc(f.key + '|' + o) + '">' + esc(o) + '</button>';
+                }).join('') + '</div>';
+            }
+        }
+        return '<div class="wf-call-param" data-call-param="' + esc(f.key) + '">' + head + field
+            + '<div class="wf-call-alerts" data-param-issues="' + esc(f.key) + '">' + paramAlerts(n.key, f.key) + '</div></div>';
+    }
+
+    function callInspector(n) {
+        if (!n.params || Array.isArray(n.params)) { n.params = {}; }
+        var wf = calledWorkflow(n);
+        var others = callableWorkflows();
+        // La teinte de l'espace Workflows : toutes les briques d'appel se ressemblent ;
+        // la couleur du workflow appelé ne marque que son point.
+        var hue = 'var(--wf-call, ' + ((cat.hues || {}).call || '#0d9488') + ')';
+        var avail = availableFor(n.key);
+        var F = L.forms || {};
+        var CS = L.callStop || {};
+
+        // 1. Quel workflow.
+        var dot = function (w) { return '<span class="wf-call-dot" style="--c:' + esc((w && w.color) || (cat.hues || {}).call) + '">' + icon('workflow') + '</span>'; };
+        var tiles = others.length
+            ? '<div class="wf-call-list">' + others.map(function (w) {
+                return tile({ act: 'call-pick', val: w.id, on: n.workflow_id === w.id, ic: dot(w), label: w.name,
+                    small: w.published ? (w.active === false ? T('En pause') + ' · ' : '') + callSignature(w) : T('Pas encore publié') });
+            }).join('') + '</div>'
+            : '<p class="wf-hint">' + esc(T('Vous n’avez pas d’autre workflow. Créez celui que cette brique appellera, publiez-le, puis revenez ici.')) + '</p>';
+        var which = wf
+            ? choice({
+                id: 'workflow', title: T('Workflow appelé'), ic: 'call',
+                summary: '<span class="wf-sum-who">' + dot(wf) + '<b>' + esc(wf.name) + '</b><small>' + esc(wf.published ? callSignature(wf) : T('Pas encore publié')) + '</small></span>',
+                body: tiles + '<p class="wf-hint"><a href="/workflows/' + wf.id + '/edit" target="_blank" rel="noopener">' + esc(T('Ouvrir « {nom} » dans un nouvel onglet', { nom: wf.name })) + '</a></p>',
+            })
+            : sec('workflow', T('Quel workflow appeler ?'), tiles
+                + (n.workflow_id ? '<p class="wf-hint">' + esc(T('Le workflow choisi n’existe plus : choisissez-en un autre.')) + '</p>' : ''), '', 'call');
+
+        // 2. Ce qu'on lui donne.
+        var params = '';
+        if (wf && wf.published) {
+            var rows = (wf.fields || []).map(function (f) { return callParam(n, f, avail, wf); });
+            if (wf.event) {
+                // Il démarre d'habitude sur un évènement : ce qui en tient lieu ici.
+                rows.push(callParam(n, { key: 'evenement', label: wf.event.name, type: wf.event.form === 'file' ? 'file' : 'longtext', required: false, 'default': '',
+                    help: T('Ce workflow démarre d’habitude sur un évènement. Donnez ici ce qui en tient lieu : le texte ou la pièce qu’il traitera.') }, avail, wf));
+            }
+            params = sec('params', T('Ce que vous lui donnez'), rows.length
+                ? '<p class="wf-hint">' + esc(T('Ce sont les champs de son départ. Écrivez une valeur, ou tapez @ pour citer une pièce ou un champ du dossier.')) + '</p>'
+                    + '<div class="wf-call-params">' + rows.join('') + '</div>'
+                : '<p class="wf-hint">' + esc(T('« {nom} » ne demande rien au départ : il n’y a rien à lui donner.', { nom: wf.name })) + '</p>',
+            rows.length ? (rows.length === 1 ? T('1 paramètre') : T('{n} paramètres', { n: rows.length })) : '', 'field');
+        } else if (wf) {
+            params = sec('params', T('Ce que vous lui donnez'), '<p class="wf-hint">' + esc(T('Ses paramètres apparaîtront ici une fois « {nom} » publié.', { nom: wf.name })) + '</p>', '', 'field');
+        }
+
+        // 3. Ce qu'on récupère.
+        var output = '';
+        if (wf) {
+            var from = (n.output || {}).from || '';
+            var outs = (wf.outputs || []).map(function (p) {
+                var fields = p.form === 'fiche' && (p.fields || []).length ? ' — ' + p.fields.map(function (x) { return x.label; }).join(', ') : '';
+                return radio('call-out', p.key, from === p.key, p.name, (F[p.form] || p.form) + fields);
+            });
+            outs.push(radio('call-out', '', from === '' || !(wf.outputs || []).some(function (p) { return p.key === from; }),
+                T('Tout son livrable, en un texte'), (wf.outputs || []).length ? T('Toutes les pièces de son livrable, réunies.') : T('Son livrable ne montre aucune pièce : tout ce qu’il a produit, réuni.')));
+            output = sec('output', T('Ce que vous récupérez'), outs.join('')
+                + '<label class="wf-lab-in wf-call-name"><span>' + esc(T('Nom de la pièce ici')) + '</span><input class="wf-input" data-bind="node.output.name" value="' + esc((n.output || {}).name || '') + '"></label>'
+                + '<p class="wf-hint">' + esc(T('La pièce entre au dossier comme celle d’une étape : les briques suivantes la lisent, une règle lit ses champs.')) + '</p>', '', 'inbox');
+        }
+
+        // 4. Si ça ne se passe pas comme prévu.
+        var onStop = n.on_stop === 'continue' ? 'continue' : 'stop';
+        var oe = n.on_error || (n.on_error = { retries: 0, then: 'stop' });
+        var after = wf ? choice({
+            id: 'onstop', title: T('S’il s’arrête avant la fin'), ic: 'stop', summary: esc(CS[onStop] || onStop),
+            body: '<p class="wf-hint">' + esc(T('Une voie « arrêter » ou une brique « Arrêter le workflow » peut le terminer avant son livrable : ce n’est pas une erreur.')) + '</p>'
+                + radio('callstop', 'stop', onStop === 'stop', CS.stop || '', T('Ce workflow s’arrête lui aussi, proprement.'))
+                + radio('callstop', 'continue', onStop === 'continue', CS['continue'] || '', T('La suite se passe de sa pièce.')),
+        }) + choice({
+            id: 'onerror', title: T('S’il échoue'), ic: 'shield', summary: esc(oe.then === 'skip' ? (L.onError || {}).skip || '' : T('Arrêter ici, reprenable')),
+            body: '<p class="wf-hint">' + esc(T('Ses propres briques réessaient déjà les pannes passagères. Si l’erreur persiste :')) + '</p>'
+                + radio('onerror', 'stop', oe.then !== 'skip', T('Arrêter ici, reprenable'), T('« Reprendre » le relance là où il s’est arrêté : rien de son travail n’est refait.'))
+                + radio('onerror', 'skip', oe.then === 'skip', (L.onError || {}).skip || '', T('La suite se passe de sa pièce. À réserver aux appels facultatifs.')),
+        }) : '';
+
+        return headFor('call', hue, 'node.title', n.title)
+            + issuesHtml(n.key)
+            + which + params + output + after;
+    }
+
     // --- Me prévenir
     function notifyInspector(n) {
         return headFor('notify', (cat.hues || {}).notify, 'node.title', n.title)
@@ -2247,14 +3265,14 @@
         var Ld = L.deliveries || {};
         var cards = list.map(function (d, i) { return deliveryCard(d, i, avail); }).join('');
         var room = list.length < ((cat.limits || {}).deliveries || 5);
-        var add = room ? '<div class="wf-dl-add">' + ['email', 'drive', 'slack', 'kb'].map(function (t) {
+        var add = room ? '<div class="wf-dl-add">' + ['email', 'drive', 'slack', 'kb', 'table'].map(function (t) {
             return '<button type="button" class="wf-btn sm" data-act="dl-add" data-val="' + t + '">' + icon(deliveryIcon(t)) + esc(Ld[t] || t) + '</button>';
         }).join('') + '</div>' : '';
         return sec('deliveries', T('Puis le livrable part'), (cards || '<p class="wf-hint">' + esc(T('Facultatif : envoyer, ranger ou publier le livrable à la fin, sans le faire à la main.')) + '</p>') + add, '', 'send');
     }
 
     function deliveryIcon(t) {
-        return { email: 'mail', drive: 'folder', slack: 'chat', kb: 'kb' }[t] || 'send';
+        return { email: 'mail', drive: 'folder', slack: 'chat', kb: 'kb', table: 'table' }[t] || 'send';
     }
 
     function sourceState(key) {
@@ -2275,6 +3293,11 @@
         }
         if (d.type === 'drive' && d.folder) { bits.push(T('dans « {dossier} »', { dossier: toDisplay(d.folder) })); }
         if (d.type === 'slack' && d.channel) { bits.push(d.channel); }
+        if (d.type === 'table') {
+            var tb = (cat.delivery_tables || []).filter(function (x) { return x.id === d.kb_id; })[0];
+            bits.push(tb ? T('dans « {table} »', { table: tb.name }) : T('table à choisir'));
+            bits.push(((L.tableWrites || {})[d.write]) || d.write);
+        }
         if (d.type !== 'kb') { bits.push(M[d.mode] || d.mode); }
         return esc(bits.join(' · ')) + (names.length ? ' <span class="wf-sum-chips">' + names.filter(function (k) { return pm[k]; }).map(function (k) { return chip(pm[k]); }).join('') + '</span>' : '');
     }
@@ -2323,6 +3346,32 @@
                 + '<label class="wf-lab">' + esc(T('Message')) + '</label>' + mentionField({ id: 'wfDlSlack' + i, path: base + '.message', at: 'end', rows: 80, placeholder: T('Citez une pièce avec @ : son contenu sera inséré.') })
                 + '<label class="wf-lab">' + esc(T('Pièces publiées à la suite')) + '</label>' + toggles('dl-piece', avail, d.pieces)
                 + modes(['approve', 'auto'], L.deliveryModes || {});
+        } else if (d.type === 'table') {
+            var tbls = cat.delivery_tables || [];
+            var target = tbls.filter(function (x) { return x.id === d.kb_id; })[0] || null;
+            var Wr = L.tableWrites || {};
+            body = (tbls.length || d.kb_id
+                ? '<select class="wf-select" data-bind="' + base + '.kb_id"><option value="">' + esc(T('Choisir une table…')) + '</option>' + tbls.map(function (tb) {
+                    return '<option value="' + tb.id + '"' + (d.kb_id === tb.id ? ' selected' : '') + '>' + esc(tb.name) + '</option>';
+                }).join('') + '</select>'
+                : '<p class="wf-hint">' + esc(T('Aucune table que vous gérez et où MIA peut écrire (réglage « MIA peut » de sa fiche).')) + '</p>')
+                + '<label class="wf-lab">' + esc(T('Pièce à écrire')) + '</label>' + toggles('dl-piece', avail.filter(function (k) { return pm[k] && (pm[k].form === 'table' || pm[k].form === 'fiche' || (pm[k].form === 'document' && pm[k].format === 'xlsx')); }), d.pieces)
+                + '<p class="wf-hint">' + esc(T('Un Tableau : ses lignes. Une Fiche : une ligne, ses champs en colonnes. Une colonne absente de la table est créée.')) + '</p>'
+                + '<label class="wf-lab">' + esc(T('Comment l’écrire')) + '</label><div class="wf-seg wf-seg-wrap">' + ['ajouter', 'mettre_a_jour', 'remplacer'].map(function (w) {
+                    return '<button type="button" data-act="dl-write" data-val="' + i + '|' + w + '"' + (d.write === w ? ' class="is-on"' : '') + '>' + esc(Wr[w] || w) + '</button>';
+                }).join('') + '</div>'
+                + (d.write === 'mettre_a_jour'
+                    ? '<label class="wf-lab">' + esc(T('Colonne qui identifie une ligne')) + '</label>' + (target
+                        ? '<select class="wf-select" data-bind="' + base + '.key"><option value="">' + esc(T('Choisir…')) + '</option>' + (target.columns || []).map(function (c) {
+                            return '<option value="' + esc(c.label) + '"' + (d.key === c.label ? ' selected' : '') + '>' + esc(c.label) + '</option>';
+                        }).join('') + '</select>'
+                        : '<input class="wf-input" data-bind="' + base + '.key" value="' + esc(d.key || '') + '" placeholder="' + esc(T('Email, Nom, Référence…')) + '">')
+                        + '<input class="wf-input" data-bind="' + base + '.key_source" value="' + esc(d.key_source || '') + '" placeholder="' + esc(T('Son nom dans la pièce, s’il diffère (facultatif)')) + '">'
+                        + check(base + '.add_missing', !!d.add_missing, T('Ajouter les lignes introuvables'), T('Sinon, une ligne de la pièce absente de la table est laissée de côté.'))
+                    : '')
+                + (d.write === 'remplacer' ? '<p class="wf-hint wf-hint-warn">' + icon('alert') + esc(T('Chaque exécution remplace tout le contenu de la table. Son historique permet de revenir en arrière.')) + '</p>' : '')
+                + '<label class="wf-lab">' + esc(T('Avant d’écrire')) + '</label>' + modes(['approve', 'auto'], L.tableModes || L.deliveryModes || {})
+                + '<p class="wf-hint">' + esc(T('La carte montre les lignes touchées, avant et après. Sans validation, l’écriture se fait par le même chemin, revérifiée au moment même.')) + '</p>';
         } else {
             var kbs = cat.delivery_kbs || [];
             body = (kbs.length
@@ -2363,6 +3412,10 @@
             case 'email': return { type: 'email', source: sourceState('outlook') === 'ok' && sourceState('gmail') !== 'ok' ? 'outlook' : 'gmail', to: '', to_field: '', subject: state.def.end.title || '', message: '', attach: docs, mode: 'approve' };
             case 'drive': return { type: 'drive', pieces: last, folder: '', mode: 'approve' };
             case 'slack': return { type: 'slack', channel: '', message: '', pieces: last, mode: 'approve' };
+            case 'table':
+                var rows = last.filter(function (k) { return pm[k] && (pm[k].form === 'table' || pm[k].form === 'fiche'); });
+                var onlyTable = (cat.delivery_tables || []).length === 1 ? cat.delivery_tables[0].id : null;
+                return { type: 'table', kb_id: onlyTable, pieces: rows.slice(0, 1), write: 'ajouter', key: '', key_source: '', add_missing: false, mode: 'approve' };
             default: return { type: 'kb', kb_id: null, pieces: last, replace: true };
         }
     }
@@ -2390,6 +3443,11 @@
     insHost.addEventListener('input', function (e) {
         var el = e.target;
         var n = current();
+        if (el.matches('[data-ofmt]')) {
+            n.output.format = cleanExt(el.value) || 'txt';
+            changed();
+            return;
+        }
         if (el.matches('[data-mention-path]')) {
             setPath(el.getAttribute('data-mention-path'), fromDisplay(el.value));
             paintHl(el);
@@ -2399,13 +3457,20 @@
         }
         if (el.matches('[data-bind]') && el.type !== 'checkbox' && el.tagName !== 'SELECT') {
             setPath(el.getAttribute('data-bind'), el.value);
+            if (el.getAttribute('data-bind').indexOf('start.event.') === 0) { staleFilterTest(); refreshEventSay(); }
             changed();
             return;
         }
         if (el.matches('[data-field]') && el.type !== 'checkbox' && el.tagName !== 'SELECT') {
-            var f = state.def.start.fields[+el.getAttribute('data-field')];
+            var fi = +el.getAttribute('data-field');
+            var f = state.def.start.fields[fi];
             var prop = el.getAttribute('data-prop');
-            f[prop] = prop === 'options' ? el.value.split(',').map(function (s) { return s.trim(); }).filter(Boolean) : el.value;
+            if (prop === 'options') {
+                f.options = parseChoiceOptions(el.value);
+                syncChoiceDefault(fi);
+            } else {
+                f[prop] = el.value;
+            }
             changed();
             return;
         }
@@ -2447,9 +3512,38 @@
     insHost.addEventListener('change', function (e) {
         var el = e.target;
         var n = current();
+        if (el.matches('[data-ofmt-select]')) {
+            if (el.value === '__other') {
+                otherFormat[n.key] = true;
+            } else {
+                delete otherFormat[n.key];
+                n.output.format = el.value;
+            }
+            // Le modèle de l'entreprise n'habille qu'un Word, un PDF ou un PowerPoint.
+            n.output.template = TEMPLATE_FORMATS.indexOf(n.output.format) >= 0;
+            changed({ inspector: true });
+            return;
+        }
+        if (el.matches('[data-ofmt]')) {
+            // Une extension de la liste, tapée à la main : la liste la reprend.
+            if ((L.docFormats || {})[n.output.format] || (L.fileFormats || {})[n.output.format]) { delete otherFormat[n.key]; }
+            n.output.template = TEMPLATE_FORMATS.indexOf(n.output.format) >= 0;
+            changed({ inspector: true });
+            return;
+        }
         if (el.matches('[data-bind]')) {
             var path = el.getAttribute('data-bind');
+            if (path.indexOf('start.event.') === 0) { staleFilterTest(); }
             var val = el.type === 'checkbox' ? el.checked : el.value;
+            if (el.classList.contains('wf-switch')) {
+                var wayEl = el.closest('.wf-way');
+                if (wayEl) { wayEl.classList.toggle('is-on', el.checked); }
+            }
+            if (path === 'start.event') {
+                // Rallumé : le dernier évènement réglé revient, sinon un email.
+                setEvent(el.checked ? ((state.eventStash || {}).last || 'email') : '');
+                return;
+            }
             if (path === 'start.schedule') {
                 state.def.start.schedule = el.checked
                     ? { rule: { freq: 'weekly', days: [1], time: '08:00' }, timezone: (Intl.DateTimeFormat().resolvedOptions().timeZone || '') }
@@ -2465,17 +3559,43 @@
             if (path === 'node.offset') { val = Math.max(-60, Math.min(60, parseInt(val, 10) || 0)); }
             if (/\.days$/.test(path) && path !== 'node.days') { val = Math.max(0, parseInt(val, 10) || 0); }
             if (path === 'def.notify') { state.def.notify = el.checked; scheduleSave(); return; }
+            if (/^node(?:\.output)?\.options\.background$/.test(path)) {
+                // Fond transparent : PNG s'enclenche (JPEG ne le garde pas).
+                setPath(path, el.checked ? 'transparent' : '');
+                var fmtPath = path.replace(/background$/, 'output_format');
+                var cur = '';
+                try { cur = fmtPath.split('.').slice(1).reduce(function (o, k) { return o ? o[k] : undefined; }, current()) || ''; } catch (err) { cur = ''; }
+                if (el.checked && (cur === '' || cur === 'jpeg')) { setPath(fmtPath, 'png'); }
+                changed({ inspector: true });
+                return;
+            }
             setPath(path, val);
             changed({ inspector: STRUCTURAL.test(path) && el.type !== 'text' });
             return;
         }
-        if (el.matches('[data-field]')) {
+        // Un champ de saisie est déjà tenu par `input` (les options y deviennent
+        // une liste) : ici, les cases et les listes seulement. Recopier la
+        // valeur brute d'un champ de saisie au `change` remplaçait la liste
+        // des options par sa ligne de texte.
+        if (el.matches('[data-ref-upload]')) {
+            uploadReference(+el.getAttribute('data-ref-upload'), el);
+            return;
+        }
+        if (el.matches('[data-field]') && (el.type === 'checkbox' || el.tagName === 'SELECT')) {
             var f = state.def.start.fields[+el.getAttribute('data-field')];
             var prop = el.getAttribute('data-prop');
             f[prop] = el.type === 'checkbox' ? el.checked : el.value;
+            if (prop === 'type') {
+                if (!Array.isArray(f.options)) { f.options = []; }
+                // Une valeur libre ne vaut pas option d'un Choix (et l'inverse) :
+                // elle repart de zéro quand le champ change de nature.
+                if (f.type === 'choice' && f.default && f.options.indexOf(f.default) < 0) { f.default = ''; }
+                if (f.type === 'file') { f.default = ''; }
+            }
             changed({ inspector: prop === 'type' });
             return;
         }
+        if (el.matches('[data-field]')) { return; }
         if (el.matches('[data-ofield]') && el.tagName === 'SELECT') {
             n.output.fields[+el.getAttribute('data-ofield')].type = el.value;
             changed();
@@ -2495,8 +3615,23 @@
                 var pf = el.value.split('|');
                 it.piece = pf[0] || '';
                 it.field = pf[1] || '';
+            } else if (el.getAttribute('data-prop') === 'value') {
+                it.value = el.value; // les options d'un Choix
             } else {
                 it.op = el.value;
+            }
+            changed({ inspector: true });
+            return;
+        }
+        if (el.matches('[data-act-change="loop-table"]')) {
+            var tid = parseInt(el.value, 10) || null;
+            var tb = (cat.tables || []).filter(function (t) { return t.id === tid; })[0] || null;
+            n.source.table_id = tid;
+            n.source.table = tb ? tb.name : '';
+            // Ses colonnes deviennent les champs de l'élément (à citer, à filtrer).
+            if (tb) {
+                n.source.columns = (tb.columns || []).map(function (c) { return { key: newKey('c'), label: c.label, type: c.type || 'text' }; });
+                n.source.label = '';
             }
             changed({ inspector: true });
             return;
@@ -2517,6 +3652,12 @@
             n.piece = wf[0] || '';
             n.field = wf[1] || '';
             changed({ inspector: true });
+            return;
+        }
+        if (el.matches('[data-act-change="call-file"]')) {
+            if (!n.params || Array.isArray(n.params)) { n.params = {}; }
+            if (el.value) { n.params[el.getAttribute('data-val')] = '@{' + el.value + '}'; } else { delete n.params[el.getAttribute('data-val')]; }
+            changed();
             return;
         }
         if (el.matches('[data-act-change]')) {
@@ -2624,6 +3765,7 @@
             case 'source': toggle(n.sources, val); break;
             case 'kb':
                 var id = parseInt(val, 10);
+                n.kb_ids = n.kb_ids || [];
                 if (n.kb_ids.indexOf(id) < 0 && n.kb_ids.length >= ((cat.limits || {}).kbs || 3)) { return; }
                 toggle(n.kb_ids, id);
                 break;
@@ -2642,7 +3784,7 @@
                 if (n.kind !== val && CREATE_DEFAULTS[val]) {
                     n.kind = val;
                     n.output.form = val;
-                    n.options = val === 'image' ? { format: '' } : (val === 'page' ? { style: '' } : {});
+                    n.options = val === 'image' ? { format: '', background: '', output_format: '' } : (val === 'page' ? { style: '' } : {});
                     n.tool_id = firstCreationTool(val);
                 }
                 break;
@@ -2651,10 +3793,31 @@
                 if (!n.options || Array.isArray(n.options)) { n.options = {}; }
                 n.options.format = val;
                 break;
+            case 'coutput':
+                if (!n.options || Array.isArray(n.options)) { n.options = {}; }
+                n.options.output_format = val;
+                break;
             case 'form':
                 n.output.form = val;
                 if (val === 'fiche' && !(n.output.fields || []).length) { n.output.fields = [{ key: newKey('f'), label: T('Champ'), type: 'text' }]; }
                 if (val === 'document' && !n.output.format) { n.output.format = 'docx'; n.output.template = true; }
+                if (R.isCreationForm(val)) {
+                    // Une création : son premier outil en service, ses réglages.
+                    if (!creationToolOf(val, n.output.tool_id)) { n.output.tool_id = firstCreationTool(val); }
+                    n.output.options = val === 'image' ? { format: '', background: '', output_format: '' } : (val === 'page' ? { style: '' } : {});
+                } else {
+                    delete n.output.tool_id;
+                    delete n.output.options;
+                }
+                break;
+            case 'otool': n.output.tool_id = parseInt(val, 10) || null; break;
+            case 'oformat':
+                if (!n.output.options || Array.isArray(n.output.options)) { n.output.options = {}; }
+                n.output.options.format = val;
+                break;
+            case 'ooutput':
+                if (!n.output.options || Array.isArray(n.output.options)) { n.output.options = {}; }
+                n.output.options.output_format = val;
                 break;
             case 'ofield-add': n.output.fields = (n.output.fields || []).concat([{ key: newKey('f'), label: '', type: 'text' }]); break;
             case 'ofield-del': n.output.fields.splice(+val, 1); break;
@@ -2670,9 +3833,53 @@
                 var tg = (cat.targets || []).filter(function (t) { return t.key === val; })[0];
                 n.tool_id = tg && tg.kind === 'tool' && tg.tools[0] ? tg.tools[0].id : null;
                 n.filters = n.filters || blankFilters();
+                if (val === 'slack') {
+                    // Une brique Slack publie, sauf si on lui demande de lire.
+                    n.slack = n.slack || slackDefaults();
+                } else {
+                    delete n.slack;
+                    delete n.output;
+                    if (n.write === 'none') { n.write = 'approve'; }
+                }
                 break;
             case 'cmode': n.mode = val; break;
+            case 'smode':
+                n.slack = n.slack || slackDefaults();
+                // Le titre par défaut suit le mode ; un titre écrit reste.
+                if (n.title === T('Publier dans Slack') || n.title === T('Lire Slack') || n.title === T('Nouvelle action')) {
+                    n.title = val === 'read' ? T('Lire Slack') : T('Publier dans Slack');
+                }
+                n.slack.mode = val === 'read' ? 'read' : 'post';
+                if (n.slack.mode === 'read') {
+                    // Lire : rien n'est écrit, une pièce est remise.
+                    n.write = 'none';
+                    if (!n.output) { n.output = { key: newKey('p'), name: uniquePieceName(T('Messages Slack')), form: 'text' }; }
+                } else {
+                    n.write = n.write === 'auto' ? 'auto' : 'approve';
+                    if (n.slack.where === 'search') { n.slack.where = 'channel'; }
+                }
+                break;
+            case 'swhere': (n.slack = n.slack || slackDefaults()).where = val; break;
+            case 'sdays': (n.slack = n.slack || slackDefaults()).days = parseInt(val, 10) || 7; break;
+            case 'sattach':
+                n.slack = n.slack || slackDefaults();
+                if (n.slack.attach.indexOf(val) < 0 && n.slack.attach.length >= ((cat.limits || {}).slack_attach || 10)) { return; }
+                toggle(n.slack.attach, val);
+                break;
             case 'soutcome': n.outcome = val === 'stopped' ? 'stopped' : 'done'; break;
+            case 'call-pick':
+                // Le même workflow retouché : rien ne change (ses paramètres restent).
+                if (n.workflow_id === parseInt(val, 10)) { toggleChoice('workflow', false); return; }
+                pickCall(n, parseInt(val, 10), availableFor(n.key));
+                state.expanded[expandKey('workflow')] = false;
+                break;
+            case 'call-out': setCallOutput(n, calledWorkflow(n), val); break;
+            case 'call-opt':
+                var cp = val.split('|');
+                if (!n.params || Array.isArray(n.params)) { n.params = {}; }
+                if (n.params[cp[0]] === cp.slice(1).join('|')) { delete n.params[cp[0]]; } else { n.params[cp[0]] = cp.slice(1).join('|'); }
+                break;
+            case 'callstop': n.on_stop = val === 'continue' ? 'continue' : 'stop'; break;
             case 'doubt': n.doubt = val; break;
             case 'fallback': n.fallback = val; break;
             case 'route-add':
@@ -2694,6 +3901,7 @@
                 n.routes.splice(rj, 0, n.routes.splice(ri, 1)[0]);
                 break;
             case 'rule-add': n.rule.items.push({ piece: '', field: '', op: 'eq', value: '' }); break;
+            case 'ref-del': delete state.def.start.fields[+val].reference; break;
             case 'rule-del': n.rule.items.splice(+val, 1); break;
             case 'field-add':
                 state.def.start.fields.push({ key: newKey('c'), label: '', type: 'text', required: true, options: [], default: '', help: '' });
@@ -2764,14 +3972,11 @@
             case 'exhausted': n.exhausted = val === 'stop' ? 'stop' : 'continue'; break;
             case 'waitmode': n.mode = val === 'date' ? 'date' : 'delay'; break;
             case 'event':
-                state.def.start.event = val ? {
-                    kind: val, source: sourceState('outlook') === 'ok' && sourceState('gmail') !== 'ok' ? 'outlook' : 'gmail', query: '', folder: '', folder_name: '',
-                    workflow_id: null, piece_name: '', timezone: (Intl.DateTimeFormat().resolvedOptions().timeZone || ''), filters: blankFilters(),
-                } : null;
-                changed({ inspector: true });
-                afterStart();
+                // Le même genre retouché : rien ne change (ses réglages restent).
+                if (state.def.start.event && state.def.start.event.kind === val) { return; }
+                setEvent(val);
                 return;
-            case 'evsource': state.def.start.event.source = val; break;
+            case 'evsource': state.def.start.event.source = val; state.filterTest = ''; state.filterTestStale = false; break;
             case 'hook-copy':
                 var hu = $('#wfHookUrl');
                 if (hu && hu.value) {
@@ -2779,6 +3984,7 @@
                 }
                 return;
             case 'hook-renew': state.hookUrl = ''; loadHook(true); return;
+            case 'ftest': runFilterTest(b); return;
             case 'dl-add':
                 (state.def.end.deliveries = state.def.end.deliveries || []).push(newDelivery(val));
                 state.expanded[expandKey('delivery:' + (state.def.end.deliveries.length - 1))] = true;
@@ -2789,7 +3995,7 @@
                 if (!window.confirm(T('Retirer cette livraison ?'))) { return; }
                 state.def.end.deliveries.splice(+val, 1);
                 break;
-            case 'dl-source': case 'dl-mode': case 'dl-attach': case 'dl-piece':
+            case 'dl-source': case 'dl-mode': case 'dl-attach': case 'dl-piece': case 'dl-write':
                 var pv = String(val).split('|');
                 var dlv = state.def.end.deliveries[+pv[0]];
                 if (!dlv) { return; }
@@ -2797,6 +4003,7 @@
                 if (act === 'dl-mode') { dlv.mode = pv[1]; }
                 if (act === 'dl-attach') { toggle(dlv.attach = dlv.attach || [], pv[1]); }
                 if (act === 'dl-piece') { toggle(dlv.pieces = dlv.pieces || [], pv[1]); }
+                if (act === 'dl-write') { dlv.write = pv[1]; }
                 break;
             default: return;
         }
@@ -2808,6 +4015,16 @@
     // ------------------------------------------------------------------
 
     nameInput.addEventListener('input', function () { state.name = nameInput.value; scheduleSave(); });
+    statusEl.addEventListener('click', function (e) {
+        if (!e.target.closest('[data-versions]')) { return; }
+        if (state.open && state.selected === VERSIONS) { select(null); } else { openVersions(); }
+    });
+    insHost.addEventListener('click', function (e) {
+        var vv = e.target.closest('[data-ver-view]');
+        if (vv) { viewVersion(+vv.getAttribute('data-ver-view')); return; }
+        var vr = e.target.closest('[data-ver-restore]');
+        if (vr) { restoreVersion(+vr.getAttribute('data-ver-restore')); }
+    });
     overviewBtn.addEventListener('click', function () {
         if (state.open && state.selected === null) { select(null); } else { openOverview(state.issues.length ? 'issues' : ''); }
     });
@@ -2855,13 +4072,103 @@
         });
     }
 
+    /**
+     * Supprimer : la fenêtre de confirmation commune (workflows.js), la même
+     * que la corbeille des vignettes. Ouverte depuis l'en-tête (#wfDelete) ou
+     * les Réglages. Juste avant l'envoi, l'enregistrement automatique est
+     * retenu : il reposterait le brouillon d'un workflow supprimé.
+     */
     function deleteWorkflow() {
-        if (!window.confirm(T('Supprimer ce workflow ? Ses exécutions passées restent dans vos conversations.'))) { return; }
-        fetch('/workflows/' + state.workflow.id + '/delete', { method: 'POST', headers: { Accept: 'application/json', 'X-CSRF-Token': csrf() } })
-            .then(function (r) { return r.json(); }).then(function (j) { if (j.ok) { window.location.href = j.url; } });
+        if (!window.MiaWorkflowDelete) { return; }
+        var facts = D.deletion || {};
+        window.MiaWorkflowDelete.open({
+            id: state.workflow.id,
+            name: state.name || state.workflow.name || '',
+            runs: facts.runs || 0,
+            live: facts.live || 0,
+            pausable: !!(state.workflow.published && state.workflow.is_active),
+        }, {
+            before: function () {
+                clearTimeout(state.saveTimer);
+                state.pendingSave = false;
+                state.deleting = true;
+            },
+        });
     }
+    var deleteBtn = $('#wfDelete');
+    if (deleteBtn) { deleteBtn.addEventListener('click', deleteWorkflow); }
+
+    // --- Infobulles : UNE bulle posée sur la page (dans le volet, qui défile,
+    // elle serait rognée). Survol (souris), focus (clavier), toucher.
+    var bubble = null;
+    var bubbleFor = null;
+    var bubbleTimer = 0;
+    function showBubble(el) {
+        if (!bubble) {
+            bubble = document.createElement('div');
+            bubble.className = 'wf-bubble';
+            bubble.id = 'wfBubble';
+            bubble.setAttribute('role', 'tooltip');
+            document.body.appendChild(bubble);
+        }
+        bubbleFor = el;
+        bubble.textContent = el.getAttribute('data-hint') || '';
+        bubble.hidden = false;
+        el.setAttribute('aria-describedby', 'wfBubble');
+        // Positions de l'écran ramenées en pixels de page (taille d'affichage).
+        var z = window.miaUiZoom ? window.miaUiZoom() : 1;
+        var r = el.getBoundingClientRect();
+        var bw = bubble.offsetWidth * z;
+        var bh = bubble.offsetHeight * z;
+        var left = Math.max(8, Math.min(window.innerWidth - bw - 8, r.left + r.width / 2 - bw / 2));
+        var top = r.top - bh - 8;
+        var below = top < 8;
+        if (below) { top = r.bottom + 8; }
+        bubble.classList.toggle('is-below', below);
+        bubble.style.left = (left / z) + 'px';
+        bubble.style.top = (top / z) + 'px';
+        bubble.style.setProperty('--arrow', Math.max(10, Math.min(bw - 10, r.left + r.width / 2 - left)) / z + 'px');
+    }
+    function hideBubble() {
+        clearTimeout(bubbleTimer);
+        if (bubble) { bubble.hidden = true; }
+        if (bubbleFor) { bubbleFor.removeAttribute('aria-describedby'); }
+        bubbleFor = null;
+    }
+    document.addEventListener('pointerover', function (e) {
+        var el = e.target.closest ? e.target.closest('[data-hint]') : null;
+        if (!el || e.pointerType !== 'mouse' || el === bubbleFor) { return; }
+        clearTimeout(bubbleTimer);
+        bubbleTimer = setTimeout(function () { showBubble(el); }, bubbleFor ? 40 : 220);
+    });
+    document.addEventListener('pointerout', function (e) {
+        var el = e.target.closest ? e.target.closest('[data-hint]') : null;
+        if (el && e.pointerType === 'mouse' && !el.contains(e.relatedTarget)) { hideBubble(); }
+    });
+    document.addEventListener('focusin', function (e) {
+        if (e.target.matches && e.target.matches('[data-hint]')) { showBubble(e.target); }
+    });
+    document.addEventListener('focusout', function (e) {
+        if (e.target === bubbleFor) { hideBubble(); }
+    });
+    // Au toucher (ou au clic) : la bulle, sans activer le champ du libellé.
+    document.addEventListener('click', function (e) {
+        var el = e.target.closest ? e.target.closest('[data-hint]') : null;
+        if (el) {
+            e.preventDefault();
+            if (bubbleFor === el && e.pointerType !== 'mouse') { hideBubble(); } else { showBubble(el); }
+            return;
+        }
+        if (bubbleFor) { hideBubble(); }
+    }, true);
+    // Échap ferme la bulle d'abord (pas le volet derrière elle).
+    document.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape' && bubbleFor && bubble && !bubble.hidden) { hideBubble(); e.stopPropagation(); }
+    }, true);
+    window.addEventListener('scroll', function () { if (bubbleFor) { hideBubble(); } }, true);
 
     window.addEventListener('beforeunload', function (e) {
+        if (state.deleting) { return; }
         if (state.saving || state.saveTimer && saveEl.classList.contains('is-saving')) {
             save();
             e.preventDefault();
@@ -2870,7 +4177,9 @@
     });
 
     renderAll();
-    setSave('', state.workflow.published ? T('Brouillon à jour') : T('Brouillon'));
+    // Jamais publié : la pastille d'état dit déjà « Brouillon » — l'état
+    // d'enregistrement disait la même chose à côté (« Brouillon • Brouillon »).
+    setSave('', state.workflow.published ? T('Brouillon à jour') : T('Brouillon enregistré'));
     // Arrivé depuis une conversation avec des points bloquants : les
     // réglages s'ouvrent dessus, c'est ce qu'il reste à faire.
     if (D.origin && state.issues.some(function (i) { return i.level === 'block'; })) {

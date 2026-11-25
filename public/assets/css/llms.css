@@ -1,0 +1,508 @@
+/* ============================================================
+   Modèles IA — Fournisseurs et modèles (templates/admin/llms/index.php)
+   Une page : qui répond par défaut, une carte par fournisseur, le panneau
+   du fournisseur choisi. Couleurs = jetons du thème (main.css), tons d'état
+   déclarés ici pour les deux thèmes.
+   ============================================================ */
+
+:root {
+    --llm-ok:        #4fd1a8;
+    --llm-ok-bg:     rgba(16, 163, 127, .16);
+    --llm-err:       #fca5a5;
+    --llm-err-bg:    rgba(248, 113, 113, .14);
+    --llm-warn:      #f5c66b;
+    --llm-warn-bg:   rgba(245, 181, 68, .14);
+    --llm-off-bg:    color-mix(in srgb, var(--text) 8%, transparent);
+    --llm-raised:    color-mix(in srgb, var(--bg-surface) 70%, var(--bg));
+    --llm-line:      color-mix(in srgb, var(--border) 70%, transparent);
+}
+[data-theme="light"] {
+    --llm-ok:        #047857;
+    --llm-ok-bg:     rgba(16, 163, 127, .12);
+    --llm-err:       #b91c1c;
+    --llm-err-bg:    rgba(220, 38, 38, .09);
+    --llm-warn:      #92400e;
+    --llm-warn-bg:   rgba(217, 119, 6, .12);
+    --llm-raised:    #fafafa;
+}
+
+/* ---- En-tête de page : titre à gauche, action à droite ---- */
+.llm-page-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px 24px;
+    flex-wrap: wrap;
+    margin-bottom: 24px;
+}
+.llm-page-head > div:first-child { flex: 1 1 420px; min-width: 0; max-width: 820px; }
+.llm-page-head p a { color: var(--accent); }
+/* Sous le sélecteur de langue flottant (en haut à droite, position fixe). */
+.llm-head-action {
+    flex: none;
+    margin-top: 44px;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    text-decoration: none;
+    white-space: nowrap;
+}
+
+.llm-muted { font-size: 12.5px; color: var(--text-muted); margin: 0; line-height: 1.5; }
+/* Relevé quotidien des dates d'arrêt chez l'éditeur (LlmShutdownWatch). */
+.llm-shutdown-check { margin-top: 2px; }
+.llm-shutdown-check.is-warn { color: var(--llm-warn); }
+.llm-required { color: var(--llm-err); }
+.llm-field-hint { display: block; font-size: 11.5px; color: var(--text-muted); margin-top: 4px; line-height: 1.45; }
+
+/* ---- Logos des fournisseurs : tuile claire dans les deux thèmes ----
+   Les logos sont des PNG transparents, souvent sombres (OpenAI) : posés
+   sur le fond sombre de l'interface, ils disparaîtraient. */
+.llm-logo {
+    width: 40px;
+    height: 40px;
+    flex: none;
+    border-radius: 10px;
+    background: #fff;
+    border: 1px solid var(--border);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    box-sizing: border-box;
+}
+.llm-logo img { width: 70%; height: 70%; object-fit: contain; }
+.llm-logo-sm { width: 32px; height: 32px; border-radius: 8px; }
+.llm-logo-lg { width: 48px; height: 48px; border-radius: 12px; }
+
+/* ---- Pastilles d'état ---- */
+.llm-pill {
+    display: inline-flex;
+    align-items: center;
+    height: 22px;
+    padding: 0 9px;
+    border-radius: 999px;
+    font-size: 11.5px;
+    font-weight: 500;
+    white-space: nowrap;
+}
+.llm-pill.is-ok      { background: var(--llm-ok-bg);   color: var(--llm-ok); }
+.llm-pill.is-err     { background: var(--llm-err-bg);  color: var(--llm-err); }
+.llm-pill.is-warn    { background: var(--llm-warn-bg); color: var(--llm-warn); }
+.llm-pill.is-off     { background: var(--llm-off-bg);  color: var(--text-muted); }
+.llm-pill.is-default { background: transparent; color: var(--llm-ok); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--llm-ok) 60%, transparent); }
+.llm-pill.is-fallback { background: transparent; color: var(--text); box-shadow: inset 0 0 0 1px var(--border); }
+
+/* ============================================================
+   1. Qui répond par défaut
+   ============================================================ */
+.llm-def { margin-bottom: 28px; }
+.llm-def-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-bottom: 14px;
+}
+.llm-def-head h2 { margin: 0; font-size: 15px; font-weight: 500; }
+.llm-def-flow {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+.llm-def-source {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 14px;
+    border-radius: 12px;
+    border: 1px dashed var(--border);
+    color: var(--text-muted);
+    font-size: 13px;
+    max-width: 180px;
+    line-height: 1.35;
+}
+.llm-def-arrow {
+    position: relative;
+    flex: 0 0 28px;
+    height: 2px;
+    background: var(--border);
+}
+.llm-def-arrow::after {
+    content: "";
+    position: absolute;
+    right: -1px;
+    top: -4px;
+    border: 5px solid transparent;
+    border-left-color: var(--border);
+    border-right: 0;
+}
+.llm-def-arrow.is-dashed {
+    flex: none;
+    width: 100%;
+    background: repeating-linear-gradient(90deg, var(--border) 0 5px, transparent 5px 9px);
+}
+.llm-def-fail {
+    flex: 0 0 120px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    font-size: 11.5px;
+    color: var(--text-muted);
+    text-align: center;
+    line-height: 1.3;
+}
+.llm-def-slot {
+    flex: 1 1 0;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 14px;
+    border-radius: 12px;
+    border: 1px solid var(--border);
+    background: var(--llm-raised);
+    cursor: pointer;
+    color: var(--text-muted);
+}
+.llm-def-slot.is-default { border-color: color-mix(in srgb, var(--accent) 60%, transparent); }
+.llm-def-slot:focus-within { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent); }
+.llm-def-slot-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.llm-def-kicker {
+    font-size: 11px;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: .06em;
+    color: var(--text-muted);
+}
+.llm-def-slot.is-default .llm-def-kicker { color: var(--llm-ok); }
+.llm-def-select {
+    appearance: none;
+    -webkit-appearance: none;
+    width: 100%;
+    border: 0;
+    background: transparent;
+    color: var(--text);
+    font: 500 15px var(--font);
+    padding: 0;
+    cursor: pointer;
+    outline: none;
+    text-overflow: ellipsis;
+}
+.llm-def-select option { color: var(--text); background: var(--bg-surface); }
+.llm-def-note { margin-top: 14px; max-width: 760px; }
+.llm-def-unsaved {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-bottom: 14px;
+    padding: 10px 12px;
+    border-radius: 10px;
+    font-size: 13px;
+    line-height: 1.45;
+    background: var(--llm-warn-bg);
+    border: 1px solid color-mix(in srgb, var(--llm-warn) 40%, transparent);
+}
+.llm-def-unsaved > span { flex: 1; min-width: 220px; }
+
+/* ============================================================
+   2. Fournisseurs
+   ============================================================ */
+.llm-providers { display: flex; flex-direction: column; gap: 14px; }
+.llm-providers-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+.llm-providers-head h2 { margin: 0; font-size: 17px; font-weight: 500; }
+.llm-providers-counts { display: flex; gap: 6px; flex-wrap: wrap; }
+.llm-providers-counts .llm-pill { height: 26px; padding: 0 11px; font-size: 12px; }
+
+.llm-prov-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(300px, 100%), 1fr));
+    gap: 12px;
+}
+.llm-prov-card {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 16px;
+    border-radius: 14px;
+    border: 1px solid var(--border);
+    background: var(--bg-surface);
+    min-width: 0;
+}
+.llm-prov-card.is-err  { border-color: color-mix(in srgb, var(--llm-err) 40%, var(--border)); }
+.llm-prov-card.is-warn { border-color: color-mix(in srgb, var(--llm-warn) 40%, var(--border)); }
+.llm-prov-card.is-selected {
+    border-color: color-mix(in srgb, var(--accent) 65%, transparent);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent);
+}
+.llm-prov-top { display: flex; align-items: center; gap: 12px; }
+.llm-prov-id { flex: 1; min-width: 0; }
+.llm-prov-id h3 {
+    margin: 0;
+    font-size: 15px;
+    font-weight: 500;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.llm-prov-warn { margin: 0; font-size: 12px; color: var(--llm-warn); line-height: 1.45; }
+.llm-prov-connect {
+    display: flex;
+    gap: 8px;
+    margin: 0;
+    padding-top: 12px;
+    border-top: 1px solid var(--llm-line);
+}
+.llm-prov-connect .form-input { flex: 1; min-width: 0; font-family: ui-monospace, Menlo, monospace; font-size: 12.5px; }
+.llm-prov-connect .btn-primary { flex: none; white-space: nowrap; }
+.llm-prov-foot {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding-top: 12px;
+    border-top: 1px solid var(--llm-line);
+    margin-top: auto;
+}
+.llm-key-mask {
+    font-family: ui-monospace, Menlo, monospace;
+    font-size: 12px;
+    color: var(--text-muted);
+    background: none;
+    padding: 0;
+    letter-spacing: .02em;
+}
+.llm-prov-open {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 32px;
+    padding: 0 10px;
+    border-radius: 8px;
+    color: var(--text);
+    font-size: 12.5px;
+    font-weight: 500;
+    text-decoration: none;
+    white-space: nowrap;
+    border: 1px solid var(--border);
+}
+.llm-prov-open svg { transition: transform .15s; }
+.llm-prov-open[aria-expanded="true"] { border-color: color-mix(in srgb, var(--accent) 60%, transparent); color: var(--llm-ok); }
+.llm-prov-open[aria-expanded="true"] svg { transform: rotate(180deg); }
+@media (hover: hover) {
+    .llm-prov-open:hover { border-color: var(--accent); }
+}
+
+/* ============================================================
+   3. Panneau du fournisseur choisi
+   ============================================================ */
+.llm-panels { scroll-margin-top: 16px; }
+.llm-panel[hidden] { display: none !important; }
+.llm-panel { scroll-margin-top: 16px; border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
+.llm-panel-head {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    flex-wrap: wrap;
+    padding-bottom: 14px;
+    border-bottom: 1px solid var(--llm-line);
+}
+.llm-panel-id { flex: 1; min-width: 220px; }
+.llm-panel-id h2 { margin: 0 0 3px; font-size: 17px; font-weight: 500; }
+.llm-panel-tools { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.llm-panel-tools form { margin: 0; }
+.llm-link-danger {
+    background: none;
+    border: 0;
+    color: var(--llm-err);
+    font: 500 12.5px var(--font);
+    cursor: pointer;
+    padding: 6px 4px;
+}
+.test-result { font-size: 12px; margin-left: 6px; }
+.test-result[hidden] { display: none; }
+.test-result.is-pending { color: var(--text-muted); }
+.test-result.is-ok  { color: var(--llm-ok); }
+.test-result.is-err { color: var(--llm-err); }
+
+/* Remplacer la clé : replié, la clé ne change pas souvent. */
+.llm-key-edit { border-bottom: 1px solid var(--llm-line); }
+.llm-key-edit > summary {
+    list-style: none;
+    cursor: pointer;
+    padding: 12px 0;
+    font-size: 13px;
+    color: var(--accent);
+}
+.llm-key-edit > summary::-webkit-details-marker { display: none; }
+.llm-key-edit[open] > summary { color: var(--text); font-weight: 500; }
+.llm-key-form {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px 16px;
+    padding-bottom: 16px;
+    margin: 0;
+}
+.llm-key-form .form-group { margin: 0; }
+.llm-key-form > :last-child { grid-column: 1 / -1; }
+
+/* Modèles : une ligne par modèle, interrupteur en tête. */
+.llm-models { margin-top: 4px; }
+.llm-model-row {
+    display: grid;
+    grid-template-columns: 56px minmax(0, 2.4fr) minmax(0, 1.6fr) 110px minmax(0, 1.2fr);
+    gap: 14px;
+    align-items: center;
+    padding: 12px 0;
+    border-top: 1px solid var(--llm-line);
+}
+.llm-model-row.is-head {
+    border-top: 0;
+    padding: 12px 0 6px;
+    font-size: 11px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: .06em;
+}
+.llm-model-row form { margin: 0; }
+.llm-model-name { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.llm-model-name strong { font-size: 14px; font-weight: 500; }
+.llm-model-name code {
+    font-family: ui-monospace, Menlo, monospace;
+    font-size: 11.5px;
+    color: var(--text-muted);
+    background: none;
+    padding: 0;
+}
+.llm-model-note {
+    font-size: 12px;
+    color: var(--text-muted);
+    line-height: 1.45;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+.llm-model-limits { font-size: 11.5px; color: var(--llm-warn); line-height: 1.45; }
+.llm-model-tags { display: flex; gap: 4px; flex-wrap: wrap; }
+.llm-tag {
+    display: inline-flex;
+    align-items: center;
+    height: 20px;
+    padding: 0 7px;
+    border-radius: 6px;
+    font-size: 11px;
+    color: var(--text);
+    background: var(--llm-off-bg);
+}
+.llm-model-cost { font-size: 13px; color: var(--text); white-space: nowrap; }
+.llm-model-state { display: flex; gap: 4px; flex-wrap: wrap; }
+
+/* Interrupteur : un vrai bouton (role="switch") qui poste son formulaire. */
+.llm-switch {
+    position: relative;
+    display: inline-block;
+    width: 40px;
+    height: 23px;
+    border-radius: 999px;
+    border: 0;
+    padding: 0;
+    cursor: pointer;
+    background: var(--border);
+    vertical-align: middle;
+}
+.llm-switch::after {
+    content: "";
+    position: absolute;
+    top: 3px;
+    left: 3px;
+    width: 17px;
+    height: 17px;
+    border-radius: 50%;
+    background: #fff;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, .3);
+    transition: left .15s;
+}
+.llm-switch.is-on { background: var(--accent); }
+.llm-switch.is-on::after { left: 20px; }
+.llm-switch.is-locked { cursor: not-allowed; opacity: .4; }
+.llm-switch:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.llm-more > summary {
+    list-style: none;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 14px 0 6px;
+    font-size: 13px;
+    color: var(--text-muted);
+    border-top: 1px solid var(--llm-line);
+    width: 100%;
+}
+.llm-more > summary::-webkit-details-marker { display: none; }
+.llm-more[open] > summary svg { transform: rotate(180deg); }
+@media (hover: hover) {
+    .llm-more > summary:hover { color: var(--text); }
+}
+
+/* LLM local */
+.llm-local-form { margin: 16px 0 0; }
+.llm-local-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px 16px;
+}
+.llm-local-grid .form-group { margin: 0; }
+.llm-check {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    margin-top: 14px;
+    font-size: 13px;
+    cursor: pointer;
+}
+.llm-check input { margin-top: 3px; }
+.llm-panel-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 16px; }
+
+/* ============================================================
+   Écrans étroits
+   ============================================================ */
+@media (max-width: 768px) {
+    .llm-head-action { margin-top: 0; }
+}
+@media (max-width: 1100px) {
+    .llm-def-flow { flex-wrap: wrap; }
+    .llm-def-source, .llm-def-arrow { display: none; }
+    .llm-def-slot { flex: 1 1 260px; }
+    .llm-def-fail { flex: 0 0 auto; flex-direction: row; }
+    .llm-def-fail .llm-def-arrow { display: none; }
+}
+@media (max-width: 860px) {
+    .llm-model-row { grid-template-columns: 52px minmax(0, 1fr) auto; }
+    .llm-model-row.is-head { display: none; }
+    .llm-model-tags { grid-column: 2 / -1; }
+    .llm-model-state { grid-column: 2 / -1; }
+    .llm-model-cost { grid-row: 1; grid-column: 3; }
+}
+@media (max-width: 640px) {
+    .llm-def-slot, .llm-def-fail { flex: 1 1 100%; }
+    .llm-def-fail { justify-content: center; }
+    .llm-key-form, .llm-local-grid { grid-template-columns: minmax(0, 1fr); }
+    .llm-prov-connect { flex-wrap: wrap; }
+    .llm-prov-connect .btn-primary { flex: 1 1 100%; min-height: 44px; }
+    .llm-switch { width: 44px; height: 26px; }
+    .llm-switch::after { width: 20px; height: 20px; }
+    .llm-switch.is-on::after { left: 21px; }
+}

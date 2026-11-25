@@ -20,12 +20,22 @@ une avant elle.
 1. **+** sur le rail → **Condition**.
 2. **Comment décider** :
    - **Une règle** — par exemple *Montant TTC est supérieur à 5 000*, sur un champ d'une Fiche. Elle
-     se calcule sans IA : même réponse à chaque fois, aucun crédit. Trois conditions au plus, toutes
-     ou au moins une.
+     se calcule sans IA : même réponse à chaque fois, aucun crédit. Une condition répond **oui ou
+     non** : ses lignes (huit au plus) se **combinent** en une seule réponse, et la phrase en tête le
+     dit — *« Le workflow prend la voie « Si oui » quand [toutes ces conditions sont vraies] ; sinon,
+     la voie « Si non » »*. Pour un champ **Choix**, la valeur se prend dans ses options.
    - **Une question à MIA** — une question fermée (*« Cet appel d'offres correspond-il à notre
      offre ? »*), qui cite les pièces avec @. MIA répond oui ou non avec sa raison, visible dans
-     l'exécution. **Si MIA hésite** : vous demander (une validation s'ouvre avec ce qu'elle a vu), ou
-     prendre « non », la voie prudente.
+     l'exécution. Elle lit toujours la présentation de votre entreprise (**Organisation →
+     Entreprise**), et **Ce que MIA sait de nous** ajoute jusqu'à trois bases de connaissances où sont
+     votre offre, vos références ou vos règles. **Si MIA hésite** : vous demander (une validation
+     s'ouvre avec ce qu'elle a vu), ou prendre « non », la voie prudente.
+
+   Plusieurs réponses possibles pour un même champ (*Oui*, *Non*, *Peut-être*) ? Ne les mettez pas
+   en lignes réunies par « Toutes les conditions » : la règle ne serait jamais vraie, et le workflow
+   prendrait toujours la voie « Si non ». Gardez la valeur qui mène à « Si oui », ou choisissez « au
+   moins une » ; pour plus de deux suites, une **décision de MIA**. Une règle contradictoire est
+   signalée dans **À régler** et empêche de publier.
 3. **Les deux voies** : ajoutez des briques dans **Si oui** et **Si non** (« + Ajouter » dans la voie),
    puis choisissez pour chacune **puis reprendre le rail** ou **puis arrêter le workflow**. Une voie ne
    contient pas de condition.
@@ -89,7 +99,12 @@ de rien.
 5. **Ce que fait l'action** : **Préparer des actions à approuver** (par défaut — une carte attend votre accord
    dans la conversation de l'exécution, et le workflow aussi) ou **Agir sans validation** (si votre
    administrateur le propose ; un email reste un brouillon tant que **Envoyer réellement les emails**
-   n'est pas coché).
+   n'est pas coché, et une réunion Outlook avec invités — qui leur envoie l'invitation — attend votre
+   accord dans une carte).
+
+**Slack** a ses propres réglages : la brique **publie** (dans un canal ou à une personne, avec des
+fichiers joints) **ou lit** (un canal, une conversation, une recherche, pour en tirer une pièce) —
+voir [Lire ou publier dans Slack](lire-ou-publier-dans-slack.md).
 
 Une **étape** peut aussi agir dans ses sources : réglez **Ce qu'elle peut faire dans les outils** sur
 **Préparer des actions à approuver** ou **Agir sans validation**. Les pièces qu'elle met dans ce qu'elle

@@ -228,7 +228,7 @@ final class DriveWriteFeedbackTest extends TestCase
         $nav = (string)file_get_contents(ROOT . '/templates/partials/admin-nav.php');
         $this->assertStringContainsString('NavRegistry::accountFor($navUser)', $nav);
         $this->assertSame(
-            ['/settings', '/settings/ai', '/settings/display', '/settings/connections', '/settings/usage'],
+            ['/settings', '/settings/ai', '/settings/memory', '/settings/display', '/settings/connections', '/settings/usage'],
             array_values(array_column(NavRegistry::ACCOUNT, 'href'))
         );
         $this->assertSame('Comptes connectés', NavRegistry::ACCOUNT['connections']['label']);

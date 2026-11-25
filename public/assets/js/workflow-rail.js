@@ -127,9 +127,41 @@
         return ({ number: 'number', date: 'date', email: 'email', yesno: 'yesno' })[type] || 'text';
     }
 
-    /** Brique qui remet une pièce : une étape, une création (WorkflowSpec::PRODUCING_TYPES). */
+    /** Une brique Slack qui LIT (miroir de WorkflowSpec::isReadingAction) : elle remet une pièce. */
+    function readingAction(n) {
+        return !!n && n.type === 'action' && n.target === 'slack' && !!n.slack && n.slack.mode === 'read';
+    }
+
+    /** Brique qui remet une pièce : étape, création, appel d'un workflow, brique Slack qui lit (WorkflowSpec::producesPiece). */
     function produces(n) {
-        return !!n && (n.type === 'step' || n.type === 'create') && !!n.output;
+        return !!n && (n.type === 'step' || n.type === 'create' || n.type === 'call' || readingAction(n)) && !!n.output;
+    }
+
+    /** Textes d'une brique Slack qui citent le dossier : ceux de SON mode et de SA destination (WorkflowSpec::slackTexts). */
+    function slackTexts(n) {
+        if (!n || n.type !== 'action' || n.target !== 'slack' || !n.slack) { return []; }
+        var s = n.slack;
+        return [s.where === 'person' ? s.person : (s.where === 'search' ? s.query : s.channel)].map(function (x) { return String(x || ''); });
+    }
+
+    /** Pièces jointes d'une brique Slack qui publie (WorkflowSpec::slackAttach). */
+    function slackAttach(n) {
+        return n && n.type === 'action' && n.target === 'slack' && n.slack && n.slack.mode !== 'read' ? (n.slack.attach || []) : [];
+    }
+
+    /** Une forme faite par un outil de création (miroir de WorkflowSpec::isCreationForm) ? */
+    function isCreationForm(form) {
+        return form === 'image' || form === 'page' || form === 'map';
+    }
+
+    /**
+     * Une brique du corps dont la boucle peut rassembler la pièce : une pièce
+     * rédigée ; une création (brique Création, ou étape qui remet une image,
+     * une page, une carte) seulement dans « jusqu'à ».
+     */
+    function loopCollectable(loop, c) {
+        // Un fichier récupéré d'un workflow appelé, comme une création : un par élément.
+        return produces(c) && ((!isCreationForm(c.output.form) && c.output.form !== 'file') || loop.mode === 'until');
     }
 
     /**
@@ -140,7 +172,7 @@
     function loopCollect(loop) {
         var outs = [];
         (loop.body || []).forEach(function (c) {
-            if (c.output && (c.type === 'step' || (c.type === 'create' && loop.mode === 'until'))) { outs.push(c.output.key); }
+            if (loopCollectable(loop, c)) { outs.push(c.output.key); }
         });
         if (!outs.length) { return null; }
         return outs.indexOf(loop.collect) >= 0 ? loop.collect : outs[outs.length - 1];
@@ -189,7 +221,7 @@
         if (kind === '' || kind === 'list' || kind === 'ai') { return true; }
         if (kind === 'files' || kind === 'emails') { return false; }
         if (kind === 'attachments') { return src.from !== 'search'; }
-        return src.from !== 'drive';
+        return src.from !== 'drive' && src.from !== 'table';
     }
 
     /** Le découpeur accepte-t-il cette pièce comme source (miroir de LoopSources::accepts) ? */
@@ -204,7 +236,7 @@
             case 'pages': return form === 'file';
             case 'sections': return form === 'file' || form === 'text' || (form === 'document' && format !== 'xlsx');
             case 'attachments': return p.event === 'email';
-            case 'ai': return form !== '' && ['image', 'page', 'map'].indexOf(form) < 0;
+            case 'ai': return form !== '' && !isCreationForm(form);
             default: return false;
         }
     }
@@ -216,6 +248,10 @@
         var name = over ? over.name : '';
         var drive = String(src.drive || '').trim();
         var of = src.from === 'drive' ? (drive || T('un fichier Drive')) : name;
+        if (kind === 'rows' && src.from === 'table') {
+            var table = String(src.table || '').trim();
+            return table ? T('Pour chaque ligne de la table « {table} »', { table: table }) : T('Pour chaque ligne d’une table');
+        }
         switch (kind) {
             case 'rows': return of ? T('Pour chaque ligne de « {source} »', { source: of }) : T('Pour chaque ligne d’un tableau');
             case 'slides': return of ? T('Pour chaque slide de « {source} »', { source: of }) : T('Pour chaque slide d’une présentation');
@@ -239,7 +275,10 @@
             if (f.type === 'file') {
                 out.push({ key: f.key, name: f.label || f.key, form: 'file', fields: [], producer: 'start', branch: null });
             } else {
-                fiche.push({ key: f.key, label: f.label, type: ficheTypeOfField(f.type) });
+                var fd = { key: f.key, label: f.label, type: ficheTypeOfField(f.type) };
+                // Un Choix garde ses options (miroir de WorkflowSpec::pieces).
+                if (f.type === 'choice') { fd.options = (Array.isArray(f.options) ? f.options : []).slice(); }
+                fiche.push(fd);
             }
         });
         if (fiche.length) {
@@ -365,6 +404,8 @@
         if (node.type === 'gate') { keys = keys.concat(node.reviews || [], mentions(node.note || '')); }
         if (node.type === 'route') { (node.routes || []).forEach(function (r) { keys = keys.concat(mentions(r.when || '')); }); }
         if (node.type === 'step' || node.type === 'action') { filterTexts(node.filters).forEach(function (t) { keys = keys.concat(mentions(t)); }); }
+        slackTexts(node).forEach(function (t) { keys = keys.concat(mentions(t)); });
+        keys = keys.concat(slackAttach(node));
         if (node.type === 'condition' && node.mode === 'rule') {
             ((node.rule || {}).items || []).forEach(function (it) { keys.push(it.piece); });
         }
@@ -373,6 +414,10 @@
             ['instruction', 'query', 'drive'].forEach(function (f) { keys = keys.concat(mentions(((node.source || {})[f]) || '')); });
         }
         if (node.type === 'wait' && node.mode === 'date') { keys.push(node.piece); }
+        // Appel d'un workflow : les pièces citées par ses paramètres.
+        if (node.type === 'call') {
+            Object.keys(node.params && !Array.isArray(node.params) ? node.params : {}).forEach(function (k) { keys = keys.concat(mentions(node.params[k])); });
+        }
         var out = [];
         keys.forEach(function (k) { if (avail[k] && out.indexOf(k) < 0) { out.push(k); } });
         return out;
@@ -432,9 +477,33 @@
         return out;
     }
 
-    function avatar(profile, cat) {
+    /** Le logo de MIA (celui de l'organisation, réglé dans Marque & apparence), sinon son pictogramme. */
+    function miaLogo(cat) {
+        var logo = (cat.mia && cat.mia.logo) || '';
+        return logo ? '<img class="wf-mia-logo" src="' + esc(logo) + '" alt="">' : icon(cat, 'mia');
+    }
+
+    /**
+     * Le modèle d'une brique sans assistant est-il celui de l'organisation ?
+     * Vide, égal au défaut, ou plus proposé (le moteur retombe alors sur le
+     * défaut) : c'est MIA telle que l'organisation l'a réglée.
+     */
+    function isDefaultLlm(cat, slug) {
+        return !slug || slug === cat.default_llm || !findLlm(cat, slug);
+    }
+
+    /**
+     * Qui fait le travail : l'assistant (avatar, sinon initiale), sinon MIA —
+     * son logo quand c'est le modèle de l'organisation, le logo de l'éditeur
+     * du modèle quand l'étape en impose un autre.
+     */
+    function avatar(profile, cat, llm) {
         if (!profile) {
-            return '<span class="wf-ava mia">' + icon(cat, 'mia') + '</span>';
+            var model = isDefaultLlm(cat, llm) ? null : findLlm(cat, llm);
+            if (model && model.logo) {
+                return '<span class="wf-ava llm" title="' + esc(model.label || '') + '"><img src="' + esc(model.logo) + '" alt=""></span>';
+            }
+            return '<span class="wf-ava mia' + ((cat.mia && cat.mia.logo) ? ' is-logo' : '') + '" title="MIA">' + miaLogo(cat) + '</span>';
         }
         if (profile.avatar) {
             return '<span class="wf-ava" style="--av:' + esc(profile.color || '#10a37f') + '"><img src="' + esc(profile.avatar) + '" alt=""></span>';
@@ -460,6 +529,13 @@
         return null;
     }
 
+    /** Un workflow de la personne (catalogue `workflows`) par identifiant : celui qu'appelle une brique. */
+    function findWorkflow(cat, id) {
+        var list = cat.workflows || [];
+        for (var i = 0; i < list.length; i++) { if (list[i].id === id) { return list[i]; } }
+        return null;
+    }
+
     /** Outil de création (catalogue `creations`) par identifiant. */
     function findCreation(cat, id) {
         var list = cat.creations || [];
@@ -475,12 +551,19 @@
             if (state.current === node.key && !state.terminal) { return '<span class="wf-pill run">' + esc(T('En cours')) + '</span>'; }
             return '';
         }
-        if (node.type === 'condition' && st.status === 'done') {
-            return '<span class="wf-pill cond">' + esc(st.outcome === 'yes' ? T('Oui') : T('Non')) + '</span>';
+        // Le verdict d'une condition ou d'une décision porte la COULEUR de la
+        // voie prise (celle de son étiquette et de sa liaison) : on suit des
+        // yeux le chemin du verdict à la voie (retour du 2026-11-04).
+        if (node.type === 'condition' && st.status === 'done' && (st.outcome === 'yes' || st.outcome === 'no')) {
+            return '<span class="wf-pill lane" style="--lane:var(--wf-l' + (st.outcome === 'yes' ? 1 : 2) + ')">'
+                + icon(cat, st.outcome === 'yes' ? 'check' : 'x') + esc(st.outcome === 'yes' ? T('Oui') : T('Non')) + '</span>';
         }
         if (node.type === 'route' && st.status === 'done' && st.outcome !== 'stopped') {
-            var chosen = branchesOf(node).filter(function (b) { return b.key === st.outcome; })[0];
-            return chosen ? '<span class="wf-pill route">' + icon(cat, 'route') + esc(chosen.label || chosen.key) + '</span>' : '';
+            var routes = branchesOf(node);
+            var ci = -1;
+            routes.forEach(function (b, i) { if (b.key === st.outcome) { ci = i; } });
+            var chosen = ci >= 0 ? routes[ci] : null;
+            return chosen ? '<span class="wf-pill lane" style="--lane:var(--wf-l' + ((ci % LANE_COLORS) + 1) + ')">' + icon(cat, 'route') + esc(chosen.label || chosen.key) + '</span>' : '';
         }
         if (st.outcome === 'skipped' && st.status === 'done') {
             return '<span class="wf-pill">' + icon(cat, 'skip') + esc(T('Ignorée')) + '</span>';
@@ -499,6 +582,14 @@
             }
         }
         if (reviewSt && reviewSt.status === 'waiting') { return '<span class="wf-pill wait">' + esc(T('Vous attend')) + '</span>'; }
+        // Un appel : c'est l'exécution du workflow appelé qui dit où il en est.
+        if (node.type === 'call' && st.status === 'running' && st.child) {
+            if (st.child.waiting) { return '<span class="wf-pill wait">' + esc(T('Vous attend')) + '</span>'; }
+            if (st.child.blocked) { return '<span class="wf-pill err">' + esc(T('Arrêtée')) + '</span>'; }
+        }
+        if (node.type === 'call' && st.status === 'done' && st.outcome === 'stopped') {
+            return '<span class="wf-pill">' + icon(cat, 'stop') + esc(T('Arrêté avant la fin')) + '</span>';
+        }
         switch (st.status) {
             case 'done': return '<span class="wf-pill ok">' + icon(cat, 'check') + (st.seconds ? esc(duration(st.seconds)) : esc(T('Fait'))) + '</span>';
             case 'running': return '<span class="wf-pill run">' + esc(T('En cours')) + '</span>';
@@ -523,6 +614,9 @@
         if (rev && rev.status === 'waiting') { return ' st-waiting'; }
         if (!st) {
             return state.current === node.key && !state.terminal ? ' st-active' : ' st-pending';
+        }
+        if (node.type === 'call' && st.status === 'running' && st.child && (st.child.waiting || st.child.blocked)) {
+            return st.child.waiting ? ' st-waiting' : ' st-failed';
         }
         if (st.status === 'running') { return ' st-active'; }
         if (st.status === 'waiting') { return st.resume ? ' st-timer' : ' st-waiting'; }
@@ -583,10 +677,16 @@
     function brick(o) {
         return '<article class="wf-brick wf-k-' + o.type + (o.sel ? ' is-sel' : '') + (o.stateCls || '') + '" data-node="' + esc(o.key) + '" style="--hue:' + esc(o.hue) + '" tabindex="0">'
             + (o.issue || '')
-            + '<span class="wf-brick-ic">' + o.ic + '</span>'
-            + '<div class="wf-brick-txt"><b' + (o.empty ? ' class="is-empty"' : '') + '>' + esc(o.title) + '</b>' + (o.sub ? '<small>' + o.sub + '</small>' : '') + '</div>'
+            + '<span class="wf-brick-ic">' + o.ic + (o.badge || '') + '</span>'
+            + '<div class="wf-brick-txt">' + (o.kicker ? '<span class="wf-brick-kicker">' + o.kicker + '</span>' : '')
+            + '<b' + (o.empty ? ' class="is-empty"' : '') + '>' + esc(o.title) + '</b>' + (o.sub ? '<small>' + o.sub + '</small>' : '') + (o.extra || '') + '</div>'
             + (o.io || '') + (o.pill || '') + (o.tools || '')
             + '</article>';
+    }
+
+    /** Petit logo de MIA au coin du pictogramme : c'est son modèle qui répond (question, décision). */
+    function miaBadge(cat) {
+        return '<span class="wf-ic-mia" title="MIA">' + miaLogo(cat) + '</span>';
     }
 
     function subLine(parts) {
@@ -606,9 +706,17 @@
         if (node.type === 'step') {
             var prof = node.profile_id ? findProfile(cat, node.profile_id) : null;
             if (prof && prof.color) { o.hue = prof.color; }
-            o.ic = avatar(prof, cat);
+            o.ic = avatar(prof, cat, node.llm);
+            var ownLlm = !prof && !isDefaultLlm(cat, node.llm) ? findLlm(cat, node.llm) : null;
+            // Une pièce faite par un outil de création : l'outil qui la fabrique.
+            var made = node.output && isCreationForm(node.output.form) ? findCreation(cat, node.output.tool_id) : null;
+            // Un fichier écrit tel quel (brique « Fichier ») : son type.
+            var fmt = node.output && node.output.form === 'document' ? String(node.output.format || '') : '';
+            var rawFile = fmt !== '' && ['docx', 'pdf', 'rtf', 'pptx', 'md', 'xlsx'].indexOf(fmt) < 0;
             o.sub = subLine([
-                prof ? prof.name : 'MIA',
+                prof ? prof.name : (ownLlm ? 'MIA · ' + ownLlm.label : 'MIA'),
+                made ? made.name : (node.output && isCreationForm(node.output.form) ? (((labels.createKinds || {})[node.output.form]) || '') : ''),
+                rawFile ? ((labels.fileFormats || {})[fmt] || ('.' + fmt)) : '',
                 hasFilter(node) ? T('Filtrée') : '',
                 node.review ? T('Relue par vous') : '',
                 node.write === 'auto' ? T('Sans validation') : (node.write && node.write !== 'none' ? T('À approuver') : ''),
@@ -623,6 +731,24 @@
                 node.review ? T('Relue par vous') : '',
             ]);
             o.io = io(reads, node.output ? [node.output.key] : [], cat, opts, pmap);
+        } else if (node.type === 'action' && node.target === 'slack' && node.slack) {
+            // Slack : ce qu'elle fait (publier, lire), où, et sa validation ou sa période.
+            var stg = findTarget(cat, node.target);
+            var sl = node.slack;
+            var where = sl.where === 'person' ? sl.person : (sl.where === 'search' ? sl.query : sl.channel);
+            var whereTxt = String(where || '').replace(/@\{([a-z0-9_]+)(?:\.([a-z0-9_]+))?\}/g, function (m, k, f) {
+                var p = pmap[k];
+                if (!p) { return m; }
+                var fl = f ? (p.fields || []).filter(function (x) { return x.key === f; })[0] : null;
+                return fl ? fl.label : p.name;
+            });
+            o.ic = stg ? stg.icon : icon(cat, 'action');
+            o.sub = subLine(readingAction(node)
+                ? [T('Lire'), whereTxt, T('{n} j', { n: sl.days || 7 })]
+                : [sl.where === 'person' ? T('Message direct') : T('Publier'), whereTxt,
+                    (sl.attach || []).length === 1 ? T('1 fichier') : ((sl.attach || []).length > 1 ? T('{n} fichiers', { n: sl.attach.length }) : ''),
+                    node.write === 'auto' ? T('Sans validation') : T('À approuver')]);
+            o.io = io(reads, readingAction(node) && node.output ? [node.output.key] : [], cat, opts, pmap);
         } else if (node.type === 'action') {
             var tg = findTarget(cat, node.target);
             o.ic = tg ? tg.icon : icon(cat, 'action');
@@ -630,11 +756,13 @@
             o.io = io(reads, [], cat, opts, pmap);
         } else if (node.type === 'route') {
             o.ic = icon(cat, 'route');
+            o.badge = miaBadge(cat);
             var n = (node.routes || []).length;
             o.sub = subLine([n === 1 ? T('MIA choisit parmi {n} voie', { n: n }) : T('MIA choisit parmi {n} voies', { n: n })]);
             o.io = io(reads, [], cat, opts, pmap);
         } else if (node.type === 'condition') {
             o.ic = icon(cat, 'condition');
+            if (node.mode !== 'rule') { o.badge = miaBadge(cat); }
             var inLoop = (locate(def, node.key) || {}).lane === 'body';
             var thenNo = ((node.no || {}).then) || 'skip';
             o.sub = subLine([
@@ -663,6 +791,25 @@
             o.ic = icon(cat, 'notify');
             o.sub = subLine([T('Sur vos appareils')]);
             o.io = io(reads, [], cat, opts, pmap);
+        } else if (node.type === 'call') {
+            // Pas une brique comme les autres : un workflow entier. La teinte et
+            // l'icône de l'espace Workflows (barre latérale), une pile de
+            // cartes, et le workflow appelé en miniature (sa couleur, son nom,
+            // sa silhouette) — la couleur du workflow appelé ne teinte que son
+            // point, toutes les briques d'appel se reconnaissent d'un coup d'œil.
+            var called = findWorkflow(cat, node.workflow_id);
+            o.hue = 'var(--wf-call, ' + (hues.call || '#0d9488') + ')';
+            o.ic = icon(cat, 'workflow');
+            o.kicker = esc(T('Appel de workflow'));
+            var given = Object.keys(node.params && !Array.isArray(node.params) ? node.params : {}).filter(function (k) { return String(node.params[k] || '').trim() !== ''; }).length;
+            o.sub = subLine([
+                called ? T('Appelle « {nom} »', { nom: called.name }) : T('Workflow à choisir'),
+                given === 1 ? T('1 paramètre') : (given > 1 ? T('{n} paramètres', { n: given }) : ''),
+            ]);
+            o.extra = called && called.silhouette
+                ? '<span class="wf-call-mini" style="--c:' + esc(called.color || hues.call || '#0d9488') + '" title="' + esc(called.name) + '"><i class="wf-call-mini-dot"></i>' + silhouette(called.silhouette, hues) + '</span>'
+                : '';
+            o.io = io(reads, node.output ? [node.output.key] : [], cat, opts, pmap);
         } else if (node.type === 'stop') {
             o.ic = icon(cat, 'stop');
             o.sub = subLine([T('Fin du workflow'), ((labels.stopOutcomes || {})[node.outcome === 'stopped' ? 'stopped' : 'done']) || '']);
@@ -672,7 +819,7 @@
             o.sub = subLine([(labels.kinds || {}).gate || '']);
             o.io = io(node.reviews || [], [], cat, opts, pmap);
         }
-        if ((node.type === 'step' || node.type === 'action' || node.type === 'create') && node.on_error && node.on_error.then === 'skip') {
+        if ((node.type === 'step' || node.type === 'action' || node.type === 'create' || node.type === 'call') && node.on_error && node.on_error.then === 'skip') {
             o.sub = (o.sub ? o.sub + ' · ' : '') + esc(T('Facultative'));
         }
         return brick(o);
@@ -694,7 +841,8 @@
             if (off) { base += ' ' + (off > 0 ? T('+ {n} j', { n: off }) : T('− {n} j', { n: -off })); }
             return base + ' · ' + String(node.time || '09:00');
         }
-        return T('{n} {unite}', { n: node.amount, unite: ((labels.units || {})[node.unit] || node.unit) });
+        var units = (Number(node.amount) === 1 && labels.unitsOne) ? labels.unitsOne : (labels.units || {});
+        return T('{n} {unite}', { n: node.amount, unite: (units[node.unit] || node.unit) });
     }
 
     function startBrick(def, cat, opts, all, pmap) {
@@ -1097,7 +1245,7 @@
 
     /** Silhouette d'un workflow : un point par brique (liste, chat). */
     function silhouette(seq, hues) {
-        var K = { d: hues.start, s: hues.step, x: hues.action, k: hues.create, c: hues.condition, a: hues.route, l: hues.loop, g: hues.gate, w: hues.wait, n: hues.notify, q: hues.stop, e: hues.end };
+        var K = { d: hues.start, s: hues.step, x: hues.action, k: hues.create, c: hues.condition, a: hues.route, l: hues.loop, g: hues.gate, w: hues.wait, n: hues.notify, q: hues.stop, p: hues.call, e: hues.end };
         return '<div class="wf-sil" aria-hidden="true">' + String(seq || '').split('').map(function (k, i) {
             var shape = k === 'c' || k === 'a' ? 'd' : (k === 'g' ? 'r' : (k === 'l' ? 'o' : ''));
             return (i ? '<b></b>' : '') + '<i class="' + shape + '" style="--k:' + (K[k] || hues.step) + '"></i>';
@@ -1123,8 +1271,9 @@
         pieces: pieces, available: available, readsOf: readsOf, untilReadsOf: untilReadsOf, mentions: mentions, locate: locate,
         itemShape: itemShape, readsPiece: readsPiece, loopSentence: loopSentence, loopAccepts: loopAccepts, SOURCE_FIELDS: SOURCE_FIELDS, DRIVE_FILE_SOURCES: DRIVE_FILE_SOURCES,
         branchesOf: branchesOf, isBranching: isBranching, filterTexts: filterTexts, hasFilter: hasFilter, transitMap: transitMap,
-        loopCollect: loopCollect, html: html, silhouette: silhouette, laneStops: laneStops, highlight: highlight, richText: richText, esc: esc, pieceChip: pieceChip,
+        loopCollect: loopCollect, loopCollectable: loopCollectable, isCreationForm: isCreationForm, html: html, silhouette: silhouette, laneStops: laneStops, highlight: highlight, richText: richText, esc: esc, pieceChip: pieceChip,
         drawForks: drawForks, splitPath: splitPath, mergePath: mergePath, branchOrigins: branchOrigins,
         statusPill: statusPill, avatar: avatar, waitText: waitText, produces: produces, findCreation: findCreation,
+        readingAction: readingAction, slackTexts: slackTexts, slackAttach: slackAttach, findWorkflow: findWorkflow, miaLogo: miaLogo, isDefaultLlm: isDefaultLlm,
     };
 })(typeof window !== 'undefined' ? window : globalThis);

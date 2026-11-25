@@ -1,6 +1,6 @@
 ---
 title: Personnaliser les réponses
-description: Régler son style de réponse, décrire son contexte de travail et gérer ce que MIA retient.
+description: Choisir son modèle par défaut, régler son style de réponse et la voix de MIA.
 sidebar:
   order: 1
 ---
@@ -13,12 +13,19 @@ Comment ils se combinent : [La personnalisation](index.md).
 Cliquez **Réglages**, en bas de la barre latérale, puis choisissez **Préférences IA** dans le menu de
 gauche.
 
-La page se lit en trois parties, dans l'ordre : **Comment MIA vous répond** (le style), **Ce que MIA sait de
-vous** (votre contexte, puis vos souvenirs) et **À l'oral** (la voix). Un sommaire en tête de page mène à
-chacune.
+La page se lit en quatre parties, dans l'ordre : **Qui vous répond** (votre modèle par défaut),
+**Comment MIA vous répond** (le style), **Ce que MIA sait de vous** (un renvoi vers la page **Mémoire**)
+et **À l'oral** (la voix). Un sommaire en tête de page mène à chacune.
 
 > Vos réglages s'enregistrent seuls. Une pastille **Enregistré ✓** le confirme en bas de l'écran. Seul
 > le mot de passe garde un bouton de validation.
+
+## Choisir son modèle par défaut
+
+Dans **Qui vous répond**, la liste **Vos nouvelles conversations s'ouvrent avec** choisit le modèle qui
+ouvre chacune de vos nouvelles conversations sans assistant ; la première option garde celui de votre
+organisation. Le même réglage se fait d'un geste dans le chat, avec l'étoile du sélecteur de modèle :
+voir [Choisir son modèle par défaut](../modeles/choisir-son-modele-par-defaut.md).
 
 ## Choisir un style de réponse
 
@@ -26,12 +33,10 @@ Dans **Comment MIA vous répond**, sept cartes au choix : *Par défaut* (aucune 
 *Concis*, *Détaillé*, *Technique*, *Vulgarisé*, *Formel*, *Convivial*. Chaque carte dit en une ligne ce
 qu'elle change ; la carte choisie porte une coche. Un seul style à la fois, pour toutes vos conversations.
 
-## Décrire votre contexte
+## Votre contexte et vos souvenirs
 
-Dans **Ce que MIA sait de vous**, la carte **Votre contexte** : un texte libre de 500 caractères maximum décrivant votre métier, vos outils, votre cible. Par
-exemple : *« Chef de produit chez ACME. Outils : Notion, Linear. Cible : équipes RH. »*
-
-MIA s'en sert en arrière-plan sans le citer.
+Ils ont leur page, **Mémoire** : la carte **Mémoire** de la partie **Ce que MIA sait de vous** y mène.
+Voir [Gérer sa mémoire](gerer-sa-memoire.md).
 
 ## Régler la voix
 
@@ -49,31 +54,7 @@ La longueur se change aussi **en pleine conversation**, depuis le bandeau du cha
 réglage, au même endroit dans votre compte. Elle vaut pour votre prochaine question, pas pour la
 réponse déjà en cours.
 
-## Gérer ce que MIA retient — « MIA pour vous »
-
-La carte **MIA pour vous** rassemble ce que MIA garde de vous d'une conversation à l'autre. Elle suit
-directement **Votre contexte**, dans la partie **Ce que MIA sait de vous** ; **Mon profil** y renvoie d'un
-clic — une seule liste, un seul endroit.
-
-| Action | Comment |
-|---|---|
-| Ajouter depuis le chat | *« Souviens-toi que… »*, *« retiens que… »*, *« mémorise… »*, *« n'oublie pas que… »* — mention **via chat** |
-| Ajouter à la main | Le champ en bas de la carte, puis **Ajouter** — mention **ajouté ici** |
-| Modifier | Cliquer le texte, corriger, cliquer ailleurs. **Échap** annule |
-| Supprimer | L'icône **corbeille**. La suppression est immédiate |
-
-**Limite : 50 souvenirs de 300 caractères.** Les doublons sont ignorés automatiquement.
-
-La mémorisation depuis le chat reconnaît les tournures françaises ; en anglais, ajoutez le souvenir à
-la main. Chaque mémorisation depuis le chat consomme quelques crédits.
-
-## Savoir ce que MIA sait de vous
-
-Demandez-le en conversation : *« Que sais-tu de moi ? »*. MIA restitue vos souvenirs et votre
-contexte, tels quels. Une section vide n'apparaît pas.
-
-Cette mémoire est **strictement personnelle** : ni les autres utilisateurs, ni les créateurs
-d'assistants n'y ont accès.
+## Ce que MIA connaît de votre entreprise
 
 MIA connaît aussi **votre entreprise** : son nom, la présentation qu'en a écrite votre
 administrateur et son vocabulaire (sigles, lexique maison), communs à tous. C'est ce qui lui fait
@@ -81,7 +62,5 @@ comprendre *« notre offre »*, *« nos clients »* ou *« le TJM »* sans expli
 
 ## Ce qu'il vaut mieux y mettre
 
-Votre rôle, vos préférences de format, vos contraintes de travail, vos outils.
-
-**À éviter** : les informations éphémères, qui vieilliront mal, et toute donnée sensible que vous ne
-souhaitez pas voir réutilisée dans vos échanges.
+Un style qui vaut pour la plupart de vos échanges. Pour un besoin ponctuel (*« fais court cette
+fois »*), dites-le dans la conversation.

@@ -246,6 +246,94 @@ class Profile
         return (bool)$stmt->fetch();
     }
 
+    /** Fenêtre des chiffres d'usage de la page d'un assistant, en jours. */
+    public const USAGE_DAYS = 30;
+
+    /**
+     * Ce que montre la page d'un assistant de son usage récent : ses
+     * réponses, les personnes et conversations qui s'en sont servies, les
+     * crédits débités (opérations rattachées à l'assistant, créations
+     * comprises) sur USAGE_DAYS jours, et l'âge en secondes de sa dernière
+     * réponse (null : jamais servi). Comptes calculés par MySQL : aucun
+     * fuseau ne s'en mêle. Ne lève jamais (page, pas une facture).
+     *
+     * @return array{replies: int, people: int, conversations: int, credits: int, last_age: ?int}
+     */
+    public static function usageSummary(int $id, int $days = self::USAGE_DAYS): array
+    {
+        $out = ['replies' => 0, 'people' => 0, 'conversations' => 0, 'credits' => 0, 'last_age' => null];
+        try {
+            $db = Database::getInstance();
+            $stmt = $db->prepare(
+                "SELECT COUNT(*) AS replies,
+                        COUNT(DISTINCT c.user_id) AS people,
+                        COUNT(DISTINCT c.id) AS conversations
+                 FROM conversations c
+                 JOIN messages m ON m.conversation_id = c.id
+                 WHERE c.profile_id = ? AND m.role = 'assistant'
+                   AND m.created_at >= NOW() - INTERVAL ? DAY"
+            );
+            $stmt->execute([$id, $days]);
+            $row = $stmt->fetch() ?: [];
+            $out['replies']       = (int)($row['replies'] ?? 0);
+            $out['people']        = (int)($row['people'] ?? 0);
+            $out['conversations'] = (int)($row['conversations'] ?? 0);
+
+            $stmt = $db->prepare(
+                "SELECT TIMESTAMPDIFF(SECOND, MAX(m.created_at), NOW()) AS age
+                 FROM conversations c
+                 JOIN messages m ON m.conversation_id = c.id
+                 WHERE c.profile_id = ? AND m.role = 'assistant'"
+            );
+            $stmt->execute([$id]);
+            $age = $stmt->fetchColumn();
+            $out['last_age'] = $age === null || $age === false ? null : max(0, (int)$age);
+
+            $stmt = $db->prepare(
+                "SELECT COALESCE(SUM(credits), 0) FROM (
+                    SELECT credits_used AS credits FROM usage_logs
+                     WHERE profile_id = ? AND created_at >= NOW() - INTERVAL ? DAY
+                    UNION ALL
+                    SELECT credits_used AS credits FROM tool_usage_logs
+                     WHERE profile_id = ? AND created_at >= NOW() - INTERVAL ? DAY
+                 ) t"
+            );
+            $stmt->execute([$id, $days, $id, $days]);
+            $out['credits'] = (int)$stmt->fetchColumn();
+        } catch (\Throwable $e) {
+            error_log('[Assistants] usage de #' . $id . ' : ' . $e->getMessage());
+        }
+        return $out;
+    }
+
+    /**
+     * Groupes qui autorisent l'assistant (Personnes → Groupes), actifs
+     * d'abord puis par nom. Un assistant partagé n'est visible que d'eux.
+     *
+     * @return list<array{id: int, name: string, active: bool}>
+     */
+    public static function authorizedGroups(int $id): array
+    {
+        try {
+            $stmt = Database::getInstance()->prepare(
+                'SELECT g.id, g.name, g.is_active
+                 FROM user_group_profiles ugp
+                 JOIN user_groups g ON g.id = ugp.group_id
+                 WHERE ugp.profile_id = ?
+                 ORDER BY g.is_active DESC, g.name ASC'
+            );
+            $stmt->execute([$id]);
+            return array_map(static fn(array $r): array => [
+                'id'     => (int)$r['id'],
+                'name'   => (string)$r['name'],
+                'active' => !empty($r['is_active']),
+            ], $stmt->fetchAll());
+        } catch (\Throwable $e) {
+            error_log('[Assistants] groupes de #' . $id . ' : ' . $e->getMessage());
+            return [];
+        }
+    }
+
     public static function update(int $id, array $data): void
     {
         Database::getInstance()->prepare(
@@ -260,6 +348,17 @@ class Profile
             $data['avatar'] ?? null,
             $id,
         ]);
+    }
+
+    /**
+     * Options des images de l'assistant (fond transparent, format du fichier,
+     * orientation — ImageOptions) : elles précisent celles de son outil image
+     * sans toucher à l'outil. Rien de réglé = NULL, l'outil décide.
+     */
+    public static function setImageOptions(int $id, array $opts): void
+    {
+        Database::getInstance()->prepare('UPDATE profiles SET image_options = ? WHERE id = ?')
+            ->execute([ImageOptions::encode($opts), $id]);
     }
 
     public static function delete(int $id): void

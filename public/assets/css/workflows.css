@@ -26,8 +26,8 @@
 /* Une couleur par VOIE d'un embranchement (l'arbre) : soutenues sur fond
    clair (texte blanc à 5:1 au moins), claires sur fond sombre (texte noir).
    --lane est posée par la voie, ses liaisons reprennent la même. */
-.wf-content, .wf-modal { --wf-l1: #0e7490; --wf-l2: #b45309; --wf-l3: #a21caf; --wf-l4: #4d7c0f; --wf-l5: #be123c; --wf-l6: #1d4ed8; --wf-on-lane: #fff; }
-:root:not([data-theme="light"]) :is(.wf-content, .wf-modal) { --wf-l1: #22d3ee; --wf-l2: #fbbf24; --wf-l3: #e879f9; --wf-l4: #a3e635; --wf-l5: #fb7185; --wf-l6: #93c5fd; --wf-on-lane: #1a1a1a; }
+.wf-content, .wf-modal, .wfp-panel { --wf-l1: #0e7490; --wf-l2: #b45309; --wf-l3: #a21caf; --wf-l4: #4d7c0f; --wf-l5: #be123c; --wf-l6: #1d4ed8; --wf-on-lane: #fff; --wf-ok: #15803d; }
+:root:not([data-theme="light"]) :is(.wf-content, .wf-modal, .wfp-panel) { --wf-l1: #22d3ee; --wf-l2: #fbbf24; --wf-l3: #e879f9; --wf-l4: #a3e635; --wf-l5: #fb7185; --wf-l6: #93c5fd; --wf-on-lane: #1a1a1a; --wf-ok: #4ade80; }
 .wf-content [hidden] { display: none !important; }
 /* Les icônes du catalogue n'ont pas de taille propre : 16 px par défaut, à
    spécificité nulle (:where) — toute règle qui en pose une l'emporte. */
@@ -62,7 +62,11 @@
     color: var(--text-muted); background: color-mix(in srgb, var(--text-muted) 15%, transparent);
 }
 .wf-pill svg { width: 12px; height: 12px; }
-.wf-pill.ok { color: var(--accent); background: color-mix(in srgb, var(--accent) 15%, transparent); }
+/* « Fait », « Lancé », « Livré », « Terminé », « Publié » : en VERT, la couleur
+   qui dit « ça a marché » sans qu'on ait à lire (retour du 2026-11-04). */
+.wf-pill.ok { color: var(--wf-ok); background: color-mix(in srgb, var(--wf-ok) 15%, transparent); }
+/* Le verdict d'une condition ou d'une décision : la couleur de la voie prise. */
+.wf-pill.lane { color: var(--wf-on-lane, #fff); background: var(--lane, var(--wf-l1)); }
 .wf-pill.wait { color: #d97706; background: color-mix(in srgb, #f59e0b 18%, transparent); }
 .wf-pill.err { color: #ef4444; background: color-mix(in srgb, #ef4444 15%, transparent); }
 .wf-pill.run { color: #0ea5e9; background: color-mix(in srgb, #0ea5e9 16%, transparent); }
@@ -173,6 +177,10 @@ a.wf-cc-state:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
 .wf-cc-count { flex: 1; min-width: 0; font-size: 12px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .wf-cc-acts { display: flex; align-items: center; gap: 6px; flex: none; }
 .wf-cc-acts form { margin: 0; }
+/* Le reset mobile générique (`body.admin-page .admin-content form { width:100% }`,
+   main.css) partageait la rangée entre « Réactiver » et la corbeille : le bouton
+   débordait sur la corbeille. Chaque petit formulaire garde sa largeur. */
+body.admin-page .admin-content .wf-cc-acts form { width: auto; flex: none; }
 .wf-btn.icon { width: 30px; padding: 0; justify-content: center; }
 /* Vignette d'un modèle : la même couverture, sans lien étiré — l'utiliser
    crée un workflow, c'est un geste à part (le bouton). */
@@ -387,6 +395,11 @@ body.wf-drawer-on .wf-scrim { opacity: 1; visibility: visible; transition: opaci
 .wf-node-ic img { width: 18px; height: 18px; object-fit: contain; }
 .wf-mini { display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px; border-radius: 7px; font-size: 11.5px; color: var(--text-muted); background: color-mix(in srgb, var(--text-muted) 12%, transparent); }
 .wf-mini svg, .wf-mini img { width: 12px; height: 12px; }
+/* Boîte mail suivie : prévenue à l'arrivée (push) ou vérifiée toutes les 5 minutes. */
+.wf-mini.wf-push { display: flex; margin-top: 6px; align-items: flex-start; line-height: 1.4; padding: 4px 8px; }
+.wf-mini.wf-push svg { flex: 0 0 auto; margin-top: 2px; }
+.wf-mini.wf-push.is-live { color: var(--kb-ok, #16a34a); background: color-mix(in srgb, var(--kb-ok, #16a34a) 12%, transparent); }
+.wf-mini.wf-push.is-error { color: var(--kb-warn, #d97706); background: color-mix(in srgb, var(--kb-warn, #d97706) 12%, transparent); }
 
 /* Pièce (puce de texte : consignes, volets) */
 .wf-piece {
@@ -516,6 +529,8 @@ html[data-contrast="high"] .wf-lane { border-color: color-mix(in srgb, var(--lan
 .wf-sec.is-spot { animation: wf-spot 1.6s ease-out; }
 @keyframes wf-spot { 0% { background: color-mix(in srgb, #f59e0b 22%, transparent); } 100% { background: transparent; } }
 .wf-hint { margin: 0; font-size: 11.5px; color: var(--text-muted); line-height: 1.45; }
+/* Étape qui lit l'email reçu : ses pièces jointes lui arrivent sans rien cocher. */
+.wf-hint.wf-event-files { margin: 0 0 10px; padding: 8px 10px; border-radius: 8px; color: var(--text); background: color-mix(in srgb, var(--accent) 8%, transparent); }
 .wf-input, .wf-select, .wf-textarea {
     width: 100%; font: inherit; font-size: 13px; color: var(--text); background: var(--bg);
     border: 1px solid var(--border); border-radius: 9px; padding: 8px 10px; min-width: 0;
@@ -566,8 +581,22 @@ html[data-contrast="high"] .wf-lane { border-color: color-mix(in srgb, var(--lan
 .wf-preview { padding: 9px 11px; border-radius: 9px; background: color-mix(in srgb, var(--text-muted) 8%, transparent); font-size: 12.5px; line-height: 1.6; color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; }
 .wf-field-row { display: grid; grid-template-columns: minmax(0, 1fr) 130px 30px; gap: 6px; align-items: center; }
 .wf-field-row.wide { grid-template-columns: minmax(0, 1fr) 120px auto 30px; }
+/* Document de référence d'un champ Fichier : sur toute la largeur. */
+.wf-field-ref { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.wf-field-ref-name { display: inline-flex; align-items: center; gap: 5px; font-size: 12.5px; font-weight: 600; min-width: 0; overflow-wrap: anywhere; }
+.wf-field-ref-name svg { width: 13px; height: 13px; flex: none; }
+.wf-field-ref .wf-hint { flex-basis: 100%; margin: 0; }
+.wf-field-ref label.wf-btn { cursor: pointer; }
 .wf-field-extra { grid-column: 1 / -1; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 6px; padding-bottom: 6px; border-bottom: 1px dashed var(--border); }
-.wf-rule-row { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr) minmax(0, .8fr) 30px; gap: 6px; align-items: center; }
+.wf-rule-row { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr) minmax(0, 1fr) 30px; gap: 6px; align-items: center; }
+/* La phrase de tête d'une règle : « Le workflow prend la voie « Si oui » quand
+   [toutes ces conditions sont vraies] ; sinon, la voie « Si non ». » */
+.wf-rule-lead { display: block; margin: 0 0 4px; font-size: 13px; line-height: 1.5; color: var(--text); }
+.wf-rule-lead .wf-select.wf-rule-join { display: inline-block; width: auto; max-width: calc(100% - 1.6em); margin: 3px 0; vertical-align: middle; }
+/* calc(100% - 1.6em) : même quand la liste remplit la ligne (téléphone), le
+   « ; » collé par l'espace insécable tient encore au bout de la ligne. Trois
+   classes : la règle mobile des champs d'administration (main.css,
+   max-width: 100 %) ne doit pas l'emporter. */
 .wf-dossier { display: flex; flex-direction: column; gap: 2px; margin: 0; padding: 0; list-style: none; }
 .wf-dossier li { display: grid; grid-template-columns: 5px 30px minmax(0, 1fr); gap: 10px; align-items: center; padding: 7px 6px; border-radius: 10px; cursor: pointer; }
 .wf-dossier li:hover, .wf-dossier li.is-hl { background: color-mix(in srgb, var(--c) 10%, transparent); }
@@ -587,6 +616,17 @@ html[data-contrast="high"] .wf-lane { border-color: color-mix(in srgb, var(--lan
 .wf-est { display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; border-radius: 10px; background: var(--bg); border: 1px solid var(--border); }
 .wf-est b { font-size: 13px; }
 .wf-est span { font-size: 11.5px; color: var(--text-muted); }
+/* Ce qu'ont coûté les dernières exécutions : le repère qui dit si l'estimation tient. */
+.wf-est .wf-est-real { color: var(--text); }
+.wf-est-detail { margin-top: 4px; font-size: 11.5px; }
+.wf-est-detail > summary { cursor: pointer; color: var(--text-muted); width: max-content; max-width: 100%; }
+@media (hover: hover) { .wf-est-detail > summary:hover { color: var(--text); } }
+.wf-est-detail ul { list-style: none; margin: 6px 0 4px; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.wf-est-detail li { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 8px; }
+.wf-est-detail li > span { color: var(--text); font-size: 12px; overflow-wrap: anywhere; }
+.wf-est-detail li > b { font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.wf-est-detail li > small { grid-column: 1 / -1; color: var(--text-muted); }
+.wf-est-detail p { margin: 4px 0 0; color: var(--text-muted); }
 .wf-sched { display: flex; flex-direction: column; gap: 8px; padding: 10px; border-radius: 12px; border: 1px solid color-mix(in srgb, var(--wf-start) 35%, var(--border)); background: color-mix(in srgb, var(--wf-start) 6%, transparent); }
 .wf-days { display: flex; flex-wrap: wrap; gap: 5px; }
 .wf-days button { width: 34px; height: 30px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg); color: var(--text-muted); font: inherit; font-size: 12px; cursor: pointer; }
@@ -705,6 +745,35 @@ button.wf-out { border: 0; font-family: inherit; cursor: pointer; }
 .wf-steps-mini .ms small { display: block; color: var(--text-muted); font-size: 11.5px; }
 .wf-modal footer { display: flex; align-items: center; justify-content: flex-end; gap: 10px; padding: 13px 20px; border-top: 1px solid var(--border); }
 .wf-modal .err { color: #ef4444; font-size: 12.5px; margin-right: auto; }
+/* Supprimer un workflow : la fenêtre de confirmation (workflows.js), commune
+   à la corbeille des vignettes, à l'en-tête et aux Réglages de l'éditeur. */
+.wf-modal.wf-confirm { width: min(480px, 100%); }
+.wf-confirm-head { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.wf-confirm-head h2 { overflow-wrap: anywhere; line-height: 1.3; }
+.wf-confirm-ic { display: inline-grid; place-items: center; width: 36px; height: 36px; border-radius: 11px; flex: none; color: #dc2626; background: rgba(239, 68, 68, .12); }
+.wf-confirm-ic svg { width: 18px; height: 18px; }
+.wf-confirm-body { padding: 16px 20px 18px; display: flex; flex-direction: column; gap: 12px; line-height: 1.5; }
+.wf-confirm-body ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 8px; }
+.wf-confirm-body li { position: relative; padding-left: 18px; font-size: 13.5px; }
+.wf-confirm-body li::before { content: ""; position: absolute; left: 4px; top: .62em; width: 6px; height: 6px; border-radius: 50%; background: var(--text-muted); }
+.wf-confirm-body li.is-warn { color: #b45309; font-weight: 500; }
+.wf-confirm-body li.is-warn::before { background: #f59e0b; }
+:root:not([data-theme="light"]) .wf-confirm-body li.is-warn { color: #fbbf24; }
+.wf-confirm-final { margin: 0; font-size: 13px; font-weight: 600; }
+.wf-confirm-body .wf-hint { margin: 0; }
+.wf-btn.danger-fill { background: #dc2626; border-color: #dc2626; color: #fff; }
+.wf-btn.danger-fill:hover { background: #b91c1c; border-color: #b91c1c; }
+.wf-btn.danger-fill:focus-visible { outline: 2px solid #dc2626; outline-offset: 2px; }
+/* La corbeille d'une vignette et de l'en-tête de l'éditeur : discrète, rouge au survol. */
+.wf-btn.wf-del { color: var(--text-muted); }
+.wf-btn.wf-del:hover, .wf-btn.wf-del:focus-visible { color: #dc2626; border-color: rgba(239, 68, 68, .55); background: rgba(239, 68, 68, .08); }
+.wf-ed-actions .wf-btn.icon { width: 36px; }
+@media (max-width: 640px) { .wf-ed-actions .wf-btn.icon { width: 40px; } }
+@media (max-width: 640px) {
+    .wf-modal.wf-confirm footer { flex-wrap: wrap; }
+    .wf-modal.wf-confirm footer .err { flex-basis: 100%; }
+    .wf-modal.wf-confirm footer .wf-btn { flex: 1 1 0; }
+}
 
 /* ---------------- Boucles, attentes, reprise, livraisons ---------------- */
 /* Une boucle : un cadre bleu sous sa brique, ses briques à l'intérieur, et
@@ -767,9 +836,39 @@ button.wf-out { border: 0; font-family: inherit; cursor: pointer; }
 .wf-dl-head small { display: block; font-size: 11px; color: var(--text-muted); }
 .wf-dl-body { display: flex; flex-direction: column; gap: 7px; padding: 10px 11px 12px; }
 .wf-dl-add { display: flex; flex-wrap: wrap; gap: 6px; }
+/* Pré-contrôle du lancement : ce qu'il faut régler avant de partir. */
+.wf-preflight { margin: 14px 20px 0; padding: 12px 14px; border-radius: 12px; border: 1px solid color-mix(in srgb, #f59e0b 50%, var(--border)); background: color-mix(in srgb, #f59e0b 9%, transparent); font-size: 13px; display: flex; flex-direction: column; gap: 6px; }
+.wf-preflight > b { color: #b45309; }
+:root:not([data-theme="light"]) .wf-preflight > b { color: #fbbf24; }
+.wf-preflight p { margin: 0; color: var(--text-muted); font-size: 12.5px; }
+.wf-preflight ul { margin: 2px 0 4px; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; }
+.wf-preflight li { display: flex; align-items: center; gap: 10px; justify-content: space-between; line-height: 1.45; }
+.wf-preflight li > span { min-width: 0; overflow-wrap: anywhere; }
+.wf-preflight li .wf-btn { flex: none; }
+.wf-preflight [data-recheck] { align-self: flex-start; }
+.wf-modal [data-go][disabled] { opacity: .45; cursor: not-allowed; }
 .wf-event-try { display: flex; flex-direction: column; gap: 6px; margin-top: 4px; padding: 11px 12px; border-radius: 12px; border: 1px dashed color-mix(in srgb, var(--wf-start) 55%, var(--border)); background: color-mix(in srgb, var(--wf-start) 6%, transparent); }
 .wf-event-try b { font-size: 12.5px; }
 .wf-event-try small { color: var(--text-muted); font-size: 11.5px; line-height: 1.45; }
+/* Essai à la main d'un workflow lancé par un email : ses derniers emails, à choisir. */
+.wf-recent { display: flex; flex-direction: column; gap: 6px; margin-top: 4px; }
+.wf-recent-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.wf-recent-head b { font-size: 12px; }
+.wf-recent-reload { border: 0; background: none; color: var(--accent); font: inherit; font-size: 11.5px; cursor: pointer; padding: 4px 2px; }
+.wf-recent-state { margin: 0; color: var(--text-muted); font-size: 11.5px; }
+.wf-recent-state.is-warn, .wf-recent-empty { color: var(--text-muted); font-size: 11.5px; margin: 0; }
+.wf-recent-state.is-warn { color: var(--kb-warn, #b45309); }
+.wf-recent-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; max-height: 260px; overflow-y: auto; }
+.wf-recent-item { display: flex; align-items: flex-start; gap: 9px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); cursor: pointer; }
+.wf-recent-item:has(input:checked) { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, var(--bg)); }
+.wf-recent-item input { margin: 2px 0 0; flex: none; }
+.wf-recent-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.wf-recent-main b { font-size: 12.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wf-recent-meta, .wf-recent-why { font-size: 11.5px; color: var(--text-muted); overflow-wrap: anywhere; }
+.wf-recent-item.is-skip .wf-recent-main b { font-weight: 500; }
+.wf-event-paste summary { cursor: pointer; font-size: 11.5px; color: var(--text-muted); padding: 4px 0; }
+.wf-event-paste[open] summary { margin-bottom: 6px; }
+@media (pointer: coarse) { .wf-recent-item { min-height: 44px; } .wf-recent-reload { min-height: 44px; } }
 
 /* Exécution : attente, livraisons, reprise depuis une brique, tours. */
 .wf-timer { border-color: color-mix(in srgb, var(--wf-wait) 45%, var(--border)); background: color-mix(in srgb, var(--wf-wait) 6%, var(--bg-surface)); }
@@ -919,6 +1018,10 @@ button.wf-out { border: 0; font-family: inherit; cursor: pointer; }
 .wf-mp-ic svg { width: 13px; height: 13px; }
 .wf-mp-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
 .wf-mp-parent { color: var(--text-muted); font-weight: 400; }
+/* Champ d'une Fiche : la Fiche se raccourcit d'abord, le nom du champ reste lu. */
+.is-field .wf-mp-name { display: flex; gap: .3em; }
+.is-field .wf-mp-parent { flex: 0 1 auto; min-width: 2.5em; overflow: hidden; text-overflow: ellipsis; }
+.is-field .wf-mp-label { flex: 0 0 auto; max-width: 75%; overflow: hidden; text-overflow: ellipsis; }
 .wf-mention-pop button small { color: var(--text-muted); font-size: 11px; white-space: nowrap; }
 .wf-mp-none { margin: 4px 8px 8px; font-size: 12px; color: var(--text-muted); line-height: 1.45; }
 .wf-legend { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 2px; }
@@ -931,7 +1034,95 @@ button.wf-out { border: 0; font-family: inherit; cursor: pointer; }
 .wf-filter-h svg { width: 14px; height: 14px; color: var(--accent); }
 .wf-lab-in { display: flex; flex-direction: column; gap: 4px; min-width: 0; font-size: 11.5px; font-weight: 600; color: var(--text-muted); }
 .wf-lab-in > span { padding-left: 1px; }
+
+/* « ? » d'aide (règle, exemples) : la bulle unique .wf-bubble, posée sur la page. */
+.wf-hint-dot { display: inline-flex; align-items: center; justify-content: center; width: 15px; height: 15px; margin-left: 5px; border-radius: 50%; font-size: 10px; font-weight: 700; line-height: 1; vertical-align: 1px; color: var(--text-muted); border: 1px solid color-mix(in srgb, var(--text-muted) 55%, transparent); cursor: help; user-select: none; }
+.wf-hint-dot:hover, .wf-hint-dot:focus-visible { color: var(--accent); border-color: var(--accent); outline: none; }
+@media (pointer: coarse) { .wf-hint-dot { width: 22px; height: 22px; font-size: 12px; } }
+.wf-bubble { position: fixed; z-index: 1300; max-width: min(320px, calc(100vw / var(--ui-zoom, 1) - 16px)); padding: 9px 11px; border-radius: 10px; background: var(--bg-surface); color: var(--text); border: 1px solid var(--border); box-shadow: 0 18px 40px -16px rgba(0, 0, 0, .5); font-size: 12px; line-height: 1.5; font-weight: 400; white-space: pre-line; pointer-events: none; }
+.wf-bubble[hidden] { display: none !important; }
+.wf-bubble::after { content: ''; position: absolute; left: var(--arrow, 50%); bottom: -5px; width: 9px; height: 9px; margin-left: -5px; background: inherit; border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); transform: rotate(45deg); }
+.wf-bubble.is-below::after { bottom: auto; top: -5px; transform: rotate(225deg); }
+
+/* Essai des filtres « email reçu » sur les derniers emails de la boîte. */
+.wf-ftest { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; margin-top: 2px; }
+.wf-ftest-out { flex: 1 0 100%; }
+.wf-ftest-out:empty { display: none; }
+.wf-ftest-out.is-stale .wf-ftest-res { opacity: .55; }
+.wf-ftest-stale { margin: 4px 0 0; font-size: 11.5px; color: var(--kb-warn, #d97706); }
+.wf-ftest-wait, .wf-ftest-err { margin: 4px 0 0; font-size: 12px; color: var(--text-muted); }
+.wf-ftest-err { color: var(--kb-warn, #d97706); }
+.wf-ftest-res { margin-top: 4px; display: flex; flex-direction: column; gap: 6px; }
+.wf-ftest-sum { margin: 0; font-size: 12px; font-weight: 600; color: var(--text); }
+.wf-ftest-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.wf-ftest-list li { display: flex; gap: 8px; align-items: flex-start; padding: 6px 8px; border-radius: 8px; background: color-mix(in srgb, var(--text-muted) 7%, transparent); font-size: 12px; min-width: 0; }
+.wf-ftest-list li.is-match { background: color-mix(in srgb, var(--kb-ok, #16a34a) 12%, transparent); }
+.wf-ftest-mark { flex: 0 0 auto; width: 14px; font-weight: 700; color: var(--text-muted); }
+.wf-ftest-list li.is-match .wf-ftest-mark { color: var(--kb-ok, #16a34a); }
+.wf-ftest-main { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.wf-ftest-main b { font-weight: 600; overflow-wrap: anywhere; }
+.wf-ftest-meta { color: var(--text-muted); font-size: 11.5px; overflow-wrap: anywhere; }
+.wf-ftest-why { color: var(--text-muted); font-size: 11.5px; font-style: italic; }
+.wf-ftest-list li.is-match .wf-ftest-why { color: var(--kb-ok, #16a34a); font-style: normal; }
+.wf-ftest-note { margin: 0; font-size: 11.5px; color: var(--text-muted); }
 .wf-checks { display: flex; flex-direction: column; justify-content: flex-end; gap: 6px; padding-bottom: 3px; }
+
+/* ---------------- Départ : les façons de démarrer ----------------
+   Une ligne par façon (icône, nom, une phrase, interrupteur) ; allumée,
+   ce qui se règle s'ouvre dessous. L'essentiel visible, le reste replié. */
+.wf-ways { display: flex; flex-direction: column; gap: 8px; }
+.wf-way { border: 1px solid var(--border); border-radius: 12px; background: var(--bg); transition: border-color .15s, background .15s; }
+.wf-way.is-on:not(.is-fixed) { border-color: color-mix(in srgb, var(--wf-start) 45%, var(--border)); background: color-mix(in srgb, var(--wf-start) 4%, var(--bg)); }
+.wf-way-row { display: grid; grid-template-columns: 32px minmax(0, 1fr) auto; align-items: center; gap: 11px; padding: 10px 12px; }
+label.wf-way-row { cursor: pointer; }
+.wf-way-ic { display: grid; place-items: center; width: 32px; height: 32px; border-radius: 9px; color: var(--text-muted); background: color-mix(in srgb, var(--text-muted) 12%, transparent); }
+.wf-way-ic svg { width: 16px; height: 16px; }
+.wf-way.is-on .wf-way-ic { color: color-mix(in srgb, var(--wf-start) 85%, var(--text)); background: color-mix(in srgb, var(--wf-start) 16%, transparent); }
+.wf-way-txt { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.wf-way-txt b { font-size: 13px; font-weight: 600; color: var(--text); }
+.wf-way-txt small { font-size: 11.5px; line-height: 1.4; color: var(--text-muted); }
+.wf-way-always { font-size: 11px; font-weight: 600; color: var(--text-muted); padding: 2px 8px; border-radius: 999px; background: color-mix(in srgb, var(--text-muted) 12%, transparent); }
+.wf-way-body { display: flex; flex-direction: column; gap: 12px; padding: 12px; border-top: 1px solid color-mix(in srgb, var(--wf-start) 22%, var(--border)); }
+.wf-way-body > .wf-sched { border: 0; padding: 0; background: transparent; }
+.wf-way-body > .wf-sched > .wf-seg { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.wf-way-body > .wf-sched > .wf-seg button { justify-content: center; }
+@media (hover: hover) {
+    label.wf-way-row:hover { background: color-mix(in srgb, var(--text-muted) 6%, transparent); border-radius: 12px; }
+    .wf-way.is-on label.wf-way-row:hover { border-radius: 12px 12px 0 0; }
+}
+/* L'interrupteur : une vraie case à cocher (clavier, lecteur d'écran), dessinée. */
+.wf-switch { appearance: none; -webkit-appearance: none; position: relative; flex: none; width: 36px; height: 21px; margin: 0; border-radius: 999px; cursor: pointer; background: color-mix(in srgb, var(--text-muted) 38%, transparent); transition: background .18s; }
+.wf-switch::after { content: ''; position: absolute; top: 3px; left: 3px; width: 15px; height: 15px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0, 0, 0, .3); transition: transform .18s; }
+.wf-switch:checked { background: var(--wf-start); }
+.wf-switch:checked::after { transform: translateX(15px); }
+.wf-switch:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) { .wf-switch, .wf-switch::after { transition: none; } }
+@media (pointer: coarse) { .wf-switch { width: 44px; height: 26px; } .wf-switch::after { width: 20px; height: 20px; } .wf-switch:checked::after { transform: translateX(18px); } }
+/* Les réglages d'un évènement, posés comme des questions. */
+.wf-evstep { display: flex; flex-direction: column; gap: 8px; }
+.wf-evstep-h { display: flex; align-items: center; gap: 7px; font-size: 12.5px; font-weight: 600; color: var(--text); }
+.wf-evstep-h > svg { width: 14px; height: 14px; color: color-mix(in srgb, var(--wf-start) 80%, var(--text)); }
+.wf-evstep-h .wf-hint-dot { margin-left: 2px; }
+.wf-tiles.cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.wf-ev-kinds .wf-tile { align-items: center; }
+.wf-ev-kinds .wf-tile b { font-weight: 500; }
+.wf-ev-kinds .wf-tile.is-on b { font-weight: 600; }
+.wf-evstep .wf-choice.is-sub { margin-top: 0; }
+/* Le déclencheur en clair : ce qui lancera le workflow, en une phrase. */
+.wf-say { display: flex; gap: 9px; margin: 0; padding: 10px 12px; border-radius: 10px; font-size: 12.5px; line-height: 1.5; color: var(--text); background: color-mix(in srgb, var(--wf-start) 9%, transparent); border: 1px solid color-mix(in srgb, var(--wf-start) 25%, transparent); }
+.wf-say b { font-weight: 600; overflow-wrap: anywhere; }
+.wf-say-ic { flex: none; display: grid; place-items: center; width: 20px; height: 20px; border-radius: 6px; color: #fff; background: var(--wf-start); }
+.wf-say-ic svg { width: 12px; height: 12px; }
+.wf-mini.wf-watch { display: flex; align-items: flex-start; line-height: 1.4; padding: 4px 8px; }
+.wf-mini.wf-watch svg { flex: 0 0 auto; margin-top: 2px; }
+.wf-row-chip { grid-template-columns: minmax(0, 1fr) auto; align-items: center; }
+.wf-link { color: var(--accent); font-weight: 600; text-decoration: none; }
+.wf-link:hover { text-decoration: underline; }
+@media (max-width: 400px) {
+    .wf-way-row { grid-template-columns: 28px minmax(0, 1fr) auto; gap: 9px; padding: 9px 10px; }
+    .wf-way-ic { width: 28px; height: 28px; }
+    .wf-way-body { padding: 11px 10px; }
+}
 
 /* Livraisons repliables */
 .wf-dl-toggle { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 3px; padding: 0; border: 0; background: transparent; color: var(--text); font: inherit; text-align: left; cursor: pointer; }
@@ -1239,7 +1430,8 @@ button.wf-out { border: 0; font-family: inherit; cursor: pointer; }
     .wf-jr-back { display: inline-flex; }
 }
 @media (max-width: 640px) {
-    .wf-ed-actions #wfHistoryBtn .lbl { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+    /* « Lancements » garde son libellé au téléphone : réduit à son icône (▷), il
+       se lisait comme un second bouton « Lancer » à côté du vrai. */
     .wf-hx-tools, .wf-hx-list { padding-inline: 10px; }
     .wf-hx-wf .wf-select { height: 44px; font-size: 16px; }
     .wf-hist-filter { height: 36px; }
@@ -1373,6 +1565,8 @@ button.wf-out { border: 0; font-family: inherit; cursor: pointer; }
 .wf-view-text table, .wf-view-table { display: block; max-width: 100%; overflow-x: auto; }
 .wf-view-text table, .wf-view-table table { border-collapse: collapse; font-size: 12px; }
 :is(.wf-view-text, .wf-view-table) :is(th, td) { border: 1px solid var(--border); padding: 4px 8px; text-align: left; vertical-align: top; }
+/* main.css retire le filet de la dernière ligne (`tr:last-child td`, plus spécifique) : rétabli. */
+:is(.wf-view-text, .wf-view-table) tr:last-child > :is(td, th) { border-bottom: 1px solid var(--border); }
 :is(.wf-view-text, .wf-view-table) th { font-weight: 600; background: color-mix(in srgb, var(--text-muted) 9%, transparent); }
 .wf-view-pre { white-space: pre-wrap; font-size: 12.5px; }
 .wf-view-list { margin: 0; padding-left: 22px; display: grid; gap: 3px; }
@@ -1403,3 +1597,251 @@ button.wf-out { border: 0; font-family: inherit; cursor: pointer; }
 @media (prefers-reduced-motion: reduce) {
     .wf-tl-view > summary::before { transition: none; }
 }
+
+
+/* =========================================================
+   Volet « Avancement » d'une exécution, dans SA conversation
+   (la discussion d'abord — workflow-progress.js, run-progress.php)
+   ========================================================= */
+.wfp-panel {
+    --wfp-w: 330px;
+    position: fixed; top: 0; right: 0; bottom: 0; width: var(--wfp-w); z-index: 350;
+    display: flex; flex-direction: column; overflow-y: auto; overscroll-behavior: contain;
+    background: var(--bg-card, var(--bg-surface)); border-left: 1px solid var(--border);
+    font-size: 13px; color: var(--text);
+}
+.wfp-panel[hidden] { display: none !important; }
+body.has-wf-progress .chat-main { margin-right: var(--wfp-w, 330px); }
+body.has-wf-progress { --wfp-w: 330px; }
+/* Une page, une carte, une présentation s'ouvre par-dessus (volets à 400). */
+.viewer-open.has-wf-progress .chat-main { margin-right: var(--viewer-width); }
+/* Conversation d'une exécution : « Regénérer » effacerait les messages du
+   moteur depuis la dernière étape (réponse, condition, validation, livrable)
+   et répondrait hors du workflow — refusé aussi par le serveur ; « Refaire
+   régulièrement » programmerait le message d'une étape, « Refaire en
+   workflow » ferait un workflow du plan d'une étape. On refait une étape
+   depuis la page de l'exécution. data-workflow-run vit sur <main>, posé par le
+   gabarit et tenu à jour au changement de conversation (announceConversation). */
+.chat-main[data-workflow-run]:not([data-workflow-run="0"]) .msg-actions .btn-regen,
+.chat-main[data-workflow-run]:not([data-workflow-run="0"]) .msg-actions .btn-schedule,
+.chat-main[data-workflow-run]:not([data-workflow-run="0"]) .msg-plan-workflow { display: none; }
+.wfp { display: flex; flex-direction: column; gap: 12px; padding: 16px 16px 20px; min-height: 100%; }
+.wfp-head { display: flex; align-items: center; gap: 10px; padding-right: 34px; position: relative; }
+.wfp-ic { display: grid; place-items: center; width: 32px; height: 32px; flex: none; border-radius: 9px; color: var(--hue); background: color-mix(in srgb, var(--hue) 15%, transparent); }
+.wfp-title { display: flex; flex-direction: column; min-width: 0; }
+.wfp-title small { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: .04em; font-weight: 600; }
+.wfp-title strong { font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wfp-close { position: absolute; top: 0; right: 0; width: 30px; height: 30px; display: grid; place-items: center; border: 0; border-radius: 8px; background: transparent; color: var(--text-muted); cursor: pointer; }
+.wfp-close:hover { background: color-mix(in srgb, var(--text-muted) 14%, transparent); color: var(--text); }
+.wfp-status { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 12px; color: var(--text-muted); }
+.wfp-pill { display: inline-flex; align-items: center; gap: 4px; padding: 2px 9px; border-radius: 999px; font-size: 11.5px; font-weight: 600; color: var(--text-muted); background: color-mix(in srgb, var(--text-muted) 14%, transparent); }
+.wfp-pill.ok { color: var(--wf-ok); background: color-mix(in srgb, var(--wf-ok) 15%, transparent); }
+.wfp-pill.run { color: #0ea5e9; background: color-mix(in srgb, #0ea5e9 16%, transparent); }
+.wfp-pill.wait { color: #b45309; background: color-mix(in srgb, #f59e0b 18%, transparent); }
+:root:not([data-theme="light"]) .wfp-pill.wait { color: #fbbf24; }
+.wfp-pill.err { color: #ef4444; background: color-mix(in srgb, #ef4444 15%, transparent); }
+.wfp-bar { height: 5px; border-radius: 999px; background: color-mix(in srgb, var(--text-muted) 16%, transparent); overflow: hidden; }
+.wfp-bar i { display: block; height: 100%; border-radius: inherit; background: var(--wf-ok); transition: width .4s ease; }
+.wfp-attn { padding: 11px 12px; border-radius: 12px; border: 1px solid var(--border); background: color-mix(in srgb, var(--text-muted) 7%, transparent); display: flex; flex-direction: column; gap: 6px; }
+.wfp-attn b { font-size: 13px; }
+.wfp-attn p { margin: 0; line-height: 1.45; color: var(--text); overflow-wrap: anywhere; }
+.wfp-attn .wfp-why { color: var(--text-muted); font-size: 12px; }
+.wfp-attn.is-gate, .wfp-attn.is-doubt, .wfp-attn.is-cards, .wfp-attn.is-paused { border-color: color-mix(in srgb, #f59e0b 55%, var(--border)); background: color-mix(in srgb, #f59e0b 9%, transparent); }
+.wfp-attn.is-failed { border-color: color-mix(in srgb, #ef4444 50%, var(--border)); background: color-mix(in srgb, #ef4444 8%, transparent); }
+.wfp-attn.is-done { border-color: color-mix(in srgb, var(--wf-ok) 50%, var(--border)); background: color-mix(in srgb, var(--wf-ok) 9%, transparent); }
+.wfp-attn.is-timer { border-color: color-mix(in srgb, #0ea5e9 45%, var(--border)); background: color-mix(in srgb, #0ea5e9 7%, transparent); }
+.wfp-row { display: flex; flex-wrap: wrap; gap: 6px; }
+.wfp-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 30px; padding: 5px 12px; border-radius: 9px; border: 1px solid var(--border); background: var(--bg-surface, transparent); color: var(--text); font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; text-decoration: none; }
+.wfp-btn:hover { border-color: color-mix(in srgb, var(--accent) 50%, var(--border)); }
+.wfp-btn.is-primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.wfp-btn.is-danger { color: #ef4444; }
+.wfp-btn.is-danger:hover { border-color: color-mix(in srgb, #ef4444 55%, var(--border)); }
+.wfp-steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.wfp-step { position: relative; display: grid; grid-template-columns: 14px 18px minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 6px 6px 6px calc(6px + var(--d, 0) * 16px); border-radius: 9px; }
+.wfp-step.is-run, .wfp-step.is-wait { background: color-mix(in srgb, var(--accent) 7%, transparent); }
+.wfp-step.is-err { background: color-mix(in srgb, #ef4444 8%, transparent); }
+.wfp-dot { width: 10px; height: 10px; border-radius: 50%; border: 2px solid color-mix(in srgb, var(--text-muted) 55%, transparent); box-sizing: border-box; justify-self: center; }
+.wfp-step.is-done .wfp-dot { border-color: var(--wf-ok); background: var(--wf-ok); }
+.wfp-step.is-skip .wfp-dot, .wfp-step.is-off .wfp-dot { border-style: dashed; }
+.wfp-step.is-run .wfp-dot { border-color: #0ea5e9; border-top-color: transparent; animation: wfp-spin 1s linear infinite; }
+.wfp-step.is-wait .wfp-dot { border-color: #f59e0b; background: color-mix(in srgb, #f59e0b 35%, transparent); }
+.wfp-step.is-err .wfp-dot { border-color: #ef4444; background: #ef4444; }
+@keyframes wfp-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .wfp-step.is-run .wfp-dot { animation: none; border-top-color: #0ea5e9; } }
+.wfp-kind { display: grid; place-items: center; color: var(--text-muted); }
+.wfp-kind svg { width: 15px; height: 15px; }
+.wfp-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wfp-step.is-todo .wfp-name, .wfp-step.is-skip .wfp-name { color: var(--text-muted); }
+.wfp-note { font-size: 11px; font-weight: 600; color: var(--text-muted); white-space: nowrap; }
+.wfp-note.is-lane { padding: 1px 8px; border-radius: 999px; color: var(--wf-on-lane, #fff); background: var(--lane); }
+.wfp-note.is-run { color: #0ea5e9; }
+.wfp-note.is-wait { color: #b45309; }
+:root:not([data-theme="light"]) .wfp-note.is-wait { color: #fbbf24; }
+.wfp-step.is-done .wfp-note:not(.is-lane) { color: var(--wf-ok); }
+.wfp-lane { padding: 4px 6px 2px calc(6px + var(--d, 1) * 16px - 8px); font-size: 11px; font-weight: 700; color: var(--lane); }
+.wfp-lane span { padding: 1px 8px; border-radius: 999px; border: 1.5px solid var(--lane); }
+.wfp-err { margin: 0; color: #ef4444; font-size: 12.5px; }
+.wfp-foot { margin-top: auto; display: flex; flex-wrap: wrap; gap: 8px; padding-top: 6px; border-top: 1px solid var(--border); }
+.wfp-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+/* Bouton qui rouvre le volet (masqué à la main, ou écran étroit). */
+.wfp-toggle {
+    position: fixed; top: 56px; right: 16px; z-index: 340; display: inline-flex; align-items: center; gap: 7px;
+    padding: 7px 12px; border-radius: 999px; border: 1px solid var(--border); background: var(--bg-card, var(--bg-surface)); color: var(--text);
+    font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; box-shadow: 0 4px 18px rgba(0, 0, 0, .18);
+}
+.wfp-toggle[hidden] { display: none !important; }
+.wfp-toggle svg { width: 15px; height: 15px; color: var(--accent); }
+.wfp-toggle-state { font-weight: 500; color: var(--text-muted); }
+.wfp-toggle-state:empty { display: none; }
+.drive-confirm-card.is-spotlit { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 45%, transparent); transition: box-shadow .3s; }
+@media (max-width: 1099px) {
+    .wfp-panel { width: min(380px, 100%); z-index: 450; box-shadow: -10px 0 30px rgba(0, 0, 0, .3); }
+    body.wfp-sheet-open::after { content: ''; position: fixed; inset: 0; z-index: 440; background: rgba(0, 0, 0, .35); }
+    .wfp-toggle { top: calc(var(--safe-top, 0px) + 62px); right: 12px; min-height: 40px; }
+    .wfp-btn { min-height: 40px; }
+}
+/* Téléphone : l'en-tête (57 px) et le bandeau du modèle (35 px) sont en flux,
+   le bouton flotte — posé SOUS eux, sinon il recouvre le bouton « Masquer /
+   afficher le bandeau ». max(8px, …) = le padding-top de l'en-tête. */
+@media (max-width: 768px) {
+    .wfp-toggle { top: calc(max(8px, var(--safe-top, 0px)) + 92px); }
+}
+
+/* Historique des versions (éditeur) */
+#wfStatus { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.wf-ver-btn { display: inline-flex; align-items: center; gap: 5px; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--border); background: transparent; color: var(--text); font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
+.wf-ver-btn:hover { border-color: color-mix(in srgb, var(--accent) 50%, var(--border)); }
+.wf-ver-btn svg { width: 13px; height: 13px; }
+.wf-vers { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.wf-ver { padding: 10px 12px; border-radius: 12px; border: 1px solid var(--border); display: flex; flex-direction: column; gap: 6px; }
+.wf-ver.is-open { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
+.wf-ver-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.wf-ver small { color: var(--text-muted); font-size: 12px; }
+.wf-ver-rail { list-style: none; margin: 4px 0 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.wf-ver-rail li { display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: 8px; align-items: start; font-size: 12.5px; }
+.wf-ver-rail small { display: block; color: var(--text-muted); font-size: 11.5px; }
+.wf-ver-ic { display: grid; place-items: center; width: 22px; height: 22px; border-radius: 7px; color: var(--text-muted); background: color-mix(in srgb, var(--text-muted) 12%, transparent); }
+.wf-ver-ic svg { width: 13px; height: 13px; }
+
+/* Brique « Appeler un workflow » (éditeur, exécution) — WorkflowCall.
+   Le workflow appelé porte sa couleur ; chaque paramètre est une ligne
+   (nom, nature, valeur) et son alerte se pose juste dessous. */
+.wf-call-dot { display: grid; place-items: center; width: 26px; height: 26px; border-radius: 8px; flex: none; color: var(--c, var(--accent)); background: color-mix(in srgb, var(--c, var(--accent)) 16%, transparent); }
+.wf-call-dot svg { width: 14px; height: 14px; }
+.wf-sum-who .wf-call-dot { width: 22px; height: 22px; border-radius: 7px; }
+.wf-sum-who .wf-call-dot svg { width: 12px; height: 12px; }
+.wf-call-list { display: flex; flex-direction: column; gap: 6px; }
+.wf-call-list .wf-tile { width: 100%; }
+.wf-call-list .wf-tile .t-ic { background: none; width: auto; height: auto; }
+.wf-call-params { display: flex; flex-direction: column; gap: 12px; }
+.wf-call-param { display: flex; flex-direction: column; gap: 5px; padding: 10px 11px; border-radius: 12px; border: 1px solid var(--border); background: var(--bg); }
+.wf-call-param:has(.wf-call-alert.block) { border-color: color-mix(in srgb, #ef4444 45%, var(--border)); }
+.wf-call-param:has(.wf-call-alert:not(.block)) { border-color: color-mix(in srgb, #d97706 40%, var(--border)); }
+.wf-call-param:has(.wf-call-alert.block):has(.wf-call-alert:not(.block)) { border-color: color-mix(in srgb, #ef4444 45%, var(--border)); }
+.wf-call-param-head { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; min-width: 0; }
+.wf-call-param-head b { font-size: 12.5px; font-weight: 600; overflow-wrap: anywhere; }
+.wf-call-type { padding: 1px 7px; border-radius: 999px; font-size: 10.5px; font-weight: 600; color: var(--text-muted); background: color-mix(in srgb, var(--text-muted) 13%, transparent); white-space: nowrap; }
+.wf-call-param-head em { font-style: normal; font-size: 10.5px; font-weight: 600; color: #d97706; }
+.wf-call-opts { display: flex; flex-wrap: wrap; gap: 5px; }
+.wf-call-opt { padding: 3px 10px; border-radius: 999px; border: 1px solid var(--border); background: transparent; color: var(--text); font: inherit; font-size: 11.5px; cursor: pointer; }
+.wf-call-opt.is-on { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); font-weight: 600; }
+.wf-call-alerts:empty { display: none; }
+.wf-call-alerts { display: flex; flex-direction: column; gap: 4px; }
+.wf-call-alert { display: flex; gap: 7px; align-items: flex-start; margin: 0; font-size: 11.5px; line-height: 1.4; color: #b45309; }
+.wf-call-alert.block { color: #dc2626; }
+.wf-call-alert svg { width: 13px; height: 13px; flex: none; margin-top: 1px; }
+:root:not([data-theme="light"]) .wf-call-alert { color: #fbbf24; }
+:root:not([data-theme="light"]) .wf-call-alert.block { color: #f87171; }
+.wf-call-name { margin-top: 4px; }
+/* Exécution : le workflow appelé, son état, le lien vers son exécution. */
+.wf-call-run { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--border); background: var(--bg); }
+.wf-call-run b { font-size: 13px; }
+.wf-call-run .grow { flex: 1 1 140px; min-width: 0; }
+.wf-call-run small { display: block; font-size: 11.5px; color: var(--text-muted); }
+.wf-call-given { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; }
+.wf-call-given li { display: grid; grid-template-columns: minmax(80px, 34%) minmax(0, 1fr); gap: 8px; }
+.wf-call-given li span { color: var(--text-muted); overflow-wrap: anywhere; }
+.wf-call-given li b { font-weight: 500; overflow-wrap: anywhere; }
+@media (hover: hover) {
+    .wf-call-opt:hover { border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); }
+}
+@media (pointer: coarse) {
+    .wf-call-opt { min-height: 36px; padding: 6px 14px; font-size: 13px; }
+}
+.wf-run-caller { display: inline-flex; align-items: center; gap: 8px; margin: 0 0 12px; padding: 7px 12px; border-radius: 999px; border: 1px solid var(--border); font-size: 12.5px; color: var(--text); text-decoration: none; max-width: 100%; }
+.wf-run-caller svg { width: 14px; height: 14px; flex: none; color: var(--text-muted); }
+.wf-run-caller span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (hover: hover) { .wf-run-caller:hover { border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); } }
+@media (max-width: 640px) { .wf-run-caller { border-radius: 12px; } .wf-run-caller span { white-space: normal; } }
+
+/* ---------------- Appeler un workflow : pas une brique comme les autres ----------------
+   Un workflow entier dans le rail : la teinte et l'icône de l'espace Workflows
+   (tuile de la barre latérale, --space de .space-wf), une PILE DE CARTES sous la
+   brique (deux ombres décalées, contour compris — rien n'est peint sous elle),
+   une tuile d'icône pleine, un surtitre, et le workflow appelé en miniature
+   (sa couleur, sa silhouette). Les états d'une exécution gardent la pile. */
+:root { --wf-call: #0d9488; }
+:root:not([data-theme="light"]) { --wf-call: #2dd4bf; }
+.wf-brick.wf-k-call {
+    --wf-stack:
+        0 8px 0 -3px color-mix(in srgb, var(--hue) 12%, var(--bg-surface)), 0 8px 0 -2px color-mix(in srgb, var(--hue) 58%, var(--border)),
+        0 15px 0 -7px color-mix(in srgb, var(--hue) 7%, var(--bg-surface)), 0 15px 0 -6px color-mix(in srgb, var(--hue) 34%, var(--border));
+    margin-bottom: 15px;
+    padding: 12px 14px 12px 12px;
+    border-color: color-mix(in srgb, var(--hue) 55%, var(--border));
+    background:
+        radial-gradient(130% 170% at 0% 0%, color-mix(in srgb, var(--hue) 20%, transparent), transparent 60%),
+        var(--bg-surface);
+    box-shadow: var(--wf-stack), 0 10px 24px -16px color-mix(in srgb, var(--hue) 80%, transparent);
+}
+.wf-brick.wf-k-call .wf-brick-ic {
+    width: 42px; height: 42px; border-radius: 12px; color: #fff;
+    background: linear-gradient(145deg, color-mix(in srgb, var(--hue) 90%, #fff), color-mix(in srgb, var(--hue) 68%, #062a26));
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, .3), 0 6px 14px -6px color-mix(in srgb, var(--hue) 80%, transparent);
+}
+.wf-brick.wf-k-call .wf-brick-ic svg { width: 21px; height: 21px; }
+.wf-brick-kicker {
+    display: block; margin-bottom: 1px; font-size: 10px; font-weight: 700; line-height: 1.3;
+    letter-spacing: .09em; text-transform: uppercase; color: var(--hue);
+}
+.wf-call-mini {
+    display: flex; align-items: center; gap: 7px; width: fit-content; max-width: 100%; min-width: 0; margin-top: 6px;
+    padding: 4px 10px 4px 7px; border-radius: 999px;
+    background: color-mix(in srgb, var(--c) 11%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--c) 30%, transparent);
+}
+.wf-call-mini-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--c); box-shadow: 0 0 0 2px color-mix(in srgb, var(--c) 25%, transparent); }
+.wf-call-mini .wf-sil { min-height: 8px; min-width: 0; overflow: hidden; }
+.wf-call-mini .wf-sil i { width: 7px; height: 7px; }
+.wf-call-mini .wf-sil i.d { width: 6px; height: 6px; }
+.wf-call-mini .wf-sil i.r { box-shadow: inset 0 0 0 1.5px var(--k); }
+.wf-call-mini .wf-sil b { min-width: 3px; max-width: 10px; height: 1.5px; }
+.wf-lane .wf-brick.wf-k-call .wf-brick-ic { width: 34px; height: 34px; border-radius: 10px; }
+.wf-lane .wf-brick.wf-k-call .wf-brick-ic svg { width: 18px; height: 18px; }
+/* États : la bordure et l'anneau de l'état, la pile en dessous. */
+.wf-brick.wf-k-call.is-sel { border-color: var(--hue); box-shadow: 0 0 0 3px color-mix(in srgb, var(--hue) 24%, transparent), var(--wf-stack); }
+.wf-brick.wf-k-call.st-active { border-color: #0ea5e9; box-shadow: 0 0 0 3px color-mix(in srgb, #0ea5e9 20%, transparent), var(--wf-stack); }
+.wf-brick.wf-k-call.st-waiting { border-color: var(--wf-gate); box-shadow: 0 0 0 3px color-mix(in srgb, var(--wf-gate) 22%, transparent), var(--wf-stack); }
+.wf-brick.wf-k-call.st-failed { border-color: #ef4444; box-shadow: 0 0 0 3px color-mix(in srgb, #ef4444 18%, transparent), var(--wf-stack); }
+.wf-brick.wf-k-call.st-timer { border-color: color-mix(in srgb, var(--wf-wait) 60%, var(--border)); border-style: dashed; box-shadow: 0 0 0 3px color-mix(in srgb, var(--wf-wait) 14%, transparent), var(--wf-stack); }
+.wf-brick.wf-k-call.st-pending { background: transparent; border-color: var(--border); border-style: dashed; box-shadow: none; }
+.wf-brick.wf-k-call.st-pending .wf-brick-ic { box-shadow: none; }
+
+/* ---------------- MIA : son logo sur ce que fait le modèle de l'organisation ----------------
+   Étape sans assistant au modèle par défaut : le logo (Marque & apparence) ;
+   un autre modèle imposé : le logo de son éditeur. Question et décision de
+   MIA : un petit logo au coin de leur pictogramme. */
+.wf-ava .wf-mia-logo, .wf-brick-ic .wf-ava .wf-mia-logo { width: 100%; height: 100%; object-fit: contain; display: block; }
+.wf-ava.mia.is-logo { padding: 2px; background: color-mix(in srgb, var(--accent) 10%, var(--bg-surface)); }
+.wf-brick-ic .wf-ava.mia.is-logo { padding: 3px; box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent); }
+.wf-ava.llm { padding: 4px; background: #fff; box-shadow: 0 0 0 1px var(--border); }
+.wf-ava.llm img, .wf-brick-ic .wf-ava.llm img { width: 100%; height: 100%; object-fit: contain; }
+.wf-brick-ic .wf-ava.llm { padding: 7px; }
+.wf-tile .t-ic .wf-mia-logo { width: 20px; height: 20px; object-fit: contain; }
+.wf-brick-ic { position: relative; }
+.wf-ic-mia {
+    position: absolute; right: -6px; bottom: -6px; display: grid; place-items: center;
+    width: 20px; height: 20px; padding: 2px; border-radius: 50%;
+    background: var(--bg-surface); box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--hue) 45%, var(--border)), 0 2px 5px rgba(0, 0, 0, .18);
+}
+.wf-brick-ic .wf-ic-mia .wf-mia-logo { width: 100%; height: 100%; object-fit: contain; }
+.wf-brick-ic .wf-ic-mia svg { width: 13px; height: 13px; color: var(--accent); }

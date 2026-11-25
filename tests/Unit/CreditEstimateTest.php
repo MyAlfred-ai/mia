@@ -94,7 +94,8 @@ final class CreditEstimateTest extends TestCase
         $this->assertNull(CreditEstimate::chatReply('openai::modele-inconnu'));
         // Une recherche Internet : le tarif de la facturation, une seule recherche.
         $this->assertSame((int)CreditService::computeWebSearchCredits('anthropic::claude-opus-5', 1)['total_credits'], CreditEstimate::webSearch('anthropic::claude-opus-5'));
-        $this->assertNull(CreditEstimate::webSearch('deepseek::deepseek-flash'), 'Pas de recherche native : rien à annoncer.');
+        $this->assertNull(CreditEstimate::webSearch('zai::glm-5.2'), 'Pas de recherche native : rien à annoncer.');
+        $this->assertSame((int)CreditService::computeWebSearchCredits('deepseek::deepseek-flash', 1)['total_credits'], CreditEstimate::webSearch('deepseek::deepseek-flash'), 'Recherche intégrée de DeepSeek (13/11/2026).');
     }
 
     public function testLesModelesSontRangesParCeQuIlsCoutentVraiment(): void
@@ -239,7 +240,7 @@ final class CreditEstimateTest extends TestCase
 
     public function testLeBadgeDUneReponseDitToutCeQueLeTourACoute(): void
     {
-        $this->assertSame(['title', 'memory', 'task_rules', 'image_prompt', 'kb_query', 'context_summary', 'tool_condense'], UsageSource::TURN_HELPERS);
+        $this->assertSame(['title', 'memory', 'task_rules', 'image_prompt', 'kb_query', 'context_summary', 'tool_condense', 'table_enrich'], UsageSource::TURN_HELPERS);
         $this->assertNotContains(UsageSource::FOLLOW_UP, UsageSource::TURN_HELPERS, 'Demandée après coup : au compte de la conversation.');
         $this->assertNotContains(UsageSource::MAIL_ASSIST, UsageSource::TURN_HELPERS);
 
@@ -268,7 +269,8 @@ final class CreditEstimateTest extends TestCase
     {
         $wf = self::lire('src/Workflow/WorkflowCatalog.php');
         $this->assertStringNotContainsString("\$r['llm_provider'] . '::' . \$r['model']", $wf, 'La clé « fournisseur::modèle::modèle » ne désignait aucun modèle.');
-        foreach (['CreditEstimate::chatReply($llm)', 'CreditEstimate::webSearch($llm)', 'CreditEstimate::searchesPerReply()',
+        // Une étape : les étapes de workflow réelles de son modèle, à défaut une réponse de chat.
+        foreach (['CreditEstimate::workflowStep($llm)', 'CreditEstimate::webSearch($llm)', 'CreditEstimate::searchesPerReply()',
                   'CreditEstimate::toolUse($tool)', 'CreditEstimate::helperCall(UsageSource::WORKFLOW_JUDGE'] as $appel) {
             $this->assertStringContainsString($appel, $wf, $appel);
         }

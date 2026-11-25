@@ -80,6 +80,14 @@ declare(strict_types=1);
  *   web_search_tools       : {primary, fallback} (ids des tools web search)
  *   fallback_search_model  : modèle à utiliser quand webSearch demandé sur un modèle non capable
  *   gpt5_default_routing   : routage par défaut pour les modèles 'gpt-5*' non listés (catch-all)
+ *   retired_models         : (optionnel) { id => {label, retirement} } — modèles que
+ *                 MIA ne propose pas (retirés du catalogue, ou jamais proposés)
+ *                 mais qu'une instance peut encore porter (ligne `llm_models`
+ *                 activée avant leur retrait, modèle de référence d'une clé).
+ *                 Seul leur arrêt est déclaré, même forme que `retirement` ;
+ *                 lu par `LlmCatalog::retirement()` en repli de `models`. Un
+ *                 modèle quittant le catalogue alors qu'il est encore servi y
+ *                 passe, avec la date de sa coupure.
  *   web_search_pricing_usd_per_1k : (optionnel) tarif officiel USD pour 1 000 recherches
  *                 web exécutées par l'outil serveur du fournisseur — repli de
  *                 CreditService quand aucun service `websearch:{provider}` n'est
@@ -87,11 +95,14 @@ declare(strict_types=1);
  *                 (signalée sur la page Usages), jamais gratuite en silence.
  *                 Un modèle peut déclarer le sien (cf. champs par modèle).
  *   web_search_billing     : (optionnel) 'request' | 'prompt', cf. champs par modèle.
- *   transcription_pricing_usd_per_minute : (OpenAI) tarif USD par minute d'audio
- *                 des modèles de dictée (clé `default` pour les modèles non listés).
+ *   transcription_pricing_usd_per_minute : (OpenAI, Mistral) tarif USD par minute
+ *                 d'audio des modèles de dictée (clé `default` pour les modèles
+ *                 non listés). Mistral = Voxtral, cf. Dictation.
  *   speech_pricing_usd_per_minute : (OpenAI) tarif USD par minute d'audio PRODUIT
  *                 par la synthèse vocale (lecture des réponses en conversation
  *                 vocale, cf. SpeechSynthesizer) ; même forme.
+ *   speech_pricing_usd_per_1m_chars : (Mistral) tarif USD par million de
+ *                 caractères LUS (Voxtral TTS, facturé au texte) ; même forme.
  */
 
 return [
@@ -115,12 +126,21 @@ return [
         'endpoints' => [
             'chat_completions' => 'https://api.openai.com/v1/chat/completions',
             'responses'        => 'https://api.openai.com/v1/responses',
+            // Liste des modèles du compte et leur `shutdown_date` : relevée
+            // chaque jour par LlmShutdownWatch (lecture seule, non facturée).
+            'models'           => 'https://api.openai.com/v1/models',
         ],
         // Modèle utilisé quand une recherche web est demandée sur un modèle qui
         // ne la fait pas nativement : la recherche passe par la Responses API
         // (outil web_search). Les anciens modèles *-search-preview sont dépréciés
         // par OpenAI (coupure 2026-07-23).
         'fallback_search_model' => 'gpt-5.6',
+        // Recherche des prix (Tarifs & crédits → « Mettre à jour coûts
+        // Internet ») : lire quelques pages de tarifs ne demande ni un modèle
+        // frontière ni un raisonnement long — le plus rapide et le moins cher
+        // des modèles qui cherchent sur le web. Le modèle de la clé ne sert
+        // qu'en repli (compte sans accès à celui-ci).
+        'price_lookup_model'    => 'gpt-6-luna',
         'gpt5_default_routing'  => 'responses_api',
         // Outil serveur `web_search` (Responses API) : facturé à l'appel, les
         // tokens de contenu de recherche étant comptés au tarif du modèle.
@@ -146,19 +166,87 @@ return [
             'whisper-1'              => 0.006,
             'default'                => 0.017,
         ],
-        // Lecture à voix haute (conversation vocale, POST /v1/audio/speech) :
-        // USD par minute d'audio produit. OpenAI facture gpt-4o-mini-tts au
-        // token (0,60 $/M en texte, 12 $/M en audio) et publie l'équivalent
-        // « ≈ 0,015 $ la minute » ; c'est cette minute, MESURÉE sur l'audio
-        // reçu, que MIA facture. Source : https://openai.com/api/pricing/
-        // (relue le 2026-09-18).
+        // Lecture à voix haute (conversation vocale) : USD par minute d'audio
+        // produit, MESURÉE sur l'audio reçu (SpeechSynthesizer).
+        //  - gpt-4o-mini-tts (POST /v1/audio/speech, arrêté le 06/01/2027) :
+        //    facturé au token (0,60 $/M en texte, 12 $/M en audio), équivalent
+        //    publié « ≈ 0,015 $ la minute » (page Pricing, relue le 2026-09-18).
+        //  - gpt-realtime-2.1-mini (API Realtime, RealtimeSpeech) : texte
+        //    0,60 $/M en entrée, 2,40 $/M en sortie (raisonnement et transcript
+        //    compris), audio 20 $/M en sortie à 1 jeton par 50 ms = 0,024 $ la
+        //    minute (fiche du modèle et guide « Voice latency and cost », relus
+        //    le 2026-11-10). Mesuré le 2026-11-10 sur huit lectures réelles :
+        //    0,0253 à 0,0255 $ la minute au-delà de 10 s d'audio, 0,028 à
+        //    0,029 $ sous 3 s (la consigne pèse). 0,028 $ : jamais en dessous
+        //    pour un passage de lecture (≥ 60 caractères, ≈ 4 s).
+        // `default` = le plus cher, jamais une sous-facturation muette.
         'speech_pricing_usd_per_minute' => [
-            'gpt-4o-mini-tts' => 0.015,
-            'default'         => 0.015,
+            'gpt-realtime-2.1-mini' => 0.028,
+            'gpt-4o-mini-tts'       => 0.015,
+            'default'               => 0.028,
         ],
         'models' => [
-            // GPT-6.1 Sol (29/09/2026) et GPT-6 Luna (22/09/2026), fiches et
-            // grille relues le 2026-10-07. Comme Astra, hors du préfixe `gpt-5` :
+            // GPT-6.2 Astra et GPT-6.2 Sol (17/11/2026), fiches, page Pricing,
+            // changelog et guide « Using GPT-6.2 » relus en verbatim le
+            // 2026-11-17. Chat Completions ET Responses API, mais « tool
+            // calling requires the Responses API » : routage DÉCLARÉ (hors
+            // préfixe `gpt-5`). « Omit temperature, top_p… » : pas de
+            // `temperature`. L'API refuse `reasoning.effort: none` — MIA
+            // n'envoie aucun effort à OpenAI (défaut du modèle). Contexte 1,05M
+            // (entrée max 922k), sortie max 128k, palier > 272k tokens d'entrée
+            // (×2 entrée et cache, ×1,5 sortie). Cache lu à 5 % de l'entrée, à
+            // DÉCLARER ; écriture 30 min à 1,25× (celle de 12 h, 2,5×, n'est pas
+            // demandée par MIA). Nouveau à partir de 6.2 : un fil dont le début
+            // change en route (consignes, liste d'outils) perd ses éléments de
+            // raisonnement — dégradation, pas un refus ; la boucle d'outils
+            // enchaîne par `previous_response_id`, seule l'activation d'un
+            // connecteur à la demande change la liste d'outils. GPT-6.2 Astra
+            // (8 $ / 40 $) est moins cher que GPT-6 Astra ; 6.2 Sol garde le
+            // tarif de 6.1 Sol. Aucun ne devient le défaut. Écarté (accès
+            // réservé) : gpt-6.2-astra-law.
+            'gpt-6.2-astra' => [
+                'label'       => 'GPT-6.2 Astra',
+                'native_pptx' => true,
+                'note'        => 'Modèle le plus capable d\'OpenAI (novembre 2026) — projets difficiles de bout en bout : raisonnement, code, documents, agents. Vision, contexte 1,05M, moins cher que GPT-6 Astra (8 $ / 40 $ le million de tokens).',
+                'context_window' => 1050000,
+                'tags'        => ['vision', 'fichiers', 'web', 'raisonnement', 'code'],
+                'limits'      => ['Coût élevé', 'Tarif majoré au-delà de 272k tokens d\'entrée', 'Pas de temperature (API)'],
+                'web_native'  => true,
+                'routing'     => 'responses_api',
+                'temperature' => false,
+                'pricing'     => [
+                    'long_context' => ['above' => 272000, 'input_ratio' => 2.0, 'output_ratio' => 1.5], // > 272k jetons d'entrée : entrée et cache ×2, sortie ×1,5 (fiche du modèle, relue le 2026-11-17)
+                    'input'        => 8.00,
+                    'output'       => 40.00,
+                    'cached_input' => 0.40,
+                    'cache_write'  => 10.00,
+                    'source_url'   => 'https://developers.openai.com/api/docs/models/gpt-6.2-astra',
+                    'note'         => 'Tarif officiel OpenAI GPT-6.2 Astra, contexte court (cache lu 0,40 $, écrit 10 $ pour 30 min). Au-delà de 272k tokens d\'entrée : ×2 en entrée, ×1,5 en sortie (palier long_context), relu le 17/11/2026.',
+                ],
+            ],
+            'gpt-6.2-sol' => [
+                'label'       => 'GPT-6.2 Sol',
+                'native_pptx' => true,
+                'note'        => 'Sol de la génération GPT-6.2 (novembre 2026) — le modèle de tous les jours d\'OpenAI : code, agents, travail professionnel. Vision, contexte 1,05M, même tarif que GPT-6.1 Sol.',
+                'context_window' => 1050000,
+                'tags'        => ['vision', 'fichiers', 'web', 'raisonnement', 'code'],
+                'limits'      => ['Tarif majoré au-delà de 272k tokens d\'entrée', 'Pas de temperature (API)'],
+                'web_native'  => true,
+                'routing'     => 'responses_api',
+                'temperature' => false,
+                'pricing'     => [
+                    'long_context' => ['above' => 272000, 'input_ratio' => 2.0, 'output_ratio' => 1.5], // > 272k jetons d'entrée : entrée et cache ×2, sortie ×1,5 (fiche du modèle, relue le 2026-11-17)
+                    'input'        => 2.00,
+                    'output'       => 10.00,
+                    'cached_input' => 0.10,
+                    'cache_write'  => 2.50,
+                    'source_url'   => 'https://developers.openai.com/api/docs/models/gpt-6.2-sol',
+                    'note'         => 'Tarif officiel OpenAI GPT-6.2 Sol, contexte court (cache lu 0,10 $, écrit 2,50 $ pour 30 min). Au-delà de 272k tokens d\'entrée : ×2 en entrée, ×1,5 en sortie (palier long_context), relu le 17/11/2026.',
+                ],
+            ],
+            // GPT-6.1 Sol (29/09/2026), GPT-6.1 Terra (26/10/2026) et GPT-6 Luna
+            // (22/09/2026), fiches et grille relues le 2026-10-07 puis le
+            // 2026-11-10. Comme Astra, hors du préfixe `gpt-5` :
             // routage DÉCLARÉ (Responses API — Chat Completions n'y porte pas
             // les outils : « Chat Completions is supported without tool
             // calling » pour 6.1 Sol, « only with reasoning_effort none » pour
@@ -169,6 +257,8 @@ return [
             // et ×1,5 en sortie (palier `long_context`, comme Astra). Non repris :
             // GPT-6 Sol (22/09), même tarif que 6.1 Sol que la fiche désigne
             // comme « the newer Sol model ». Aucun ne devient le défaut.
+            // Écartés à dessein (accès réservé) : gpt-6-cyber, gpt-6-rosalind,
+            // gpt-6-astra-law.
             'gpt-6.1-sol' => [
                 'label'       => 'GPT-6.1 Sol',
                 'native_pptx' => true,
@@ -189,6 +279,31 @@ return [
                     'cache_write'  => 2.50,
                     'source_url'   => 'https://developers.openai.com/api/docs/models/gpt-6.1-sol',
                     'note'         => 'Tarif officiel OpenAI GPT-6.1 Sol, contexte court (cache lu 0,10 $, écrit 2,50 $). Au-delà de 272k tokens d\'entrée : ×2 en entrée, ×1,5 en sortie (palier long_context).',
+                ],
+            ],
+            // GPT-6.1 Terra : le tier équilibré de la génération GPT-6, moitié
+            // prix de 6.1 Sol et moins cher que GPT-5.6 Terra. Lecture de cache
+            // à 5 % de l'entrée (« Cached input tokens are priced at 5% of the
+            // uncached input token rate ») : à DÉCLARER, le ratio conventionnel
+            // (10 %) donnerait 0,10 $. Écriture de cache 30 min à 1,25 $.
+            'gpt-6.1-terra' => [
+                'label'       => 'GPT-6.1 Terra',
+                'native_pptx' => true,
+                'note'        => 'Tier équilibré de la génération GPT-6 (octobre 2026) — rapide et efficace : vision, écriture claire, usage précis des écrans. Contexte 1,05M, moitié prix de GPT-6.1 Sol.',
+                'context_window' => 1050000,
+                'tags'        => ['vision', 'fichiers', 'web', 'raisonnement'],
+                'limits'      => ['Pas de temperature (API)'],
+                'web_native'  => true,
+                'routing'     => 'responses_api',
+                'temperature' => false,
+                'pricing'     => [
+                    'long_context' => ['above' => 272000, 'input_ratio' => 2.0, 'output_ratio' => 1.5], // > 272k jetons d'entrée : entrée ×2, sortie ×1,5 (fiche du modèle, relue le 2026-11-10)
+                    'input'        => 1.00,
+                    'output'       => 5.00,
+                    'cached_input' => 0.05,
+                    'cache_write'  => 1.25,
+                    'source_url'   => 'https://developers.openai.com/api/docs/models/gpt-6.1-terra',
+                    'note'         => 'Tarif officiel OpenAI GPT-6.1 Terra, contexte court (cache lu 0,05 $, écrit 1,25 $). Au-delà de 272k tokens d\'entrée : ×2 en entrée, ×1,5 en sortie (palier long_context), relu le 10/11/2026.',
                 ],
             ],
             'gpt-6-luna' => [
@@ -241,13 +356,13 @@ return [
                 ],
             ],
             // Famille GPT-5.6 (GA 9 juillet 2026) : trois tiers Sol / Terra / Luna.
-            // L'alias nu 'gpt-5.6' est routé par OpenAI vers Sol. Contexte 1M,
+            // L'alias nu 'gpt-5.6' est routé par OpenAI vers Sol. Contexte 1,05M,
             // sortie max 128k, cutoff 16 février 2026, Responses API recommandée.
             'gpt-5.6' => [
                 'label'       => 'GPT-5.6 (alias → Sol)',
                 'native_pptx' => true,
                 'note'        => 'Alias OpenAI routé vers GPT-5.6 Sol — raisonnement, vision et outils natifs via Responses API.',
-                'context_window' => 1000000,
+                'context_window' => 1050000,
                 'tags'        => ['vision', 'fichiers', 'web', 'raisonnement'],
                 'limits'      => ['Responses API recommandée', 'Pas de temperature (API)'],
                 'web_native'  => true,
@@ -258,8 +373,10 @@ return [
                 'temperature' => false,
                 // Tarif USD / 1M tokens (cf. section "pricing" en tête de fichier).
                 // Tarif PROMOTIONNEL depuis le 21/08/2026 (4 $ / 20 $, cache
-                // 0,40 $) « at least through November 21, 2026 » : borne à
-                // cette date, puis retour au tarif GA — si OpenAI prolonge, MIA
+                // 0,40 $), annoncé « at least through November 21, 2026 » puis
+                // prolongé : « available until November 30, 2026 » (fiche et
+                // page Pricing, relues le 2026-11-10). Borne à cette date, puis
+                // retour au tarif GA — si OpenAI prolonge encore, MIA
                 // surfacture, jamais l'inverse.
                 'pricing'     => [
                     'long_context' => ['above' => 272000, 'input_ratio' => 2.0, 'output_ratio' => 1.5], // > 272k jetons d'entrée : entrée ×2, sortie ×1,5 (page Pricing, relue le 2026-10-17)
@@ -267,21 +384,21 @@ return [
                     'output'       => 30.00,
                     'cached_input' => 0.50,
                     'launch'       => [
-                        'until'        => '2026-11-21',
+                        'until'        => '2026-11-30',
                         'input'        => 4.00,
                         'output'       => 20.00,
                         'cached_input' => 0.40,
                         'cache_write'  => 5.00,
                     ],
                     'source_url'   => 'https://developers.openai.com/api/docs/pricing',
-                    'note'         => 'Tarif officiel (alias = Sol) : promotion 4 $ / 20 $ (cache 0,40 $) au moins jusqu\'au 21/11/2026, puis 5 $ / 30 $ (cache 0,50 $).',
+                    'note'         => 'Tarif officiel (alias = Sol) : promotion 4 $ / 20 $ (cache 0,40 $) jusqu\'au 30/11/2026, puis 5 $ / 30 $ (cache 0,50 $).',
                 ],
             ],
             'gpt-5.6-sol' => [
                 'label'       => 'GPT-5.6 Sol',
                 'native_pptx' => true,
                 'note'        => 'Tier frontière de la famille GPT-5.6 — raisonnement profond, agents, tool calling programmatique.',
-                'context_window' => 1000000,
+                'context_window' => 1050000,
                 'tags'        => ['vision', 'fichiers', 'web', 'raisonnement'],
                 'limits'      => ['Coût élevé', 'Responses API recommandée', 'Pas de temperature (API)'],
                 'web_native'  => true,
@@ -293,21 +410,21 @@ return [
                     'output'       => 30.00,
                     'cached_input' => 0.50,
                     'launch'       => [
-                        'until'        => '2026-11-21',
+                        'until'        => '2026-11-30',
                         'input'        => 4.00,
                         'output'       => 20.00,
                         'cached_input' => 0.40,
                         'cache_write'  => 5.00,
                     ],
                     'source_url'   => 'https://developers.openai.com/api/docs/pricing',
-                    'note'         => 'Tarif officiel OpenAI GPT-5.6 Sol : promotion 4 $ / 20 $ (cache 0,40 $) au moins jusqu\'au 21/11/2026, puis 5 $ / 30 $ (cache 0,50 $).',
+                    'note'         => 'Tarif officiel OpenAI GPT-5.6 Sol : promotion 4 $ / 20 $ (cache 0,40 $) jusqu\'au 30/11/2026, puis 5 $ / 30 $ (cache 0,50 $).',
                 ],
             ],
             'gpt-5.6-terra' => [
                 'label'       => 'GPT-5.6 Terra',
                 'native_pptx' => true,
                 'note'        => 'Tier équilibré de la famille GPT-5.6 — proche de GPT-5.5 pour moitié moins cher.',
-                'context_window' => 1000000,
+                'context_window' => 1050000,
                 'tags'        => ['vision', 'fichiers', 'web', 'raisonnement'],
                 'limits'      => ['Responses API recommandée', 'Pas de temperature (API)'],
                 'web_native'  => true,
@@ -315,18 +432,19 @@ return [
                 'temperature' => false,
                 // Baisse de 20 % le 30/07/2026 (« Terra costs 20% less »).
                 'pricing'     => [
+                    'long_context' => ['above' => 272000, 'input_ratio' => 2.0, 'output_ratio' => 1.5], // > 272k jetons d'entrée : entrée ×2, sortie ×1,5 (fiche du modèle, relue le 2026-11-10)
                     'input'        => 2.00,
                     'output'       => 12.00,
                     'cached_input' => 0.20,
                     'source_url'   => 'https://developers.openai.com/api/docs/pricing',
-                    'note'         => 'Tarif officiel OpenAI GPT-5.6 Terra depuis le 30/07/2026 (relu le 07/10/2026).',
+                    'note'         => 'Tarif officiel OpenAI GPT-5.6 Terra depuis le 30/07/2026, contexte court ; au-delà de 272k tokens d\'entrée : ×2 en entrée, ×1,5 en sortie (relu le 10/11/2026).',
                 ],
             ],
             'gpt-5.6-luna' => [
                 'label'       => 'GPT-5.6 Luna',
                 'native_pptx' => true,
                 'note'        => 'Tier rapide et économique de la famille GPT-5.6 — gros volumes, faible latence.',
-                'context_window' => 1000000,
+                'context_window' => 1050000,
                 'tags'        => ['vision', 'fichiers', 'web', 'raisonnement'],
                 'limits'      => ['Capacités réduites vs Sol/Terra', 'Pas de temperature (API)'],
                 'web_native'  => true,
@@ -335,11 +453,12 @@ return [
                 // Baisse de 80 % le 30/07/2026 (« Luna costs 80% less ») : MIA
                 // facturait cinq fois le prix.
                 'pricing'     => [
+                    'long_context' => ['above' => 272000, 'input_ratio' => 2.0, 'output_ratio' => 1.5], // > 272k jetons d'entrée : entrée ×2, sortie ×1,5 (fiche du modèle, relue le 2026-11-10)
                     'input'        => 0.20,
                     'output'       => 1.20,
                     'cached_input' => 0.02,
                     'source_url'   => 'https://developers.openai.com/api/docs/pricing',
-                    'note'         => 'Tarif officiel OpenAI GPT-5.6 Luna depuis le 30/07/2026 (relu le 07/10/2026).',
+                    'note'         => 'Tarif officiel OpenAI GPT-5.6 Luna depuis le 30/07/2026, contexte court ; au-delà de 272k tokens d\'entrée : ×2 en entrée, ×1,5 en sortie (relu le 10/11/2026).',
                 ],
             ],
             // `gpt-5.6-pro` retiré : aucun modèle de ce nom chez OpenAI (fiche
@@ -350,6 +469,7 @@ return [
             'gpt-5.5' => [
                 'label'       => 'GPT-5.5',
                 'note'        => 'Génération GPT-5 précédente (avril 2026) — raisonnement, vision et outils natifs via Responses API.',
+                'context_window' => 1050000,
                 'tags'        => ['vision', 'fichiers', 'web', 'raisonnement'],
                 'limits'      => ['Responses API recommandée', 'Pas de temperature (API)'],
                 'web_native'  => true,
@@ -369,6 +489,7 @@ return [
             'gpt-5.5-pro' => [
                 'label'       => 'GPT-5.5 Pro',
                 'note'        => 'Variante haute précision de GPT-5.5 (tâches longues, accuracy max).',
+                'context_window' => 1050000,
                 'tags'        => ['vision', 'fichiers', 'web', 'raisonnement'],
                 'limits'      => ['Coût élevé', 'Latence supérieure', 'Pas de temperature (API)'],
                 'web_native'  => true,
@@ -385,6 +506,7 @@ return [
             'gpt-5.4' => [
                 'label'       => 'GPT-5.4',
                 'note'        => 'Génération GPT-5 précédente (raisonnement, vision, outils natifs via Responses API).',
+                'context_window' => 1050000,
                 'tags'        => ['vision', 'web', 'fichiers', 'raisonnement'],
                 'limits'      => ['Responses API recommandée', 'Pas de temperature (API)'],
                 'web_native'  => true,
@@ -400,8 +522,9 @@ return [
                 ],
             ],
             'gpt-5.4-2026-03-05' => [
-                'label'       => 'GPT-5.4 (25.03.05)',
+                'label'       => 'GPT-5.4 (26.03.05)',
                 'note'        => 'Snapshot piné de GPT-5.4.',
+                'context_window' => 1050000,
                 'tags'        => ['vision', 'web', 'fichiers', 'raisonnement'],
                 'limits'      => ['Responses API recommandée', 'Pas de temperature (API)'],
                 'web_native'  => true,
@@ -421,6 +544,7 @@ return [
             'gpt-5.3-codex' => [
                 'label'       => 'GPT-5.3 Codex',
                 'note'        => 'Modèle orienté développement logiciel et agents. Arrêté par OpenAI le 01/04/2027.',
+                'context_window' => 400000,
                 'tags'        => ['code', 'vision', 'raisonnement'],
                 'limits'      => ['Spécialisé code (moins généraliste)', 'Pas de temperature (API)'],
                 'web_native'  => false,
@@ -448,6 +572,7 @@ return [
             'gpt-5-mini' => [
                 'label'       => 'GPT-5 Mini',
                 'note'        => 'Version compacte GPT-5, performante et plus économique. Arrêté par OpenAI le 11/12/2026.',
+                'context_window' => 400000,
                 'tags'        => ['vision', 'web', 'fichiers', 'raisonnement'],
                 'limits'      => ['Pas de temperature (API)'],
                 'web_native'  => true,
@@ -469,6 +594,7 @@ return [
             'gpt-5.2' => [
                 'label'       => 'GPT-5.2 (legacy)',
                 'note'        => 'Ancienne itération GPT-5, conservée pour compatibilité.',
+                'context_window' => 400000,
                 'tags'        => ['vision', 'web', 'fichiers'],
                 'limits'      => ['Legacy', 'Responses API requise pour les outils natifs', 'Pas de temperature (API)'],
                 'web_native'  => true,
@@ -539,7 +665,7 @@ return [
             'gpt-4.1' => [
                 'label'       => 'GPT-4.1',
                 'note'        => 'Contexte 1M tokens, performances améliorées (web search via Responses API). Arrêté par OpenAI le 14/01/2027.',
-                'context_window' => 1000000,
+                'context_window' => 1047576,
                 'tags'        => ['vision', 'fichiers', 'web'],
                 'limits'      => [],
                 'web_native'  => true,
@@ -561,6 +687,7 @@ return [
             'gpt-4.1-mini' => [
                 'label'       => 'GPT-4.1 Mini',
                 'note'        => 'Version rapide de GPT-4.1 (web search via Responses API). Arrêté par OpenAI le 14/01/2027.',
+                'context_window' => 1047576,
                 'tags'        => ['vision', 'web'],
                 'limits'      => ['Contexte réduit'],
                 'web_native'  => true,
@@ -580,10 +707,14 @@ return [
                 ],
             ],
             // Seul snapshot (o3-2025-04-16) coupé le 11/12/2026, remplaçant
-            // désigné : gpt-5.6-sol.
+            // désigné : gpt-5.6-sol (page Deprecations relue le 2026-11-12,
+            // courriel rectificatif d'OpenAI : GPT-5, GPT-5 mini, GPT-5 nano,
+            // GPT-5 pro, o3 et o3-pro). Snapshot, o3-pro et les autres : cf.
+            // `retired_models`.
             'o3' => [
                 'label'       => 'o3 (raisonnement)',
                 'note'        => 'Modèle de raisonnement avancé. Arrêté par OpenAI le 11/12/2026.',
+                'context_window' => 200000,
                 'tags'        => ['raisonnement'],
                 'limits'      => ['Pas de streaming', 'Latence élevée', 'Coût élevé'],
                 'web_native'  => false,
@@ -603,9 +734,89 @@ return [
                 ],
             ],
             // o4-mini retiré : ses snapshots (o4-mini-2025-04-16,
-            // o4-mini-deep-research-2025-06-26) sont dépréciés par OpenAI
-            // (coupure 2026-10-23). Pour du raisonnement rapide, utiliser o3 ou
-            // un modèle GPT-5.x (raisonnement natif).
+            // o4-mini-deep-research-2025-06-26) sont coupés par OpenAI depuis le
+            // 23/10/2026 (cf. `retired_models` ci-dessous).
+        ],
+        // Modèles que MIA ne PROPOSE PAS — retirés du catalogue, ou jamais
+        // proposés — mais qu'une instance peut encore porter : une ligne de
+        // `llm_models` activée avant leur retrait (la page Fournisseurs et
+        // modèles ne liste que le catalogue), ou le « modèle de référence » d'une
+        // clé saisi en texte libre avant le 05/03/2026. Sans bloc, un tel modèle
+        // restait proposé dans le chat après sa coupure et échouait à chaque
+        // message. Seul leur arrêt est déclaré : `LlmCatalog::retirement()` le
+        // lit ici quand le modèle n'est pas dans `models` ; ils n'y figurent
+        // jamais, donc ne sont jamais proposés à l'activation.
+        // Page Deprecations d'OpenAI relue en verbatim le 2026-11-12 (courriel
+        // rectificatif du même jour : six modèles coupés le 11/12/2026).
+        'retired_models' => [
+            // Notice du 11/06/2026 : GPT-5 et o3, coupés le 11/12/2026. `o3` et
+            // `gpt-5-mini` sont au catalogue avec leur bloc ; ici leurs
+            // versions figées et les quatre autres. Le remplaçant désigné de
+            // GPT-5 Pro et o3-pro est GPT-5.6 Sol en `reasoning.mode: pro`, que
+            // MIA n'envoie pas : GPT-5.6 Sol tel quel.
+            'gpt-5' => [
+                'label'      => 'GPT-5',
+                'retirement' => ['date' => '2026-12-11', 'replacement' => 'gpt-5.6-sol', 'source_url' => 'https://developers.openai.com/api/docs/deprecations'],
+            ],
+            'gpt-5-2025-08-07' => [
+                'label'      => 'GPT-5 (2025-08-07)',
+                'retirement' => ['date' => '2026-12-11', 'replacement' => 'gpt-5.6-sol', 'source_url' => 'https://developers.openai.com/api/docs/deprecations'],
+            ],
+            // Au catalogue de MIA jusqu'au 16/06/2026 (commit 231259a0).
+            'gpt-5-mini-2025-08-07' => [
+                'label'      => 'GPT-5 Mini (2025-08-07)',
+                'retirement' => ['date' => '2026-12-11', 'replacement' => 'gpt-5.6-terra', 'source_url' => 'https://developers.openai.com/api/docs/deprecations'],
+            ],
+            'gpt-5-nano' => [
+                'label'      => 'GPT-5 Nano',
+                'retirement' => ['date' => '2026-12-11', 'replacement' => 'gpt-5.6-luna', 'source_url' => 'https://developers.openai.com/api/docs/deprecations'],
+            ],
+            'gpt-5-nano-2025-08-07' => [
+                'label'      => 'GPT-5 Nano (2025-08-07)',
+                'retirement' => ['date' => '2026-12-11', 'replacement' => 'gpt-5.6-luna', 'source_url' => 'https://developers.openai.com/api/docs/deprecations'],
+            ],
+            'gpt-5-pro' => [
+                'label'      => 'GPT-5 Pro',
+                'retirement' => ['date' => '2026-12-11', 'replacement' => 'gpt-5.6-sol', 'source_url' => 'https://developers.openai.com/api/docs/deprecations'],
+            ],
+            'gpt-5-pro-2025-10-06' => [
+                'label'      => 'GPT-5 Pro (2025-10-06)',
+                'retirement' => ['date' => '2026-12-11', 'replacement' => 'gpt-5.6-sol', 'source_url' => 'https://developers.openai.com/api/docs/deprecations'],
+            ],
+            'o3-2025-04-16' => [
+                'label'      => 'o3 (2025-04-16)',
+                'retirement' => ['date' => '2026-12-11', 'replacement' => 'gpt-5.6-sol', 'source_url' => 'https://developers.openai.com/api/docs/deprecations'],
+            ],
+            'o3-pro' => [
+                'label'      => 'o3-pro',
+                'retirement' => ['date' => '2026-12-11', 'replacement' => 'gpt-5.6-sol', 'source_url' => 'https://developers.openai.com/api/docs/deprecations'],
+            ],
+            'o3-pro-2025-06-10' => [
+                'label'      => 'o3-pro (2025-06-10)',
+                'retirement' => ['date' => '2026-12-11', 'replacement' => 'gpt-5.6-sol', 'source_url' => 'https://developers.openai.com/api/docs/deprecations'],
+            ],
+            // Anciens modèles du catalogue de MIA, déjà coupés : une instance
+            // qui les a encore activés les proposait toujours, et chaque
+            // message échouait (« modèle introuvable »).
+            'o4-mini' => [
+                'label'      => 'o4-mini',
+                'retirement' => ['date' => '2026-10-23', 'replacement' => 'gpt-5.6-terra', 'source_url' => 'https://developers.openai.com/api/docs/deprecations'],
+            ],
+            'gpt-5.3-chat-latest' => [
+                'label'      => 'GPT-5.3 Chat (latest)',
+                'retirement' => ['date' => '2026-08-10', 'replacement' => 'gpt-5.6-sol', 'source_url' => 'https://developers.openai.com/api/docs/deprecations'],
+            ],
+            // Alias de gpt-4o-search-preview-2025-03-11, coupé le 23/07/2026.
+            'gpt-4o-search-preview' => [
+                'label'      => 'GPT-4o Search Preview',
+                'retirement' => ['date' => '2026-07-23', 'replacement' => 'gpt-5.6-terra', 'source_url' => 'https://developers.openai.com/api/docs/deprecations'],
+            ],
+            // Remplaçant désigné par OpenAI en 2025 : gpt-4.1, lui-même coupé le
+            // 14/01/2027 (son bloc le dit).
+            'gpt-4.5-preview' => [
+                'label'      => 'GPT-4.5 Preview',
+                'retirement' => ['date' => '2025-07-14', 'replacement' => 'gpt-4.1', 'source_url' => 'https://developers.openai.com/api/docs/deprecations'],
+            ],
         ],
     ],
 
@@ -618,7 +829,8 @@ return [
         // « Réaliser avec {modèle} » une présentation PowerPoint : compétence
         // « pptx » + outil d'exécution de code + Files API (NativeDeck).
         // Tous les modèles Claude actifs sont de la liste de compatibilité
-        // de l'exécution de code (Haiku 4.5 et suivants, relue le 2026-10-14).
+        // de l'exécution de code (Haiku 4.5 et suivants, Fable 5.2 et Haiku 5.5
+        // compris, relue le 2026-11-10).
         'native_pptx'           => true,
         'tools_with_web_search' => true,
         'default_context_window' => 200000,
@@ -637,9 +849,48 @@ return [
         // Outil serveur web search : 10 $ les 1 000 recherches (plus les tokens).
         'web_search_pricing_usd_per_1k' => 10.00,
         'models' => [
-            // Claude Opus 5.5 (22/09/2026) et Sonnet 5.5 (28/09/2026) ouvrent
-            // Anthropic : même génération, l'Opus d'abord comme dans le tableau
-            // d'Anthropic. Opus 5.5 est l'Opus courant, MOINS cher
+            // Génération courante dans l'ordre du tableau d'Anthropic (« Models
+            // overview », relu le 2026-11-10) : Fable 5.2, Opus 5.5, Sonnet 5.5,
+            // Haiku 5.5 ; les générations précédentes suivent.
+            //
+            // Claude Fable 5.2 (09/11/2026) : successeur de Fable 5.1, MOINS
+            // cher (8 $ / 40 $ au lieu de 10 $ / 50 $), mêmes contraintes —
+            // raisonnement toujours actif (`thinking: disabled` refusé), effort
+            // par défaut `high`, `tool_choice` forcé refusé (MIA n'envoie que
+            // `none`), temperature refusée, conservation des données 30 j.
+            // Nouveau : le contrôle de préfixe s'applique à TOUS les comptes
+            // (un tour rejoué dont le début a changé est refusé en 400) — sans
+            // effet sur MIA, dont la boucle ne fait qu'ajouter des messages et
+            // repasse le fil SANS raisonnement quand la liste d'outils change
+            // (cf. AnthropicAdapter::roundsToMessages). Seuls Fable 5.2 et
+            // Mythos 5.2 lisent son raisonnement : un relais vers Opus le
+            // perd, l'API l'écarte sans erreur. Pas le défaut de l'instance.
+            'claude-fable-5-2' => [
+                'label'      => 'Claude Fable 5.2',
+                'note'       => 'Modèle le plus capable d\'Anthropic (novembre 2026) — raisonnement exigeant et agentic longue durée, raisonnement toujours actif, contexte 1M. Moins cher que Fable 5.1. Requiert une rétention de données 30 j côté organisation Anthropic.',
+                'context_window' => 1000000,
+                'tags'       => ['vision', 'fichiers', 'web', 'raisonnement'],
+                'limits'     => ['Coût très élevé', 'Rétention 30 j requise', 'Sujets sensibles repris par Opus (classifieurs cyber/bio)', 'Réflexion parfois longue avant de répondre'],
+                'web_native' => true,
+                'temperature' => false,
+                // Repli serveur sur refus : Opus 4.8 ou Opus 5 selon la
+                // catégorie (cibles permises de Fable 5.2, page « What's new »).
+                'refusal_fallback'   => 'default',
+                'retention_fallback' => 'claude-opus-5',
+                'progress_updates'   => true,
+                // cached_input DÉCLARÉ : lecture de cache à 0,025× l'entrée
+                // (0,20 $) ; le ratio conventionnel (0,1×) donnerait 0,80 $.
+                'pricing'    => [
+                    'input'        => 8.00,
+                    'output'       => 40.00,
+                    'cached_input' => 0.20,
+                    'cache_write'  => 10.00,
+                    'source_url'   => 'https://platform.claude.com/docs/en/models/fable-5-2/overview',
+                    'note'         => 'Tarif officiel Anthropic Claude Fable 5.2 (lecture de cache 0,20 $, 0,025× l\'entrée ; écriture 5 min 10 $), relu le 10/11/2026.',
+                ],
+            ],
+            // Claude Opus 5.5 (22/09/2026) et Sonnet 5.5 (28/09/2026) : même
+            // génération que Fable 5.2. Opus 5.5 est l'Opus courant, MOINS cher
             // qu'Opus 5 (4 $ / 20 $ au lieu de 5 $ / 25 $). Raisonnement
             // TOUJOURS actif — `thinking: disabled` est refusé en 400, MIA
             // n'envoie jamais le champ —, effort par défaut `medium` (Opus 5 :
@@ -703,13 +954,44 @@ return [
                     'note'         => 'Tarif officiel Anthropic Claude Sonnet 5.5 : entrée et sortie de Sonnet 5, mais lecture de cache à 0,10 $ (0,05× l\'entrée, et non 0,20 $), relu le 17/10/2026.',
                 ],
             ],
+            // Claude Haiku 5.5 (07/10/2026) : le Haiku de la génération 5,
+            // dix fois moins cher que Haiku 4.5. Raisonnement adaptatif par
+            // défaut (MIA n'envoie pas `thinking`), effort par défaut `medium`
+            // (relevé à `high` sur un tour à connecteurs, comme Opus 5.5),
+            // temperature refusée. Classifieurs de sécurité, mais AUCUN repli
+            // serveur (ni crédit de repli) : un refus reste un refus, présenté
+            // comme tel. Pas de notes d'avancement entre outils (absent de la
+            // liste « Progress updates »). SEUL modèle Claude au palier « contexte
+            // long » : une REQUÊTE dont l'entrée dépasse 100 000 jetons (cache lu
+            // et écrit compris) paie tout ×5 — chaque requête est jugée seule,
+            // d'où l'usage `rounds` rapporté par les boucles de l'adapter.
+            'claude-haiku-5-5' => [
+                'label'      => 'Claude Haiku 5.5',
+                'note'       => 'Modèle le plus rapide et le moins cher d\'Anthropic (octobre 2026) — gros volumes, classement, extraction, tâches courtes. Raisonnement adaptatif, contexte 1M (au-delà de 100k jetons d\'entrée, tarif ×5).',
+                'context_window' => 1000000,
+                'tags'       => ['vision', 'fichiers', 'web', 'raisonnement'],
+                'limits'     => ['Capacités réduites'],
+                'web_native' => true,
+                'temperature' => false,
+                'effort_default' => 'medium',
+                'pricing'    => [
+                    'long_context' => ['above' => 100000, 'input_ratio' => 5.0, 'output_ratio' => 5.0], // > 100k jetons d'entrée par requête : tout ×5 (page Pricing, « Long context pricing », relue le 2026-11-10)
+                    'input'        => 0.10,
+                    'output'       => 0.50,
+                    'cached_input' => 0.01,
+                    'cache_write'  => 0.125,
+                    'source_url'   => 'https://platform.claude.com/docs/en/models/haiku-5-5/overview',
+                    'note'         => 'Tarif officiel Anthropic Claude Haiku 5.5 jusqu\'à 100k jetons d\'entrée par requête (cache lu 0,01 $, écrit 0,125 $) ; au-delà : 0,50 $ / 2,50 $ (palier long_context ×5), relu le 10/11/2026.',
+                ],
+            ],
             // Claude Fable 5.1 : successeur de Fable 5, même tier et même
-            // tarif, sauf la lecture de cache (0,25 $ au lieu de 1 $). Refuse
+            // tarif, sauf la lecture de cache (0,25 $ au lieu de 1 $). Remplacée
+            // par Fable 5.2 (moins chère), toujours servie. Refuse
             // la temperature, la désactivation du raisonnement et le
             // `tool_choice` forcé (any/tool) — MIA n'envoie que `none`, accepté.
             'claude-fable-5-1' => [
                 'label'      => 'Claude Fable 5.1',
-                'note'       => 'Modèle le plus capable d\'Anthropic, successeur de Fable 5 au même tarif — raisonnement toujours actif, agentic longue durée, contexte 1M. Requiert une rétention de données 30 j côté organisation Anthropic.',
+                'note'       => 'Génération Fable précédente (septembre 2026) — raisonnement toujours actif, agentic longue durée, contexte 1M. Plus chère que Fable 5.2. Requiert une rétention de données 30 j côté organisation Anthropic.',
                 'context_window' => 1000000,
                 'tags'       => ['vision', 'fichiers', 'web', 'raisonnement'],
                 'limits'     => ['Coût très élevé', 'Rétention 30 j requise', 'Sujets sensibles repris par Opus (classifieurs cyber/bio)', 'Réflexion parfois longue avant de répondre'],
@@ -762,7 +1044,7 @@ return [
             ],
             'claude-fable-5' => [
                 'label'      => 'Claude Fable 5',
-                'note'       => 'Modèle le plus intelligent d\'Anthropic — raisonnement toujours actif, agentic longue durée, contexte 1M. Requiert une rétention de données 30 j côté organisation Anthropic.',
+                'note'       => 'Première génération Fable — raisonnement toujours actif, agentic longue durée, contexte 1M. Requiert une rétention de données 30 j côté organisation Anthropic.',
                 'context_window' => 1000000,
                 'tags'       => ['vision', 'fichiers', 'web', 'raisonnement'],
                 'limits'     => ['Coût très élevé', 'Rétention 30 j requise', 'Sujets sensibles repris par Opus (classifieurs cyber/bio)', 'Réflexion parfois longue avant de répondre'],
@@ -896,6 +1178,42 @@ return [
                 ],
             ],
         ],
+        // Modèles que MIA ne propose pas mais qu'une instance peut porter :
+        // « modèle de référence » d'une clé saisi en texte libre avant le
+        // 05/03/2026. Dates et remplaçants de la page Model deprecations
+        // d'Anthropic, relue le 2026-11-17. Sonnet 4.5 est encore servi
+        // jusqu'au 30/11/2026. Opus 4.5 reste actif (« Not sooner than
+        // November 24, 2026 ») : aucune date à poser.
+        'retired_models' => [
+            'claude-sonnet-4-5-20250929' => [
+                'label'      => 'Claude Sonnet 4.5',
+                'retirement' => ['date' => '2026-11-30', 'replacement' => 'claude-sonnet-5-5', 'source_url' => 'https://platform.claude.com/docs/en/about-claude/model-deprecations'],
+            ],
+            'claude-opus-4-1-20250805' => [
+                'label'      => 'Claude Opus 4.1',
+                'retirement' => ['date' => '2026-08-05', 'replacement' => 'claude-opus-4-8', 'source_url' => 'https://platform.claude.com/docs/en/about-claude/model-deprecations'],
+            ],
+            'claude-sonnet-4-20250514' => [
+                'label'      => 'Claude Sonnet 4',
+                'retirement' => ['date' => '2026-06-15', 'replacement' => 'claude-sonnet-5-5', 'source_url' => 'https://platform.claude.com/docs/en/about-claude/model-deprecations'],
+            ],
+            'claude-opus-4-20250514' => [
+                'label'      => 'Claude Opus 4',
+                'retirement' => ['date' => '2026-06-15', 'replacement' => 'claude-opus-4-8', 'source_url' => 'https://platform.claude.com/docs/en/about-claude/model-deprecations'],
+            ],
+            'claude-3-haiku-20240307' => [
+                'label'      => 'Claude 3 Haiku',
+                'retirement' => ['date' => '2026-04-20', 'replacement' => 'claude-haiku-4-5-20251001', 'source_url' => 'https://platform.claude.com/docs/en/about-claude/model-deprecations'],
+            ],
+            'claude-3-5-haiku-20241022' => [
+                'label'      => 'Claude 3.5 Haiku',
+                'retirement' => ['date' => '2026-02-19', 'replacement' => 'claude-haiku-4-5-20251001', 'source_url' => 'https://platform.claude.com/docs/en/about-claude/model-deprecations'],
+            ],
+            'claude-3-7-sonnet-20250219' => [
+                'label'      => 'Claude 3.7 Sonnet',
+                'retirement' => ['date' => '2026-02-19', 'replacement' => 'claude-sonnet-5-5', 'source_url' => 'https://platform.claude.com/docs/en/about-claude/model-deprecations'],
+            ],
+        ],
     ],
 
     // ============== Mistral ==============
@@ -924,6 +1242,30 @@ return [
             'primary'  => 'web_search_premium',
             'fallback' => 'web_search',
         ],
+        // Dictée vocale avec Voxtral (transcription de fichiers, cf.
+        // Dictation::MISTRAL_MODELS) : USD par minute d'audio. Fiches modèles
+        // de la doc Mistral relues le 2026-10-28 puis le 2026-11-10 : Voxtral
+        // Mini Transcribe 3 « Input $0.0035 /Min » (aperçu public, alias
+        // `voxtral-mini-transcribe-latest`), Voxtral Mini Transcribe 2
+        // (`voxtral-mini-2602`, alias `voxtral-mini-latest`) « $0.003 /Min »,
+        // déprécié le 31/10/2026 et retiré le 30/04/2027.
+        // `default` = le plus cher, jamais une sous-facturation muette.
+        // Lecture à voix haute avec Voxtral TTS 3 (SpeechSynthesizer) : USD
+        // par MILLION DE CARACTÈRES lus — Mistral facture le texte, pas la
+        // durée (fiche « Voxtral TTS 3 » relue le 2026-11-10 : « Input $13 /M
+        // Chars », aperçu public).
+        'speech_pricing_usd_per_1m_chars' => [
+            'voxtral-mini-tts-3-0' => 13.0,
+            'default'              => 13.0,
+        ],
+        'transcription_pricing_usd_per_minute' => [
+            'voxtral-mini-transcribe-3'      => 0.0035,
+            'voxtral-mini-transcribe-3-0'    => 0.0035,
+            'voxtral-mini-transcribe-latest' => 0.0035,
+            'voxtral-mini-latest'            => 0.003,
+            'voxtral-mini-2602'              => 0.003,
+            'default'                        => 0.0035,
+        ],
         'models' => [
             // Les alias `-latest` sont ceux que Mistral publie sur sa grille
             // tarifaire : ils suivent la génération courante SANS préavis (le
@@ -932,83 +1274,102 @@ return [
             // systématique alias + snapshot piné : l'alias pour suivre, le
             // snapshot pour figer coût et comportement.
             //
-            // Mistral Large 4 (06/10/2026, page « Models » et carte du modèle
-            // relues le 2026-10-07) : MoE 52B actifs / 1,05T total, encodeur
-            // vision 1,6B, contexte 1M, raisonnement réglable (`reasoning_effort`).
-            // En APERÇU PUBLIC (« Public Preview ») : mises à jour silencieuses
-            // possibles, aucun alias `-latest` tant qu'il n'est pas en
-            // disponibilité générale, retrait possible avant (préavis d'un mois).
-            // Identifiants publiés : `mistral-large-4` (génération) et
-            // `mistral-large-4-0` (version figée) — c'est elle qu'on retient,
-            // pour figer coût et comportement. Pas le défaut : il coûte 2,7 fois
-            // Large 3 au tarif normal. Tarif de lancement : « 50% off for 2
-            // weeks » à compter du 06/10, sans date de fin écrite — borne
-            // prudente au 19/10 inclus (au pire un jour facturé au tarif normal,
-            // jamais une sous-facturation muette).
+            // Mistral Large 4 (aperçu le 06/10/2026, DISPONIBILITÉ GÉNÉRALE le
+            // 05/11/2026 — carte du modèle et page « Models » relues le
+            // 2026-11-10) : MoE 52B actifs / 1,05T total, encodeur vision 1,6B,
+            // contexte 1M, raisonnement TOUJOURS actif (`reasoning_effort` low,
+            // medium ou high ; « If you omit `reasoning_effort`, Mistral Large 4
+            // uses `high` », « does not accept `none`, `minimal`, `xhigh`, or
+            // `max` » — guide « Reasoning », relu le 2026-11-17 ; MIA n'en envoie
+            // pas). Identifiants publiés : `mistral-large-4`, `mistral-large-4-0`
+            // (version figée, retenue) et, depuis la revue du 2026-11-17,
+            // `mistral-large-latest`. Tarif de GA 0,70 $ / 2,10 $ (cache 0,07 $),
+            // moitié de celui de l'aperçu (1,36 $ / 4,18 $, que le catalogue
+            // appliquait depuis le 20/10) : 1,4 fois Large 3. Remplaçant désigné
+            // de Large 3 et de Medium 3.5, arrêtés le 30/04/2027.
             'mistral-large-4-0' => [
-                'label'      => 'Mistral Large 4 (aperçu)',
-                'note'       => 'Aperçu public de Mistral Large 4 (oct. 2026) — MoE 52B actifs / 1,05T total, multimodal, contexte 1M, raisonnement réglable. Mistral peut le modifier sans préavis avant sa disponibilité générale.',
+                'label'      => 'Mistral Large 4',
+                'note'       => 'Modèle phare de Mistral (nov. 2026) — MoE 52B actifs / 1,05T total, multimodal, contexte 1M, raisonnement réglable. Remplaçant désigné de Large 3 et de Medium 3.5.',
                 'context_window' => 1000000,
                 'tags'       => ['vision', 'fichiers', 'web', 'raisonnement', 'code'],
-                'limits'     => ['Aperçu public : comportement susceptible d\'évoluer', 'Plus cher que Large 3'],
+                'limits'     => ['Un peu plus cher que Large 3'],
                 'web_native' => true,
                 'pricing'    => [
-                    'input'        => 1.36,
-                    'output'       => 4.18,
-                    'cached_input' => 0.14,
-                    'launch'       => [
-                        'until'        => '2026-10-19',
-                        'input'        => 0.68,
-                        'output'       => 2.09,
-                        'cached_input' => 0.07,
-                    ],
-                    'source_url'   => 'https://docs.mistral.ai/inference/pricing',
-                    'note'         => 'Tarif officiel Mistral Large 4 : 1,36 $ / 4,18 $ (cache 0,14 $) ; lancement à -50 % (0,68 $ / 2,09 $, cache 0,07 $) pendant deux semaines à compter du 06/10/2026.',
+                    'input'        => 0.70,
+                    'output'       => 2.10,
+                    'cached_input' => 0.07,
+                    'source_url'   => 'https://docs.mistral.ai/models/mistral-large-4-0',
+                    'note'         => 'Tarif officiel Mistral Large 4 en disponibilité générale (05/11/2026) : 0,70 $ / 2,10 $, cache 0,07 $. Relu le 10/11/2026.',
                 ],
             ],
-            // L'alias `-latest` ne vise que la disponibilité générale : il
-            // restera sur Large 3 tant que Large 4 est en aperçu, puis BASCULERA
-            // sur Large 4 sans préavis — tarif compris (×2,7 en entrée).
+            // Alias `mistral-large-latest` (DÉFAUT de Mistral) : il sert
+            // désormais Mistral Large 4 — la carte de Large 4 le liste (« API
+            // names: `mistral-large-4`, `mistral-large-4-0`,
+            // `mistral-large-latest` »), celle de Large 3 ne le cite plus
+            // (elle ne nomme que `mistral-large-2512`), relues le 2026-11-17 ; le
+            // changelog n'en donne pas la date. Jusqu'au 2026-11-17 MIA le
+            // comptait au tarif de Large 3 (0,50 $ / 1,50 $), 1,4 fois moins
+            // que le vrai. Plus de bloc `retirement` : l'alias ne vise plus un
+            // modèle déprécié. Conséquence pour le défaut : Large 4 raisonne à
+            // chaque réponse, en `high` faute d'effort envoyé (plus de jetons
+            // de sortie, plus de latence) — envoyer `medium` serait une
+            // décision produit.
             'mistral-large-latest' => [
                 'label'      => 'Mistral Large (latest)',
-                'note'       => 'Alias suivant Mistral Large 3 — MoE 41B actifs / 675B total, contexte 256k (déc. 2025). Basculera sur Mistral Large 4 à sa disponibilité générale, tarif compris.',
-                'context_window' => 256000,
-                'tags'       => ['vision', 'fichiers', 'web'],
-                'limits'     => [],
+                'note'       => 'Alias suivant Mistral Large 4 — MoE 52B actifs / 1,05T total, multimodal, contexte 1M, raisonne à chaque réponse.',
+                'context_window' => 1000000,
+                'tags'       => ['vision', 'fichiers', 'web', 'raisonnement', 'code'],
+                'limits'     => ['Raisonne à chaque réponse (effort élevé par défaut)'],
                 'web_native' => true,
                 'default'    => true,
                 'pricing'    => [
-                    'input'      => 0.50,
-                    'output'     => 1.50,
-                    'source_url' => 'https://mistral.ai/pricing/api/',
-                    'note'       => 'Tarif officiel Mistral Large 3.',
+                    'input'        => 0.70,
+                    'output'       => 2.10,
+                    'cached_input' => 0.07,
+                    'source_url'   => 'https://docs.mistral.ai/models/mistral-large-4-0',
+                    'note'         => 'Tarif officiel Mistral Large 4 (l\'alias le sert, carte relue le 17/11/2026) : 0,70 $ / 2,10 $, cache 0,07 $.',
                 ],
             ],
+            // Large 3 (`mistral-large-2512`) et Medium 3.5 (`mistral-medium-3-5`,
+            // alias `mistral-medium-latest`) sont DÉPRÉCIÉS depuis le 31/10/2026
+            // et retirés le 30/04/2027 (« Deprecated and retired models », page
+            // « Models » relue le 2026-11-17) ; un identifiant retiré répond 404
+            // (« Model lifecycle »). Remplaçant désigné : Large 4.
             'mistral-large-2512' => [
                 'label'      => 'Mistral Large 3 (25.12)',
-                'note'       => 'Snapshot piné de Mistral Large 3.',
+                'note'       => 'Snapshot piné de Mistral Large 3. Arrêté par Mistral le 30/04/2027, remplacé par Mistral Large 4.',
                 'context_window' => 256000,
                 'tags'       => ['vision', 'fichiers', 'web'],
                 'limits'     => [],
                 'web_native' => true,
+                'retirement' => [
+                    'date'        => '2027-04-30',
+                    'replacement' => 'mistral-large-4-0',
+                    'source_url'  => 'https://docs.mistral.ai/models',
+                ],
                 'pricing'    => [
                     'input'      => 0.50,
                     'output'     => 1.50,
-                    'source_url' => 'https://mistral.ai/pricing/api/',
+                    'source_url' => 'https://docs.mistral.ai/models/mistral-large-3-25-12',
                     'note'       => 'Tarif officiel Mistral Large 3.',
                 ],
             ],
             'mistral-medium-latest' => [
                 'label'      => 'Mistral Medium (latest)',
-                'note'       => 'Alias suivant Mistral Medium 3.5 — modèle frontière multimodal, orienté agents et code.',
+                'note'       => 'Alias suivant Mistral Medium 3.5 — modèle frontière multimodal, orienté agents et code. Arrêté par Mistral le 30/04/2027, remplacé par Mistral Large 4.',
                 'context_window' => 256000,
                 'tags'       => ['vision', 'fichiers', 'web', 'raisonnement'],
-                'limits'     => ['Plus cher que Large 3 en sortie'],
+                'limits'     => ['Plus cher que Large 4'],
                 'web_native' => true,
+                'retirement' => [
+                    'date'        => '2027-04-30',
+                    'replacement' => 'mistral-large-4-0',
+                    'source_url'  => 'https://docs.mistral.ai/models',
+                ],
                 'pricing'    => [
                     'input'      => 1.50,
                     'output'     => 7.50,
-                    'source_url' => 'https://mistral.ai/pricing/api/',
+                    'source_url' => 'https://docs.mistral.ai/models/mistral-medium-3-5-26-04',
                     'note'       => 'Tarif officiel Mistral Medium 3.5.',
                 ],
             ],
@@ -1024,15 +1385,20 @@ return [
             // cycle de vie (« pin your deployment to a specific major.minor »).
             'mistral-medium-3-5' => [
                 'label'      => 'Mistral Medium 3.5',
-                'note'       => 'Version figée de Mistral Medium 3.5 (identifiant officiel) — remplace Medium 3.1, Magistral et Devstral 2. Effort de raisonnement configurable, encodeur vision natif.',
+                'note'       => 'Version figée de Mistral Medium 3.5 (identifiant officiel) — effort de raisonnement configurable, encodeur vision natif. Arrêté par Mistral le 30/04/2027, remplacé par Mistral Large 4.',
                 'context_window' => 256000,
                 'tags'       => ['vision', 'fichiers', 'web', 'raisonnement', 'code'],
-                'limits'     => ['Plus cher que Large 3 en sortie'],
+                'limits'     => ['Plus cher que Large 4'],
                 'web_native' => true,
+                'retirement' => [
+                    'date'        => '2027-04-30',
+                    'replacement' => 'mistral-large-4-0',
+                    'source_url'  => 'https://docs.mistral.ai/models',
+                ],
                 'pricing'    => [
                     'input'      => 1.50,
                     'output'     => 7.50,
-                    'source_url' => 'https://docs.mistral.ai/inference/pricing',
+                    'source_url' => 'https://docs.mistral.ai/models/mistral-medium-3-5-26-04',
                     'note'       => 'Tarif officiel Mistral Medium 3.5.',
                 ],
             ],
@@ -1041,12 +1407,17 @@ return [
                 'note'       => 'Ancien identifiant daté de Mistral Medium 3.5, absent de la documentation de Mistral — préférer « Mistral Medium 3.5 » (mistral-medium-3-5), même modèle et même tarif.',
                 'context_window' => 256000,
                 'tags'       => ['vision', 'fichiers', 'web', 'raisonnement', 'code'],
-                'limits'     => ['Plus cher que Large 3 en sortie'],
+                'limits'     => ['Plus cher que Large 4'],
                 'web_native' => true,
+                'retirement' => [
+                    'date'        => '2027-04-30',
+                    'replacement' => 'mistral-large-4-0',
+                    'source_url'  => 'https://docs.mistral.ai/models',
+                ],
                 'pricing'    => [
                     'input'      => 1.50,
                     'output'     => 7.50,
-                    'source_url' => 'https://docs.mistral.ai/models/model-cards/mistral-medium-3-5-26-04',
+                    'source_url' => 'https://docs.mistral.ai/models/mistral-medium-3-5-26-04',
                     'note'       => 'Tarif officiel Mistral Medium 3.5.',
                 ],
             ],
@@ -1104,12 +1475,28 @@ return [
                     'note'       => 'Tarif officiel Codestral.',
                 ],
             ],
-            // Retirés du catalogue Mistral, donc retirés d'ici — les laisser
-            // afficherait dans le picker des modèles qui répondent 404 :
-            //   mistral-small-2506 (Small 3.2)   — retiré le 31/07/2026
-            //   mistral-medium-2508 (Medium 3.1) — retiré le 31/08/2026
-            //   mistral-medium-2505 (Medium 3)   — retiré le 31/08/2026
-            // Remplaçants : Small 4 / Medium 3.5 ci-dessus.
+            // Retirés par Mistral, donc retirés d'ici (ils répondraient 404) :
+            // ils vivent dans `retired_models` ci-dessous.
+        ],
+        // Modèles retirés par Mistral qu'une instance peut encore porter :
+        // Small 3.2 et Medium 3.1 étaient proposés jusqu'au 24/04/2026
+        // (e07a740e). Tableau « Deprecated & retired models » de
+        // docs.mistral.ai/models relu le 2026-11-12 ; remplaçants = colonne
+        // « Alternative » (Medium 3.5, lui-même arrêté le 30/04/2027 : son bloc
+        // le dit).
+        'retired_models' => [
+            'mistral-small-2506' => [
+                'label'      => 'Mistral Small 3.2',
+                'retirement' => ['date' => '2026-07-31', 'replacement' => 'mistral-small-2603', 'source_url' => 'https://docs.mistral.ai/models'],
+            ],
+            'mistral-medium-2508' => [
+                'label'      => 'Mistral Medium 3.1',
+                'retirement' => ['date' => '2026-08-31', 'replacement' => 'mistral-medium-3-5', 'source_url' => 'https://docs.mistral.ai/models'],
+            ],
+            'mistral-medium-2505' => [
+                'label'      => 'Mistral Medium 3',
+                'retirement' => ['date' => '2026-08-31', 'replacement' => 'mistral-medium-3-5', 'source_url' => 'https://docs.mistral.ai/models'],
+            ],
         ],
     ],
 
@@ -1123,13 +1510,16 @@ return [
         // FIN DE SUPPORT de Sonar Chat Completions le 27/09/2026 (guide
         // « Migrate from Sonar to the Agent API », relu le 2026-10-01) : les
         // requêtes synchrones et en flux — celles de MIA — « keep working »,
-        // REFORMULÉES en requêtes Agent API (preset `fast` pour Sonar et Sonar
+        // REFORMULÉES en requêtes Agent API (effort `fast` pour Sonar et Sonar
         // Pro, `low` pour Sonar Reasoning Pro), déploiement progressif par
         // modèle, « sans garantie d'exacte compatibilité de chaque paramètre ou
         // champ de réponse ». Aucune date d'arrêt annoncée. Étape suivante :
         // porter PerplexityAdapter sur l'Agent API (`/v1/agent`, format
-        // Responses, `preset`) — qui ouvrirait aussi les outils (custom
-        // functions). Non fait ici : aucun moyen de l'éprouver sans clé.
+        // Responses, `effort` — anciennement `preset`, alias encore accepté,
+        // changelog d'octobre 2026) — qui ouvrirait aussi les outils (custom
+        // functions). Non fait ici : aucun moyen de l'éprouver sans clé. Les
+        // fiches Sonar vivent désormais sous « Legacy » (prix inchangés,
+        // relus le 2026-11-17).
         'endpoints' => [
             'chat_completions' => 'https://api.perplexity.ai/chat/completions',
         ],
@@ -1139,13 +1529,14 @@ return [
         // écrite. Tarif du contexte `low`, celui par défaut — MIA n'en
         // demande pas d'autre. Déclaré par modèle.
         'web_search_billing' => 'prompt',
-        // Retiré par Perplexity, donc retiré d'ici :
-        //   sonar-reasoning — « deprecated and removed from the API » le
-        //   15/12/2025 (changelog Perplexity) ; remplaçant : Sonar Reasoning Pro.
+        // Retiré par Perplexity, donc retiré d'ici : `sonar-reasoning`, dans
+        // `retired_models` ci-dessous.
         'models' => [
             'sonar-pro' => [
                 'label'      => 'Sonar Pro',
                 'note'       => 'Modèle puissant avec recherche web native en temps réel.',
+                // « 200K context length » (fiche Legacy, relue le 2026-11-17).
+                'context_window' => 200000,
                 'tags'       => ['web'],
                 'limits'     => ['Fin de support annoncée par Perplexity (27/09/2026), toujours servi'],
                 'web_native' => true,
@@ -1154,7 +1545,7 @@ return [
                 'pricing'    => [
                     'input'      => 3.00,
                     'output'     => 15.00,
-                    'source_url' => 'https://docs.perplexity.ai/docs/getting-started/pricing',
+                    'source_url' => 'https://docs.perplexity.ai/docs/legacy/sonar/models/sonar-pro',
                     'note'       => 'Tarif officiel Perplexity Sonar Pro (jetons) ; + 6 $ les 1 000 requêtes (contexte de recherche « low »), compté comme recherche.',
                 ],
             ],
@@ -1168,7 +1559,7 @@ return [
                 'pricing'    => [
                     'input'      => 1.00,
                     'output'     => 1.00,
-                    'source_url' => 'https://docs.perplexity.ai/docs/getting-started/pricing',
+                    'source_url' => 'https://docs.perplexity.ai/docs/legacy/sonar/models/sonar',
                     'note'       => 'Tarif officiel Perplexity Sonar (jetons) ; + 5 $ les 1 000 requêtes (contexte de recherche « low »), compté comme recherche.',
                 ],
             ],
@@ -1183,9 +1574,18 @@ return [
                 'pricing'     => [
                     'input'      => 2.00,
                     'output'     => 8.00,
-                    'source_url' => 'https://docs.perplexity.ai/docs/getting-started/pricing',
+                    'source_url' => 'https://docs.perplexity.ai/docs/legacy/sonar/models/sonar-reasoning-pro',
                     'note'       => 'Tarif officiel Perplexity Sonar Reasoning Pro (jetons) ; + 6 $ les 1 000 requêtes (contexte de recherche « low »), compté comme recherche.',
                 ],
+            ],
+        ],
+        // Proposé jusqu'au 24/04/2026 (e07a740e) : « deprecated and removed
+        // from the API » le 15/12/2025 (changelog Perplexity, relu le
+        // 2026-11-12), remplaçant conseillé : Sonar Reasoning Pro.
+        'retired_models' => [
+            'sonar-reasoning' => [
+                'label'      => 'Sonar Reasoning',
+                'retirement' => ['date' => '2025-12-15', 'replacement' => 'sonar-reasoning-pro', 'source_url' => 'https://docs.perplexity.ai/docs/resources/changelog'],
             ],
         ],
     ],
@@ -1194,11 +1594,23 @@ return [
     // Sources vérifiées le 16/09/2026 : ai.google.dev/gemini-api/docs/models,
     // /pricing, /deprecations et /changelog.
     'gemini' => [
-        // Défaut inchangé : Gemini 3.8, 3.7 et 3.6 Flash coûteront 1,50 $ /
-        // 7,50 $ le million au 1er janvier 2027, plus du double de Gemini 3
-        // Flash — un défaut qui bascule en silence changerait la facture de
-        // l'instance. Gemini 2.5 : accès réservé par Google aux comptes qui
+        // Défaut inchangé : Gemini 3.8 et 3.6 Flash coûteront 1,50 $ / 7,50 $
+        // le million au 1er janvier 2027, plus du double de Gemini 3 Flash
+        // (« legacy » chez Google, sans date d'arrêt — remplaçant désigné :
+        // 3.6 Flash) — un défaut qui bascule en silence changerait la facture
+        // de l'instance. Gemini 2.5 : accès réservé par Google aux comptes qui
         // l'utilisaient déjà (18/09/2026), cf. ses modèles.
+        //
+        // Pages Models, Pricing, Deprecations et Changelog relues le
+        // 2026-11-10 : Gemini 4 Argon (GA 13/10) ajouté ; 3.7 Flash et 3.5
+        // Flash dépréciés le 08/10 — l'adresse répond encore mais Google la
+        // REDIRIGE (vers 3.8 et 3.6 Flash), ce n'est plus le modèle annoncé
+        // qui répond : arrêtés ici à cette date ; 2.5 Pro et 2.5 Flash
+        // redirigés le 01/12/2026 (vers 3.8 Flash et 3.5 Flash-Lite, au tarif
+        // de la cible, avec des changements cassants : signatures de
+        // réflexion, `thinking_level`). Relues de nouveau le 2026-11-19 :
+        // Gemini 4 Neon (GA 18/11) ajouté ; aucun autre tarif ni date d'arrêt
+        // n'a bougé.
         'default_model' => 'gemini-3-flash-preview',
         'default_context_window' => 1000000,
         // Function-calling natif (functionDeclarations), boucle dans
@@ -1228,6 +1640,130 @@ return [
         // dégradé) — ces modèles sont donc tous marqués temperature=false.
         // La réflexion est active par défaut et facturée au tarif de sortie.
         'models' => [
+            // Gemini 4 Hydrogen (GA 12/11/2026) et Gemini 4 Carbon (GA
+            // 10/11/2026) — changelog, fiches, page Pricing et « What's new »
+            // relus en verbatim le 2026-11-17. Contexte 1 048 576 (entrée et
+            // sortie confondues), sortie 65 536 en flux (jusqu'au million avec
+            // le « long decode », que MIA ne demande pas), entrées texte, image,
+            // vidéo, audio et PDF, function-calling et recherche Google. Cache
+            // implicite seulement, lecture à 5 % de l'entrée (à DÉCLARER).
+            // « Remove `temperature`, `top_p`, and `top_k` » : ignorés, et chez
+            // Hydrogen une valeur hors limites rend un 400 → temperature=false.
+            // Réflexion : Carbon low/medium/high (défaut medium), Hydrogen
+            // low/medium/high/xhigh (défaut HIGH, `minimal` refusé) ; MIA
+            // n'envoie pas `thinking_level`. Hydrogen est le modèle « par
+            // défaut » de Google et ouvre le free tier ; Carbon, le plus
+            // capable, ne l'ouvre pas. Aucun ne devient le défaut ici
+            // (Hydrogen coûte 3 fois Gemini 3 Flash en entrée, 2,5 en sortie).
+            // Non vérifié faute de clé : comme Argon, les instructions internes
+            // des outils comptées en entrée avec la recherche.
+            // Gemini 4 Neon (GA 18/11/2026) — changelog, fiche, page Pricing et
+            // « What's new in Gemini 4 Neon » relus en verbatim le 2026-11-19.
+            // Placé par Google ENTRE Hydrogen et Carbon (« frontier-level
+            // intelligence with fast end-to-end task completion ») : code
+            // complexe, travail documentaire, sciences. Même conception d'API que
+            // les autres Gemini 4 (« no request schema changes ») : contexte
+            // unifié 1 048 576, sortie 65 536 par requête (long decode non
+            // demandé), entrées texte, image, vidéo, audio, PDF, function-calling
+            // et recherche Google (14 $ les 1 000 requêtes). Cache IMPLICITE
+            // seulement, lu à 5 % de l'entrée (0,15 $ — à déclarer), aucun palier
+            // au-delà de 200k. Température : comme Hydrogen, ignorée et 400 hors
+            // limites. Réflexion low/medium/high/xhigh, défaut HIGH, `minimal`
+            // refusé (MIA n'envoie pas `thinking_level`). Niveau payant
+            // seulement (pas de free tier). Jamais défaut : 6 fois Gemini 3
+            // Flash en entrée, 5 fois en sortie. Non éprouvé faute de clé.
+            'gemini-4-neon' => [
+                'label'      => 'Gemini 4 Neon',
+                'note'       => 'Modèle intermédiaire de Google (novembre 2026), entre Hydrogen et Carbon — code complexe, analyse de documents, sciences, agents en plusieurs étapes ; vision, audio, vidéo, contexte 1M. Réfléchit en effort élevé par défaut.',
+                'context_window' => 1048576,
+                'tags'       => ['vision', 'fichiers', 'web', 'raisonnement', 'code'],
+                'limits'     => ['Coût élevé', 'Réflexion élevée par défaut (plus de tokens)', 'Pas de temperature (ignorée par Google)'],
+                'web_native' => true,
+                'temperature' => false,
+                'pricing'    => [
+                    'input'        => 3.00,
+                    'output'       => 15.00,
+                    'cached_input' => 0.15,
+                    'source_url'   => 'https://ai.google.dev/gemini-api/docs/pricing#gemini-4-neon',
+                    'note'         => 'Tarif officiel Google Gemini 4 Neon : 3 $ / 15 $ (cache 0,15 $, 5 % de l\'entrée), sans palier sur toute la fenêtre de 1M. Sortie = réponse + réflexion. Relu le 19/11/2026.',
+                ],
+            ],
+            'gemini-4-hydrogen' => [
+                'label'      => 'Gemini 4 Hydrogen',
+                'note'       => 'Modèle généraliste de Google (novembre 2026) — rapide et efficace pour le code au quotidien et les agents ; vision, audio, vidéo, contexte 1M. Réfléchit en effort élevé par défaut.',
+                'context_window' => 1048576,
+                'tags'       => ['vision', 'fichiers', 'web', 'raisonnement', 'code'],
+                'limits'     => ['Réflexion élevée par défaut (plus de tokens)', 'Pas de temperature (ignorée par Google)'],
+                'web_native' => true,
+                'temperature' => false,
+                'pricing'    => [
+                    'input'        => 1.50,
+                    'output'       => 7.50,
+                    'cached_input' => 0.075,
+                    'source_url'   => 'https://ai.google.dev/gemini-api/docs/pricing#gemini-4-hydrogen',
+                    'note'         => 'Tarif officiel Google Gemini 4 Hydrogen : 1,50 $ / 7,50 $ (cache 0,075 $, 5 % de l\'entrée), sans palier au-delà de 200k. Sortie = réponse + réflexion. Relu le 17/11/2026.',
+                ],
+            ],
+            'gemini-4-carbon' => [
+                'label'      => 'Gemini 4 Carbon',
+                'note'       => 'Modèle de raisonnement le plus capable de Google (novembre 2026) — code au long cours, connaissances multimodales, sciences ; vision, contexte 1M. Tarif de lancement 2 $/10 $ jusqu\'au 30/11/2026.',
+                'context_window' => 1048576,
+                'tags'       => ['vision', 'fichiers', 'web', 'raisonnement', 'code'],
+                'limits'     => ['Coût élevé', 'Réflexion parfois longue avant de répondre', 'Pas de temperature (ignorée par Google)'],
+                'web_native' => true,
+                'temperature' => false,
+                'pricing'    => [
+                    'input'        => 4.00,
+                    'output'       => 20.00,
+                    'cached_input' => 0.20,
+                    'launch'       => [
+                        'until'        => '2026-11-30',
+                        'input'        => 2.00,
+                        'output'       => 10.00,
+                        'cached_input' => 0.10,
+                    ],
+                    'source_url'   => 'https://ai.google.dev/gemini-api/docs/pricing#gemini-4-carbon',
+                    'note'         => 'Tarif officiel Google Gemini 4 Carbon : lancement 2 $ / 10 $ (cache 0,10 $) jusqu\'au 30/11/2026, puis 4 $ / 20 $ (cache 0,20 $, 5 % de l\'entrée). Sortie = réponse + réflexion. Relu le 17/11/2026.',
+                ],
+            ],
+            // Gemini 4 Argon (GA 13 octobre 2026) : « Our efficient Gemini 4
+            // frontier reasoning model » — plus rapide et moins gourmand en
+            // tokens que Carbon (page Pricing, relue le 2026-11-17 ; il était
+            // présenté comme le phare de Google avant Carbon) — code complexe,
+            // maths et sciences, agents en plusieurs étapes. Réflexion `medium` par défaut, impossible à
+            // couper ; temperature / top_p / top_k ignorés. Sortie 65 536 en
+            // flux (jusqu'au million avec le « long decode », que MIA ne
+            // demande pas). Lecture de cache à 5 % de l'entrée (à DÉCLARER :
+            // le ratio conventionnel donnerait le double) ; cache implicite
+            // seulement. Aucun palier au-delà de 200k. Tarif de lancement
+            // jusqu'au 30/11/2026. Peut réfléchir plusieurs minutes : la
+            // lecture du flux bat le cœur du job (LlmAdapterHelpers::readSseLine).
+            // Non vérifié faute de clé : Google facture aussi « les instructions
+            // internes des outils et les déclarations de fonctions » quand la
+            // recherche est active — dans quel compteur d'usage ils arrivent.
+            // Pas le défaut : quatre fois Gemini 3.8 Flash au tarif normal.
+            'gemini-4-argon' => [
+                'label'      => 'Gemini 4 Argon',
+                'note'       => 'Modèle de raisonnement efficace de Google (octobre 2026) — plus rapide et plus économe en tokens que Gemini 4 Carbon : code complexe, maths et sciences, agents ; vision, contexte 1M. Tarif de lancement 2 $/10 $ jusqu\'au 30/11/2026.',
+                'context_window' => 1048576,
+                'tags'       => ['vision', 'fichiers', 'web', 'raisonnement', 'code'],
+                'limits'     => ['Coût élevé', 'Réflexion parfois longue avant de répondre', 'Pas de temperature (ignorée par Google)'],
+                'web_native' => true,
+                'temperature' => false,
+                'pricing'    => [
+                    'input'        => 4.00,
+                    'output'       => 20.00,
+                    'cached_input' => 0.20,
+                    'launch'       => [
+                        'until'        => '2026-11-30',
+                        'input'        => 2.00,
+                        'output'       => 10.00,
+                        'cached_input' => 0.10,
+                    ],
+                    'source_url'   => 'https://ai.google.dev/gemini-api/docs/pricing#gemini-4-argon',
+                    'note'         => 'Tarif officiel Google Gemini 4 Argon : lancement 2 $ / 10 $ (cache 0,10 $) jusqu\'au 30/11/2026, puis 4 $ / 20 $ (cache 0,20 $, 5 % de l\'entrée). Sortie = réponse + réflexion. Relu le 10/11/2026.',
+                ],
+            ],
             // Gemini 3.8 Flash (GA 2 septembre 2026) : le Flash le plus capable,
             // pensé pour le code au long cours et les agents. Réflexion `medium`
             // par défaut (`minimal` refusé) ; il consomme plus de tokens que
@@ -1255,17 +1791,24 @@ return [
                     'note'         => 'Tarif officiel Google Gemini 3.8 Flash : lancement 0,75 $ / 3,75 $ (cache 0,075 $) jusqu\'au 31/12/2026, puis 1,50 $ / 7,50 $ (cache 0,15 $). Sortie = réponse + réflexion.',
                 ],
             ],
-            // Gemini 3.7 Flash (GA 13 août 2026) : Google le garde pleinement
-            // supporté comme alternative à 3.8 Flash quand ses longues
-            // vérifications ne se justifient pas. Réflexion `medium` par défaut.
+            // Gemini 3.7 Flash (GA 13 août 2026) : déprécié le 08/10/2026, ses
+            // requêtes sont REDIRIGÉES par Google vers 3.8 Flash (« the endpoint
+            // is not shutting down and automatically routes API requests to
+            // gemini-3.8-flash ») — arrêté ici à cette date, gardé pour les
+            // instances qui l'ont activé.
             'gemini-3.7-flash' => [
                 'label'      => 'Gemini 3.7 Flash',
-                'note'       => 'Flash d\'août 2026 — code, agents et exécution fiable en plusieurs étapes ; moins gourmand en tokens que 3.8 Flash, au même tarif. Tarif de lancement 0,75 $/3,75 $ jusqu\'au 31/12/2026.',
+                'note'       => 'Flash d\'août 2026 — remplacé par Gemini 3.8 Flash : depuis le 08/10/2026, Google fait répondre 3.8 Flash à sa place.',
                 'context_window' => 1048576,
                 'tags'       => ['vision', 'fichiers', 'web', 'raisonnement', 'code'],
-                'limits'     => ['Pas de temperature (dépréciée par Google)'],
+                'limits'     => ['Redirigé par Google vers Gemini 3.8 Flash', 'Pas de temperature (dépréciée par Google)'],
                 'web_native' => true,
                 'temperature' => false,
+                'retirement' => [
+                    'date'        => '2026-10-08',
+                    'replacement' => 'gemini-3.8-flash',
+                    'source_url'  => 'https://ai.google.dev/gemini-api/docs/deprecations',
+                ],
                 'pricing'    => [
                     'input'        => 1.50,
                     'output'       => 7.50,
@@ -1329,12 +1872,19 @@ return [
             // catalogue pour les instances qui l'ont choisi — jamais le défaut.
             'gemini-3.5-flash' => [
                 'label'      => 'Gemini 3.5 Flash',
-                'note'       => 'Flash de mai 2026, classé « legacy » par Google — 1,50 $ / 9 $ le million, plus cher que ses successeurs 3.6 à 3.8 Flash.',
+                'note'       => 'Flash de mai 2026 — remplacé par Gemini 3.6 Flash : depuis le 08/10/2026, Google fait répondre 3.6 Flash à sa place.',
                 'context_window' => 1048576,
                 'tags'       => ['vision', 'fichiers', 'web', 'raisonnement', 'code'],
-                'limits'     => ['Legacy chez Google (préférer 3.6 à 3.8 Flash)', 'Pas de temperature (dépréciée par Google)'],
+                'limits'     => ['Redirigé par Google vers Gemini 3.6 Flash', 'Pas de temperature (dépréciée par Google)'],
                 'web_native' => true,
                 'temperature' => false,
+                // Déprécié le 08/10/2026 : Google redirige ses requêtes vers 3.6
+                // Flash (même principe que 3.7 Flash).
+                'retirement' => [
+                    'date'        => '2026-10-08',
+                    'replacement' => 'gemini-3.6-flash',
+                    'source_url'  => 'https://ai.google.dev/gemini-api/docs/deprecations',
+                ],
                 'pricing'    => [
                     'input'        => 1.50,
                     'output'       => 9.00,
@@ -1397,15 +1947,14 @@ return [
                     'note'         => 'Tarif officiel Google Gemini 3.1 Pro Preview, requêtes ≤ 200k tokens. Au-delà, 4 $ / 18 $ (cache 0,40 $) — palier long_context.',
                 ],
             ],
-            // Coupé par Google, donc retiré d'ici — le laisser afficherait dans
-            // le picker un modèle qui répond 404 :
-            //   gemini-3.1-flash-lite-preview — coupé le 25/05/2026
-            // Remplaçant : Gemini 3.5 Flash-Lite ci-dessus.
+            // Coupé par Google, donc retiré d'ici (il répondrait 404) :
+            // `gemini-3.1-flash-lite-preview`, dans `retired_models` ci-dessous.
             //
             // Génération 2.5 : depuis le 18/09/2026, Google en RÉSERVE l'accès
             // aux comptes qui l'utilisaient déjà (« not deprecated », servie
-            // « until further notice ») et renvoie vers 3.5 Flash-Lite ou 3.8
-            // Flash pour tout nouveau projet. Gardée au catalogue (une instance
+            // « until further notice ») et renvoie vers Gemini 4 Hydrogen ou
+            // 3.5 Flash-Lite pour tout nouveau projet (page Models, relue le
+            // 2026-11-17). Gardée au catalogue (une instance
             // qui l'a activée continue de la servir) ; la limite le dit.
             'gemini-2.5-pro' => [
                 'label'      => 'Gemini 2.5 Pro',
@@ -1415,6 +1964,14 @@ return [
                 'tags'       => ['vision', 'fichiers', 'web', 'raisonnement'],
                 'limits'     => ['Coût élevé', 'Accès réservé par Google aux comptes qui l\'utilisaient déjà (18/09/2026)'],
                 'web_native' => true,
+                // Redirigé par Google vers gemini-3.8-flash le 01/12/2026, facturé au tarif de
+                // la cible, avec des changements cassants (signatures de
+                // réflexion, `thinking_level`) : arrêté ici à cette date.
+                'retirement' => [
+                    'date'        => '2026-12-01',
+                    'replacement' => 'gemini-3.8-flash',
+                    'source_url'  => 'https://ai.google.dev/gemini-api/docs/deprecations#gemini-2.5-pro-models',
+                ],
                 // Génération 2.5 : recherche Google facturée au prompt ancré.
                 'web_search_billing'            => 'prompt',
                 'web_search_pricing_usd_per_1k' => 35.00,
@@ -1435,6 +1992,14 @@ return [
                 'tags'       => ['vision', 'fichiers', 'web'],
                 'limits'     => ['Accès réservé par Google aux comptes qui l\'utilisaient déjà (18/09/2026)'],
                 'web_native' => true,
+                // Redirigé par Google vers gemini-3.5-flash-lite le 01/12/2026, facturé au tarif de
+                // la cible, avec des changements cassants (signatures de
+                // réflexion, `thinking_level`) : arrêté ici à cette date.
+                'retirement' => [
+                    'date'        => '2026-12-01',
+                    'replacement' => 'gemini-3.5-flash-lite',
+                    'source_url'  => 'https://ai.google.dev/gemini-api/docs/deprecations#gemini-2.5-flash-models',
+                ],
                 'web_search_billing'            => 'prompt',
                 'web_search_pricing_usd_per_1k' => 35.00,
                 'pricing'    => [
@@ -1464,6 +2029,31 @@ return [
                 ],
             ],
         ],
+        // Modèles coupés par Google qu'une instance peut encore porter :
+        // 3.1 Flash-Lite preview proposé jusqu'au 24/04/2026 (e07a740e), 2.0
+        // Flash et les deux préversions 2.5 en mars 2026 (bb74a3df, 08bda0f6).
+        // Dates et remplaçants : page Deprecations relue le 2026-11-12 ; la
+        // préversion 2.5 Flash 04-17 n'y figure plus, sa coupure est au
+        // changelog (« will be deprecated on July 15, 2025 ») et son
+        // remplaçant celui des autres préversions 2.5 Flash.
+        'retired_models' => [
+            'gemini-3.1-flash-lite-preview' => [
+                'label'      => 'Gemini 3.1 Flash-Lite (preview)',
+                'retirement' => ['date' => '2026-05-25', 'replacement' => 'gemini-3.1-flash-lite', 'source_url' => 'https://ai.google.dev/gemini-api/docs/deprecations'],
+            ],
+            'gemini-2.0-flash' => [
+                'label'      => 'Gemini 2.0 Flash',
+                'retirement' => ['date' => '2026-06-01', 'replacement' => 'gemini-3.6-flash', 'source_url' => 'https://ai.google.dev/gemini-api/docs/deprecations#gemini-2.0-models'],
+            ],
+            'gemini-2.5-pro-preview-03-25' => [
+                'label'      => 'Gemini 2.5 Pro (preview 03-25)',
+                'retirement' => ['date' => '2025-12-02', 'replacement' => 'gemini-3.8-flash', 'source_url' => 'https://ai.google.dev/gemini-api/docs/deprecations#gemini-2.5-pro-models'],
+            ],
+            'gemini-2.5-flash-preview-04-17' => [
+                'label'      => 'Gemini 2.5 Flash (preview 04-17)',
+                'retirement' => ['date' => '2025-07-15', 'replacement' => 'gemini-3.6-flash', 'source_url' => 'https://ai.google.dev/gemini-api/docs/changelog'],
+            ],
+        ],
     ],
 
     // ============== DeepSeek ==============
@@ -1485,10 +2075,26 @@ return [
         //     autant : DeepSeek le met « progressivement » à la retraite et le
         //     dit dépassé par V4.1 Flash, quatre fois moins cher. À revoir à la
         //     sortie de V4.1 Pro.
+        // Relu le 2026-11-10 : V4.1 Flash mis à jour le 17/10/2026
+        // (« DeepSeek-V4.1-Flash-1017 »), même identifiant, même appel, même
+        // tarif ; ni V4.1 Pro ni V5 annoncés (référence de l'API : `model` ∈
+        // `deepseek-flash`, `deepseek-v4-pro`).
         'default_model' => 'deepseek-flash',
         // Function-calling au format Chat Completions, en mode SANS réflexion
         // (cf. `thinking` du modèle).
         'tool_use' => true,
+        // Recherche Internet INTÉGRÉE depuis le 13/11/2026 : outil serveur
+        // `deepseek_web_search` (DeepSeekAdapter), sans réflexion — le mode de
+        // MIA. 0,75 $ les 1 000 recherches, autant les 1 000 lectures de page
+        // et recherches d'image, comptées dans `usage.server_tool_use` (page
+        // Pricing et guide « Web Tools », relus le 2026-11-17). « Other tools
+        // cannot be used together with `deepseek_web_search` … yet » : jamais
+        // avec les outils de MIA dans une même réponse (comme Mistral) — le
+        // contrôleur arbitre (un connecteur ou un outil explicite gagne, la
+        // recherche s'éteint et le dit). `safety_check` non envoyé : DeepSeek
+        // ne l'exige que d'un service ouvert au public.
+        'web_search_pricing_usd_per_1k' => 0.75,
+        'tools_with_web_search'         => false,
         'default_context_window' => 1000000,
         'endpoints' => [
             'chat_completions' => 'https://api.deepseek.com/chat/completions',
@@ -1496,11 +2102,11 @@ return [
         'models' => [
             'deepseek-flash' => [
                 'label'       => 'DeepSeek V4.1 Flash',
-                'note'        => 'Modèle unique de DeepSeek (septembre 2026) — MoE 552B, contexte 1M, vision native, très économique (0,30 $ / 1,20 $ en heures de pointe, moitié prix en heures creuses).',
+                'note'        => 'Modèle courant de DeepSeek (septembre 2026, révisé le 17/10) — MoE 552B, contexte 1M, vision native, très économique (0,30 $ / 1,20 $ en heures de pointe, moitié prix en heures creuses).',
                 'context_window' => 1000000,
-                'tags'        => ['vision', 'code'],
-                'limits'      => ['Pas de recherche web native', 'Mode réflexion coupé par MIA (réponse rapide)', 'Tarif de pointe compté même en heures creuses'],
-                'web_native'  => false,
+                'tags'        => ['vision', 'web', 'code'],
+                'limits'      => ['Recherche Internet et outils jamais dans la même réponse', 'Mode réflexion coupé par MIA (réponse rapide)', 'Tarif de pointe compté même en heures creuses'],
+                'web_native'  => true,
                 'default'     => true,
                 'routing'     => 'chat_completions',
                 'temperature' => true,
@@ -1531,6 +2137,18 @@ return [
                     'source_url'   => 'https://api-docs.deepseek.com/quick_start/pricing',
                     'note'         => 'Tarif officiel DeepSeek V4.1 Flash en heures de pointe (cache hit 0,006 $). Heures creuses (nuits, week-ends et fériés chinois) : moitié prix, non modélisé.',
                 ],
+            ],
+        ],
+        // Les deux modèles d'avant V4.1 Flash (cf. en tête du fournisseur).
+        // Un message sur l'un d'eux échouait : ils quittent le chat.
+        'retired_models' => [
+            'deepseek-chat' => [
+                'label'      => 'DeepSeek V3',
+                'retirement' => ['date' => '2026-07-24', 'replacement' => 'deepseek-flash', 'source_url' => 'https://api-docs.deepseek.com/news/news260424'],
+            ],
+            'deepseek-reasoner' => [
+                'label'      => 'DeepSeek R1',
+                'retirement' => ['date' => '2026-07-24', 'replacement' => 'deepseek-flash', 'source_url' => 'https://api-docs.deepseek.com/news/news260424'],
             ],
         ],
     ],
@@ -1591,12 +2209,16 @@ return [
             // laisse (le raisonnement est rendu dans la boucle d'outils), et
             // n'envoie ni `thinking` ni `max_completion_tokens` — un plafond
             // tel que entrée + plafond > contexte est REFUSÉ par l'API.
+            // Fermé aux comptes Moonshot créés depuis le 01/11/2026, arrêt
+            // « attendu fin décembre 2026 » (Model List, relue le 2026-11-10) :
+            // pas encore de date ferme, donc pas de bloc `retirement` — à poser
+            // dès que Moonshot la publie (remplaçant : Kimi K3).
             'kimi-k2.6' => [
                 'label'       => 'Kimi K2.6',
                 'note'        => 'Généraliste économique Moonshot (avril 2026) — texte, image et vidéo, raisonnement, contexte 256K.',
                 'context_window' => 262144,
                 'tags'        => ['vision', 'raisonnement'],
-                'limits'      => ['Pas de recherche web native', 'Pas de temperature (API)'],
+                'limits'      => ['Pas de recherche web native', 'Pas de temperature (API)', 'Fermé aux comptes Moonshot créés depuis le 01/11/2026, arrêt prévu fin décembre 2026'],
                 'web_native'  => false,
                 'routing'     => 'chat_completions',
                 // « Cannot be modified » (1,0 en réflexion) : ne jamais l'envoyer.
@@ -1635,7 +2257,13 @@ return [
         // n'envoie pas `thinking`, et la boucle d'outils rend le raisonnement
         // (« thinking blocks should be explicitly preserved and returned
         // together with the tool results », guide Thinking Mode). Non repris :
-        // GLM-5.3-FlashX (variante rapide de 5.3-Flash, 0,37 $ / 1,25 $).
+        // GLM-5.3-FlashX (variante rapide de 5.3-Flash, 0,37 $ / 1,25 $) et
+        // GLM-5.3-FlashX-Legal (variante juridique, même tarif).
+        // Relu le 2026-11-10 : rien de neuf (tarifs, `tool_choice`, bornes de
+        // temperature inchangés). `reasoning_effort` vaut `max` par défaut
+        // (5.2 et suivants) : MIA ne l'envoie pas, chaque réponse raisonne au
+        // plus fort — un réglage plus bas (`high`) ferait gagner temps et
+        // jetons, à décider à dessein (non éprouvé faute de clé).
         'models' => [
             'glm-5.3-flash' => [
                 'label'       => 'GLM 5.3 Flash',

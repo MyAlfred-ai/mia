@@ -8,7 +8,7 @@ declare(strict_types=1);
  *
  * LE PROBLÈME RÉSOLU. « Reprends le plan qu'on avait fait la semaine
  * dernière », « tu m'avais conseillé un outil, lequel ? » : chaque
- * conversation était un îlot. La mémoire « MIA pour vous » retient des faits
+ * conversation était un îlot. La « Mémoire » (Réglages → Mémoire) retient des faits
  * durables, pas le contenu des échanges ; l'utilisateur devait retrouver la
  * conversation lui-même et recopier le passage.
  *

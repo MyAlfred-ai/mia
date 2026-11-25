@@ -56,7 +56,8 @@ final class LlmSetupAttentionTest extends TestCase
         // (la rubrique peut être repliée à la main, la cible du signal reste
         // marquée) — une seule pastille déclarée, posée aux deux endroits.
         $this->assertSame(1, substr_count($nav, 'nav-attention-dot'), 'Une seule pastille déclarée…');
-        $this->assertStringContainsString("\$navSub('llms-keys', [\$llmKeyAttr, \$llmSetupDot, \$llmKeyHint])", $nav, '… sur « Clés API »…');
+        $this->assertStringContainsString("\$navSub('llms-keys', [\$llmKeyAttr, \$llmKeyDot, \$llmKeyHint])", $nav, '… sur « Fournisseurs et modèles »…');
+        $this->assertStringContainsString("if (\$llmSetupNeeded) {\n                \$llmKeyDot = \$llmSetupDot;", $nav, '… la même pastille, réutilisée…');
         $this->assertStringContainsString('$llmSetupDot, $llmSetupNeeded,', $nav, '… et sur la rubrique.');
     }
 
@@ -102,7 +103,7 @@ final class LlmSetupAttentionTest extends TestCase
         $this->assertStringContainsString('href="/setup/suivant"', $dashboard);
 
         // Page Clés API : bandeau sur place + extinction SANS rechargement.
-        $keys = self::lire('templates/admin/llms/keys.php');
+        $keys = self::lire('templates/admin/llms/index.php');
         $this->assertStringContainsString('llmSetupCallout', $keys);
         $this->assertStringContainsString('clearLlmSetupAttention', $keys);
         $this->assertStringContainsString("getElementById('localLlmForm')?.addEventListener('mia:autosaved', clearLlmSetupAttention)", $keys,

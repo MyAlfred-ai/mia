@@ -37,7 +37,9 @@ final class PdfFileBuilder implements FileBuilder
         return (new PdfExportService())->buildFromHtml(
             self::printable(MarkdownHtml::document($blocks, $title)),
             $title,
-            CompanyProfile::pdfChrome()
+            CompanyProfile::pdfChrome(),
+            // Un tableau trop large pour une page en portrait : paysage.
+            MarkdownHtml::wantsLandscape($blocks) ? 'landscape' : 'portrait'
         );
     }
 

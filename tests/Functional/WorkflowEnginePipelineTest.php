@@ -386,6 +386,50 @@ final class WorkflowEnginePipelineTest extends DatabaseTestCase
         $this->assertSame(WorkflowRun::CANCELLED, WorkflowRun::find($res['run_id'])['status']);
     }
 
+    /**
+     * Supprimer un workflow (WorkflowController::delete, dans son ordre) :
+     * ses exécutions pas finies s'arrêtent d'abord — validation fermée, mot
+     * dans la conversation —, puis il part avec ses lancements ; leurs
+     * conversations restent.
+     */
+    public function testSupprimerUnWorkflowArreteSesExecutionsEtGardeLeursConversations(): void
+    {
+        $wf = $this->publie(self::definition());
+        $fini = $this->lance($wf, ['client' => 'A', 'montant' => '100']);
+        $this->repond($fini['job_ids'][0], 'Petit marché.');
+        $this->assertSame(WorkflowRun::DONE, WorkflowRun::find($fini['run_id'])['status']);
+        $attente = $this->lance($wf, ['client' => 'B', 'montant' => '9000']);
+        $this->repond($attente['job_ids'][0], 'Gros marché.');
+        $run = WorkflowRun::find($attente['run_id']);
+        $this->assertSame(WorkflowRun::WAITING, $run['status']);
+        $carte = (int)WorkflowRun::lastStep($run['id'], 'accord')['pending_action_id'];
+        $this->assertGreaterThan(0, $carte);
+
+        // Ce que dit la fenêtre de confirmation.
+        $this->assertSame(['runs' => 2, 'live' => 1], WorkflowRun::deletionFacts($this->userId)[$wf['id']]);
+        $this->assertSame(['runs' => 2, 'live' => 1], WorkflowRun::deletionFacts($this->userId, $wf['id'])[$wf['id']]);
+        $this->assertSame([], WorkflowRun::deletionFacts($this->userId + 1000), 'Les lancements d’un autre ne comptent pas.');
+        $aArreter = WorkflowRun::unfinishedFor($wf['id'], $this->userId);
+        $this->assertSame([$run['id']], array_column($aArreter, 'id'), 'Seule l’exécution pas finie est arrêtée.');
+        $this->assertSame([], WorkflowRun::unfinishedFor($wf['id'], $this->userId + 1000));
+
+        foreach ($aArreter as $r) {
+            WorkflowEngine::cancel($r, false, true);
+        }
+        $this->assertTrue(Workflow::delete($wf['id'], $this->userId));
+
+        $this->assertNotSame('pending', $this->ligne('SELECT status FROM drive_pending_actions WHERE id = ?', [$carte])['status'], 'La validation en attente est fermée.');
+        $this->assertSame(0, $this->nombre('SELECT COUNT(*) FROM workflow_runs WHERE workflow_id = ?', [$wf['id']]));
+        $this->assertNull(Workflow::findById($wf['id']));
+        foreach ([$fini, $attente] as $res) {
+            $conv = $this->ligne('SELECT id, workflow_run_id FROM conversations WHERE id = ?', [$res['conversation_id']]);
+            $this->assertNotSame([], $conv, 'La conversation d’un lancement reste.');
+            $this->assertNull($conv['workflow_run_id']);
+        }
+        $dernier = $this->ligne("SELECT content FROM messages WHERE conversation_id = ? AND role = 'assistant' ORDER BY id DESC LIMIT 1", [$attente['conversation_id']]);
+        $this->assertStringContainsString('Workflow supprimé par vous', (string)$dernier['content']);
+    }
+
     public function testUnWorkflowProgrammePartUneSeuleFoisParCreneau(): void
     {
         $def = WorkflowSpec::normalize([

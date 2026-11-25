@@ -444,7 +444,7 @@ final class Diagnostics
             $modeles === [] ? self::FAIL : self::OK,
             t('{n} modèle(s)', ['n' => count($modeles)]),
             $modeles === [] ? t('Aucun modèle utilisable : aucune clé API n\'est enregistrée. Le chat ne peut rien répondre.') : '',
-            $modeles === [] ? t('Administration → Modèles IA → onglet Clés API.') : ''
+            $modeles === [] ? t('Administration → Modèles IA → Fournisseurs et modèles.') : ''
         );
     }
 
@@ -781,7 +781,9 @@ final class Diagnostics
         try {
             $bases = array_values(array_filter(
                 KnowledgeBase::all(),
+                // Hors cerveau « Uniquement pour moi » : il ne regarde que son créateur.
                 static fn(array $kb): bool => KnowledgeBase::isRemote($kb) && (int)($kb['is_active'] ?? 0) === 1
+                    && !KnowledgeBase::isPrivate($kb)
             ));
         } catch (\Throwable) {
             return self::controle('bases_mybrain', 'services', t('Cerveaux MyBrain'), self::INFO, t('indisponible'), '', '');

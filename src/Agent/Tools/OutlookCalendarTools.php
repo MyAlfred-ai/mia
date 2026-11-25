@@ -4,7 +4,8 @@ declare(strict_types=1);
 
 /**
  * Outils Calendrier Outlook du chat (OAuth délégué) : agendas, recherche et lecture
- * d'évènements, création soumise à approbation (jamais de participant).
+ * d'évènements, salles de réunion, création et modification soumises à
+ * approbation — invités, salle, réunion Teams, récurrence, rappel, disponibilité.
  *
  * Extrait de ChatController::runSend (registre d'outils, src/Agent/) : les
  * définitions, la consigne et les handlers sont ceux du contrôleur, déplacés
@@ -90,6 +91,23 @@ final class OutlookCalendarTools extends AbstractToolProvider
                 return ['error' => $e->getMessage()];
             }
         };
+        // Salles de l'organisation (annuaire), et leur disponibilité sur un créneau.
+        $toolHandlers[UserOutlookCalendarService::TOOL_ROOMS] = function (array $args) use ($msCalendarService) {
+            $this->sseEmit(['phase' => 'mscalendar_rooms']);
+            try {
+                return self::hintIfEmpty(
+                    $msCalendarService->searchRooms(
+                        (string)($args['requete'] ?? ''),
+                        (string)($args['debut'] ?? ''),
+                        (string)($args['fin'] ?? '')
+                    ),
+                    'salles',
+                    "Aucune salle trouvée. Retire ou raccourcis `requete` ; si la salle a une adresse email, demande-la à l'utilisateur."
+                );
+            } catch (\RuntimeException $e) {
+                return ['error' => $e->getMessage()];
+            }
+        };
         $toolHandlers['trouver_creneaux_outlook'] = function (array $args) use ($msCalendarService) {
             $this->sseEmit(['phase' => 'mscalendar_slots']);
             try {
@@ -103,26 +121,86 @@ final class OutlookCalendarTools extends AbstractToolProvider
             }
         };
         if ($msCalendarService->canWrite()) {
-            $toolHandlers['creer_evenement_agenda_outlook'] = function (array $args) use ($queueConnectorWrite) {
+            $toolHandlers['creer_evenement_agenda_outlook'] = function (array $args) use ($queueConnectorWrite, $msCalendarService) {
                 // Le fuseau de l'utilisateur VOYAGE avec l'action : elle sera
                 // exécutée au clic « Approuver », dans une requête qui ne
                 // connaît plus le navigateur (cf. UserCalendarService::argTimeZone).
                 if ($this->turn->timeZone !== '' && trim((string)($args['fuseau'] ?? '')) === '') {
                     $args['fuseau'] = $this->turn->timeZone;
                 }
-                // Validation amont (titre, dates, refus des participants) :
-                // une erreur revient au modèle, jamais dans une carte cassée.
+                // Validation amont (titre, dates, adresses des invités, salle,
+                // récurrence) : une erreur revient au modèle, jamais dans une
+                // carte cassée ni après l'approbation. La salle est RÉSOLUE ici
+                // (nom → « Nom <adresse> ») : la carte la nomme et l'exécution,
+                // au clic, ne dépend plus de l'annuaire.
                 try {
-                    UserOutlookCalendarService::buildEventPayload($args);
+                    $args = self::withResolvedRoom($args, $msCalendarService);
+                    $payload = UserOutlookCalendarService::buildEventPayload($args, $msCalendarService->accountEmail());
                     UserOutlookCalendarService::normalizeCalendarId((string)($args['agenda'] ?? ''));
                 } catch (\RuntimeException $e) {
                     return ['error' => $e->getMessage()];
                 }
-                return $queueConnectorWrite('creer_evenement_agenda_outlook', $args, null);
+                // Salle libre sur ce créneau ? Vu AVANT la carte : elle le dit,
+                // et le modèle propose une autre salle plutôt qu'un refus plus tard.
+                $ctx = $msCalendarService->roomCheck(
+                    UserOutlookCalendarService::parseRoom($args['salle'] ?? null),
+                    $payload,
+                    isset($payload['recurrence'])
+                );
+                return self::withRoomWarning(
+                    $queueConnectorWrite(UserOutlookCalendarService::TOOL_CREATE, $args, $ctx !== [] ? $ctx : null),
+                    $ctx
+                );
+            };
+            $toolHandlers['modifier_evenement_agenda_outlook'] = function (array $args) use ($queueConnectorWrite, $msCalendarService) {
+                $this->sseEmit(['phase' => 'mscalendar_read']);
+                if ($this->turn->timeZone !== '' && trim((string)($args['fuseau'] ?? '')) === '') {
+                    $args['fuseau'] = $this->turn->timeZone;
+                }
+                // L'évènement est LU avant la carte : elle le nomme, dit ce qui
+                // change et qui sera prévenu ; une demande impossible (pas
+                // organisateur, invité absent, horaire incohérent) revient au
+                // modèle pendant qu'il rédige.
+                try {
+                    $args = self::withResolvedRoom($args, $msCalendarService);
+                    $ctx  = $msCalendarService->inspectUpdate($args);
+                } catch (\RuntimeException $e) {
+                    return ['error' => $e->getMessage()];
+                }
+                // Posé par le SERVEUR, jamais lu du modèle : une tâche sans
+                // validation s'en sert pour ne pas écrire seule à des invités.
+                $args['previent_invites'] = $ctx['previent'];
+                return self::withRoomWarning($queueConnectorWrite(UserOutlookCalendarService::TOOL_UPDATE, $args, $ctx), $ctx);
             };
         }
 
         return $toolHandlers;
+    }
+
+    /**
+     * La salle demandée (nom ou adresse) remplacée par sa forme résolue
+     * « Nom <adresse> » — ce que portent la carte, la file d'approbation et
+     * le filtre de destinataires d'un workflow. Throw RuntimeException à
+     * message FR (salle introuvable, ambiguë, annuaire injoignable).
+     */
+    private static function withResolvedRoom(array $args, UserOutlookCalendarService $calendar): array
+    {
+        $raw = $args['salle'] ?? null;
+        if (is_scalar($raw) && !is_bool($raw) && trim((string)$raw) !== '') {
+            $args['salle'] = UserOutlookCalendarService::roomLabel($calendar->resolveRoom((string)$raw));
+        } else {
+            unset($args['salle']);
+        }
+        return $args;
+    }
+
+    /** Résultat de la file d'approbation, complété quand la salle semble prise. */
+    private static function withRoomWarning(array $result, array $ctx): array
+    {
+        if (!isset($result['error']) && ($ctx['salle_dispo'] ?? '') === 'occupee') {
+            $result['avertissement'] = UserOutlookCalendarService::ROOM_BUSY_NOTE;
+        }
+        return $result;
     }
 
     /** Définitions function-calling des outils Calendrier Outlook (selon les scopes accordés). */
@@ -195,13 +273,40 @@ final class OutlookCalendarTools extends AbstractToolProvider
         // Créneaux libres : définition commune aux deux agendas (FreeSlots).
         $defs[] = FreeSlots::toolDefinition('trouver_creneaux_outlook', "le calendrier Outlook", "visibles s'ils appartiennent au même annuaire Microsoft");
 
+        $defs[] = [
+            'name'        => UserOutlookCalendarService::TOOL_ROOMS,
+            'description' => "Liste les salles de réunion de l'organisation (annuaire Microsoft : nom et adresse "
+                . "email), filtrées par nom ; avec `debut` ET `fin`, dit pour chacune si elle est libre, "
+                . "occupée ou non vérifiable sur ce créneau (les libres d'abord). À utiliser pour trouver la "
+                . "salle à réserver ou une salle libre. Lecture seule : rien n'est réservé.",
+            'parameters'  => [
+                'type'       => 'object',
+                'properties' => [
+                    'requete' => ['type' => 'string', 'description' => "Nom ou partie du nom de la salle (ex. « Everest », « 3e étage »). Vide = toutes."],
+                    'debut'   => ['type' => 'string', 'description' => "Début du créneau à vérifier, AAAA-MM-JJ HH:MM (optionnel, avec `fin`)."],
+                    'fin'     => ['type' => 'string', 'description' => "Fin du créneau à vérifier, AAAA-MM-JJ HH:MM (optionnel, avec `debut`)."],
+                ],
+            ],
+        ];
+
+        // Modalités communes à la création et à la modification.
+        $options = [
+            'visio' => ['type' => 'boolean', 'description' => "true pour en faire une réunion Teams (lien de connexion créé par Outlook). Ne se retire pas ensuite."],
+            'rappel_minutes' => ['type' => 'integer', 'description' => "Rappel : minutes avant le début (ex. 15). -1 pour le désactiver. Omets pour garder le réglage par défaut."],
+            'disponibilite' => ['type' => 'string', 'enum' => array_keys(UserOutlookCalendarService::SHOW_AS), 'description' => "Disponibilité affichée dans l'agenda pendant l'évènement (défaut : occupe)."],
+            'importance' => ['type' => 'string', 'enum' => array_keys(UserOutlookCalendarService::IMPORTANCE), 'description' => "Importance (défaut : normale)."],
+            'confidentialite' => ['type' => 'string', 'enum' => array_keys(UserOutlookCalendarService::SENSITIVITY), 'description' => "privee = les autres ne voient qu'un créneau occupé."],
+        ];
         if ($calendar->canWrite()) {
             $defs[] = [
-                'name'        => 'creer_evenement_agenda_outlook',
-                'description' => "Crée un évènement dans le calendrier Outlook de l'utilisateur. Chaque "
-                    . "création est soumise à son approbation explicite avant exécution (carte de "
-                    . "confirmation). AUCUN participant ne peut être ajouté : Microsoft enverrait "
-                    . "l'invitation aussitôt, et MIA n'envoie jamais de message au nom de l'utilisateur.",
+                'name'        => UserOutlookCalendarService::TOOL_CREATE,
+                'description' => "Crée un évènement ou une réunion dans le calendrier Outlook de l'utilisateur : "
+                    . "invités obligatoires et facultatifs, salle de réunion réservée, réunion Teams, récurrence, "
+                    . "rappel, disponibilité. "
+                    . "Chaque création est soumise à son approbation explicite avant exécution (carte de "
+                    . "confirmation). ATTENTION : Outlook envoie l'invitation par email à chaque invité dès "
+                    . "la création, sans réglage possible — n'ajoute que les invités que l'utilisateur a "
+                    . "nommés, avec leur adresse email exacte.",
                 'parameters'  => [
                     'type'       => 'object',
                     'properties' => [
@@ -209,11 +314,48 @@ final class OutlookCalendarTools extends AbstractToolProvider
                         'debut'  => ['type' => 'string', 'description' => "Début : AAAA-MM-JJ HH:MM (ou AAAA-MM-JJ pour une journée entière)."],
                         'fin'    => ['type' => 'string', 'description' => "Fin : AAAA-MM-JJ HH:MM (défaut : début + 1 h). Journée entière : AAAA-MM-JJ du dernier jour."],
                         'journee_entiere' => ['type' => 'boolean', 'description' => "true pour un évènement sur la ou les journées entières."],
-                        'description' => ['type' => 'string', 'description' => "Description de l'évènement (optionnel)."],
-                        'lieu'    => ['type' => 'string', 'description' => "Lieu (optionnel)."],
+                        'description' => ['type' => 'string', 'description' => "Description / ordre du jour, en texte simple (optionnel). Les invités la reçoivent."],
+                        'lieu'    => ['type' => 'string', 'description' => "Lieu en texte libre (optionnel). Pour une salle de réunion de l'organisation, utilise plutôt `salle`."],
+                        'salle'   => ['type' => 'string', 'description' => "Salle de réunion à RÉSERVER : son nom tel que l'annuaire le connaît (via lister_salles_outlook) ou son adresse email. Elle devient le lieu et reçoit la demande de réservation ; elle accepte ou refuse d'elle-même selon son agenda. Une seule salle."],
+                        'invites' => ['type' => 'string', 'description' => "Adresses email des invités OBLIGATOIRES (des personnes), séparées par des virgules. Vide = évènement personnel, aucune invitation."],
+                        'invites_optionnels' => ['type' => 'string', 'description' => "Adresses email des invités FACULTATIFS, séparées par des virgules."],
+                    ] + $options + [
+                        'recurrence' => ['type' => 'string', 'enum' => UserOutlookCalendarService::RECURRENCES, 'description' => "Répétition. Omets pour un évènement unique. Le `debut` est la première occurrence."],
+                        'recurrence_intervalle' => ['type' => 'integer', 'description' => "Tous les N jours / semaines / mois / ans (défaut : 1 ; 2 = une semaine sur deux)."],
+                        'recurrence_jours' => ['type' => 'string', 'description' => "Récurrence hebdomadaire : jours, séparés par des virgules (ex. « lundi, jeudi »). Défaut : le jour du début."],
+                        'recurrence_fin' => ['type' => 'string', 'description' => "Dernier jour de la série, AAAA-MM-JJ (optionnel)."],
+                        'recurrence_occurrences' => ['type' => 'integer', 'description' => "Nombre d'occurrences, si aucune date de fin (optionnel). Ni l'un ni l'autre = sans fin."],
                         'agenda'  => ['type' => 'string', 'description' => "Id de l'agenda cible. Vide = agenda principal."],
                     ],
                     'required'   => ['titre', 'debut'],
+                ],
+            ];
+            $defs[] = [
+                'name'        => UserOutlookCalendarService::TOOL_UPDATE,
+                'description' => "Modifie un évènement EXISTANT du calendrier Outlook de l'utilisateur : titre, "
+                    . "horaire, lieu, salle (réserver, changer, libérer), description, invités (ajout, retrait), "
+                    . "réunion Teams, rappel, disponibilité. Ne passe QUE ce qui change : tout paramètre omis reste tel quel. "
+                    . "Soumis à approbation (carte). ATTENTION : dès qu'une réunion change, Outlook en "
+                    . "informe ses invités par email. Seul l'organisateur peut modifier une réunion ; "
+                    . "sur une réunion organisée par quelqu'un d'autre, seuls le rappel et la "
+                    . "disponibilité se règlent. Aucune suppression ni annulation.",
+                'parameters'  => [
+                    'type'       => 'object',
+                    'properties' => [
+                        'evenement' => ['type' => 'string', 'description' => "ID de l'évènement (via rechercher_agenda_outlook ou lire_evenement_agenda_outlook). L'id d'une occurrence ne modifie que cette occurrence."],
+                        'titre'  => ['type' => 'string', 'description' => "Nouveau titre."],
+                        'debut'  => ['type' => 'string', 'description' => "Nouveau début : AAAA-MM-JJ HH:MM. Seul, il garde la durée. Une date sans heure (AAAA-MM-JJ) déplace le jour en gardant l'heure."],
+                        'fin'    => ['type' => 'string', 'description' => "Nouvelle fin : AAAA-MM-JJ HH:MM (journée entière : AAAA-MM-JJ du dernier jour). Seule, elle garde le début."],
+                        'journee_entiere' => ['type' => 'boolean', 'description' => "true pour le passer en journée entière."],
+                        'lieu'    => ['type' => 'string', 'description' => "Nouveau lieu en texte libre. Sur une réunion dans une salle, il complète le nom de la salle (pour quitter la salle : `retirer_salle`)."],
+                        'salle'   => ['type' => 'string', 'description' => "Salle à réserver pour cette réunion (nom via lister_salles_outlook, ou adresse email). REMPLACE la salle actuelle, qui est libérée."],
+                        'retirer_salle' => ['type' => 'boolean', 'description' => "true pour libérer la salle réservée (elle quitte la réunion et le lieu)."],
+                        'description' => ['type' => 'string', 'description' => "Nouvelle description (REMPLACE l'actuelle). Impossible sur une réunion Teams."],
+                        'ajouter_invites' => ['type' => 'string', 'description' => "Adresses email à inviter (obligatoires), séparées par des virgules. Les invités actuels restent."],
+                        'ajouter_invites_optionnels' => ['type' => 'string', 'description' => "Adresses email à inviter en facultatif."],
+                        'retirer_invites' => ['type' => 'string', 'description' => "Adresses email à retirer des invités."],
+                    ] + $options,
+                    'required'   => ['evenement'],
                 ],
             ];
         }
@@ -239,20 +381,34 @@ final class OutlookCalendarTools extends AbstractToolProvider
             . "(« quand suis-je dispo ? », « trouve une heure avec Paul la semaine prochaine »), appelle "
             . "`trouver_creneaux_outlook` : il calcule les créneaux pour toi, participants compris quand ils sont dans "
             . "le même annuaire ; propose ensuite le créneau et, si l'utilisateur le veut, crée l'évènement "
-            . "avec son `debut`. Si un outil renvoie un champ "
+            . "avec son `debut`. SALLES DE RÉUNION : `lister_salles_outlook` donne les salles de l'organisation "
+            . "(nom, adresse) et, avec `debut` et `fin`, celles qui sont libres sur ce créneau ; pour qu'un créneau "
+            . "convienne AUSSI à une salle, ajoute son adresse aux `participants` de `trouver_creneaux_outlook`. "
+            . "Si un outil renvoie un champ "
             . "`error`, transmets ce message tel quel à l'utilisateur sans l'inventer ni le reformuler.";
 
         if ($calendar->canWrite()) {
-            $txt .= " Tu peux créer des évènements avec `creer_evenement_agenda_outlook`, uniquement sur "
-                . "demande claire de l'utilisateur. IMPORTANT : chaque création est soumise à son "
-                . "approbation — l'outil renvoie `en_attente_approbation` et une carte s'affiche sous ta "
-                . "réponse. N'affirme JAMAIS que l'évènement a été créé : annonce qu'il attend son "
-                . "approbation dans la carte ci-dessous, en résumant titre et date. Tu ne peux PAS ajouter "
-                . "de participants (Microsoft enverrait l'invitation) : crée l'évènement sans invité et "
-                . "invite l'utilisateur à les ajouter lui-même dans Outlook. Ne modifie ni ne supprime "
-                . "jamais d'évènement existant : aucun outil n'existe pour cela.";
+            $txt .= " Tu peux créer des évènements et des réunions avec `creer_evenement_agenda_outlook`, "
+                . "et modifier un évènement existant avec `modifier_evenement_agenda_outlook` (cherche-le "
+                . "ou lis-le d'abord pour avoir son id), uniquement sur demande claire de l'utilisateur. "
+                . "IMPORTANT : chaque création ou modification est soumise à son approbation — l'outil "
+                . "renvoie `en_attente_approbation` et une carte s'affiche sous ta réponse. N'affirme JAMAIS "
+                . "que c'est fait : annonce que cela attend son approbation dans la carte ci-dessous, en "
+                . "résumant titre, date et invités. INVITÉS : Outlook leur écrit par email dès l'approbation "
+                . "(invitation à la création, mise à jour à chaque changement), sans retour possible. "
+                . "N'invite donc que les personnes que l'utilisateur a désignées, avec leur adresse email "
+                . "exacte : si tu n'as qu'un nom, cherche l'adresse (ses emails, son agenda) ou demande-la, "
+                . "ne la devine jamais. Pour RÉSERVER une salle, passe-la dans `salle` (nom exact rendu par "
+                . "`lister_salles_outlook`, ou son adresse) — jamais dans `invites` ni seulement dans `lieu`, qui "
+                . "n'est que du texte ; ne la réserve que si l'utilisateur l'a demandée. La salle accepte ou refuse "
+                . "d'elle-même selon son agenda : ne dis jamais qu'elle est réservée, dis qu'elle recevra la "
+                . "demande ; si l'outil renvoie un `avertissement` (salle déjà prise), dis-le et propose une salle "
+                . "libre. Pour une réunion à distance, passe `visio: true` (réunion Teams) ; "
+                . "pour trouver un horaire commun, appelle d'abord `trouver_creneaux_outlook`. Pour une "
+                . "modification, ne passe que ce qui change. Tu ne peux ni supprimer ni annuler un "
+                . "évènement : aucun outil n'existe pour cela, l'utilisateur le fait dans Outlook.";
         } else {
-            $txt .= " Tu ne peux PAS créer d'évènements : la connexion actuelle au calendrier Outlook est "
+            $txt .= " Tu ne peux PAS créer ni modifier d'évènements : la connexion actuelle au calendrier Outlook est "
                 . "en lecture seule. Si l'utilisateur le demande, invite-le à reconnecter son calendrier "
                 . "dans Réglages → Comptes connectés.";
         }

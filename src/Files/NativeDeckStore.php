@@ -3,7 +3,8 @@
 declare(strict_types=1);
 
 /**
- * Présentations et classeurs réalisés par le modèle : le SEUL fichier livré
+ * Fichiers réalisés par le modèle (présentations, classeurs, documents PDF
+ * et Word) : le SEUL fichier livré
  * dans une conversation que MIA garde sur le disque.
  *
  * Les autres fichiers sont fabriqués au clic depuis le texte affiché (rien
@@ -15,7 +16,7 @@ declare(strict_types=1);
  * Rangés dans un SOUS-dossier de storage/uploads (volume persistant) : le
  * balayage des orphelins de l'élagage ne descend pas dans les sous-dossiers
  * (PruningService::balayerOrphelins), il ne les prendrait donc pas pour des
- * pièces jointes abandonnées. Un fichier = `<jeton>.pptx` (ou `.xlsx`) +
+ * pièces jointes abandonnées. Un fichier = `<jeton>.pptx` (ou `.xlsx`, `.pdf`, `.docx`) +
  * `<jeton>.json` (nom, compte, conversation, modèle) ; le jeton (128 bits) est le seul
  * identifiant, et le téléchargement vérifie en plus le compte et la
  * conversation.
@@ -28,6 +29,8 @@ final class NativeDeckStore
     public const TYPES = [
         'pptx' => 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
         'xlsx' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        'pdf'  => 'application/pdf',
+        'docx' => 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
     ];
 
     private static ?string $dir = null;
@@ -82,7 +85,7 @@ final class NativeDeckStore
      * Fichier d'un jeton, s'il existe encore et appartient à ce compte et à
      * cette conversation.
      *
-     * @return array{path: string, name: string, mime: string}|null
+     * @return array{path: string, name: string, mime: string, days_left: int}|null
      */
     public static function find(string $token, int $userId, int $convId): ?array
     {
@@ -99,13 +102,28 @@ final class NativeDeckStore
             return null;
         }
 
-        return ['path' => $path, 'name' => (string)($meta['name'] ?? 'presentation.pptx'), 'mime' => self::TYPES[$ext]];
+        return [
+            'path'      => $path,
+            'name'      => (string)($meta['name'] ?? 'presentation.pptx'),
+            'mime'      => self::TYPES[$ext],
+            'days_left' => self::daysLeft((int)@filemtime($path), time()),
+        ];
     }
 
-    /** Extension rangée d'après le nom du fichier : .xlsx pour un classeur, .pptx sinon (pure). */
+    /** Jours entiers avant l'effacement d'un fichier de cet âge, au moins 1 tant qu'il existe (pure). */
+    public static function daysLeft(int $mtime, int $now): int
+    {
+        $left = $mtime + self::RETENTION_DAYS * 86400 - $now;
+
+        return max(1, (int)ceil($left / 86400));
+    }
+
+    /** Extension rangée d'après le nom du fichier : celle d'un genre connu, .pptx sinon (pure). */
     public static function extensionOf(string $filename): string
     {
-        return strtolower((string)pathinfo($filename, PATHINFO_EXTENSION)) === 'xlsx' ? 'xlsx' : 'pptx';
+        $ext = strtolower((string)pathinfo($filename, PATHINFO_EXTENSION));
+
+        return isset(self::TYPES[$ext]) ? $ext : 'pptx';
     }
 
     /** Un fichier de cet âge doit-il partir ? (pure) */
@@ -123,15 +141,19 @@ final class NativeDeckStore
         }
         $now   = $now ?? time();
         $count = 0;
-        // Deux motifs plutôt que GLOB_BRACE, absent des libc qui ne le portent pas (musl).
-        foreach (array_merge(glob($dir . '/*.pptx') ?: [], glob($dir . '/*.xlsx') ?: []) as $path) {
+        // Un motif par extension plutôt que GLOB_BRACE, absent des libc qui ne le portent pas (musl).
+        $paths = [];
+        foreach (array_keys(self::TYPES) as $ext) {
+            $paths = array_merge($paths, glob($dir . '/*.' . $ext) ?: []);
+        }
+        foreach ($paths as $path) {
             if (!self::expired((int)@filemtime($path), $now)) {
                 continue;
             }
             if (@unlink($path)) {
                 $count++;
             }
-            @unlink(substr($path, 0, -5) . '.json');
+            @unlink(dirname($path) . '/' . pathinfo($path, PATHINFO_FILENAME) . '.json');
         }
 
         return $count;

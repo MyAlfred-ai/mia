@@ -42,22 +42,24 @@ final class WorkflowRun
         $row['inputs'] = (array)json_decode((string)($row['inputs_json'] ?? ''), true);
         $row['error'] = $row['error_json'] !== null ? (array)json_decode((string)$row['error_json'], true) : null;
         $row['parent_run_id'] = isset($row['parent_run_id']) && $row['parent_run_id'] !== null ? (int)$row['parent_run_id'] : null;
+        // Passage de l'exécution appelante qui attend celle-ci (brique « Appeler un workflow »).
+        $row['caller_step_id'] = isset($row['caller_step_id']) && $row['caller_step_id'] !== null ? (int)$row['caller_step_id'] : null;
         return $row;
     }
 
     public static function create(
         int $workflowId, int $version, int $userId, array $definition, string $trigger,
-        ?\DateTimeImmutable $slot, array $inputs, string $timezone, ?string $ref = null, ?int $parentRunId = null
+        ?\DateTimeImmutable $slot, array $inputs, string $timezone, ?string $ref = null, ?int $parentRunId = null, ?int $callerStepId = null
     ): ?int {
         $db = Database::getInstance();
         try {
             $db->prepare(
-                'INSERT INTO workflow_runs (workflow_id, version, user_id, trigger_kind, trigger_ref, parent_run_id, slot_at, status, definition_json, inputs_json, timezone)
-                 VALUES (?,?,?,?,?,?,?,?,?,?,?)'
+                'INSERT INTO workflow_runs (workflow_id, version, user_id, trigger_kind, trigger_ref, parent_run_id, caller_step_id, slot_at, status, definition_json, inputs_json, timezone)
+                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?)'
             )->execute([
                 $workflowId, $version, $userId, mb_substr($trigger, 0, 16),
                 $ref !== null && $ref !== '' ? mb_substr($ref, 0, 190) : null,
-                $parentRunId,
+                $parentRunId, $callerStepId,
                 $slot !== null ? ScheduledTask::sqlUtc($slot) : null,
                 self::RUNNING, Workflow::encode($definition),
                 json_encode($inputs, JSON_UNESCAPED_UNICODE), $timezone,
@@ -111,6 +113,89 @@ final class WorkflowRun
             $parentRunId = $next !== false && $next !== null ? (int)$next : null;
         }
         return $depth;
+    }
+
+    /**
+     * Les exécutions au-dessus d'une exécution appelée (ou enchaînée), de la
+     * plus proche à la racine : id, workflow, déclencheur. Bornée, sans boucle.
+     *
+     * @return list<array{id: int, workflow_id: int, trigger_kind: string}>
+     */
+    public static function ancestors(?int $parentRunId): array
+    {
+        $out = [];
+        $seen = [];
+        while ($parentRunId !== null && $parentRunId > 0 && count($out) < 10 && !isset($seen[$parentRunId])) {
+            $seen[$parentRunId] = true;
+            $stmt = Database::getInstance()->prepare('SELECT id, workflow_id, trigger_kind, parent_run_id FROM workflow_runs WHERE id = ?');
+            $stmt->execute([$parentRunId]);
+            $row = $stmt->fetch();
+            if (!$row) {
+                break;
+            }
+            $out[] = ['id' => (int)$row['id'], 'workflow_id' => (int)$row['workflow_id'], 'trigger_kind' => (string)$row['trigger_kind']];
+            $parentRunId = $row['parent_run_id'] !== null ? (int)$row['parent_run_id'] : null;
+        }
+        return $out;
+    }
+
+    /** Passage qui attend cette exécution (brique « Appeler un workflow »), ou null. Lecture légère. */
+    public static function callerStepOf(int $runId): ?int
+    {
+        $stmt = Database::getInstance()->prepare('SELECT caller_step_id FROM workflow_runs WHERE id = ?');
+        $stmt->execute([$runId]);
+        $v = $stmt->fetchColumn();
+        return $v !== false && $v !== null ? (int)$v : null;
+    }
+
+    /** L'exécution lancée par un passage d'appel (brique « Appeler un workflow »), ou null. */
+    public static function calledBy(int $stepId): ?array
+    {
+        $stmt = Database::getInstance()->prepare('SELECT * FROM workflow_runs WHERE caller_step_id = ? ORDER BY id DESC LIMIT 1');
+        $stmt->execute([$stepId]);
+        $row = $stmt->fetch();
+        return $row ? self::hydrate($row) : null;
+    }
+
+    /**
+     * Exécutions appelées par celles-ci : passage appelant → {id, status,
+     * current_key, workflow_id, name, color} — sans la définition (affichage).
+     *
+     * @param list<int> $stepIds
+     * @return array<int, array>
+     */
+    public static function calledBySteps(array $stepIds): array
+    {
+        $stepIds = array_values(array_unique(array_filter(array_map('intval', $stepIds))));
+        if ($stepIds === []) {
+            return [];
+        }
+        $in = implode(',', array_fill(0, count($stepIds), '?'));
+        $stmt = Database::getInstance()->prepare(
+            "SELECT r.id, r.caller_step_id, r.status, r.current_key, r.workflow_id, r.conversation_id, r.error_json, w.name, w.color
+             FROM workflow_runs r JOIN workflows w ON w.id = r.workflow_id
+             WHERE r.caller_step_id IN ($in) ORDER BY r.id ASC"
+        );
+        $stmt->execute($stepIds);
+        $out = [];
+        foreach ($stmt->fetchAll() as $row) {
+            $out[(int)$row['caller_step_id']] = [
+                'id' => (int)$row['id'], 'status' => (string)$row['status'], 'current_key' => (string)$row['current_key'],
+                'workflow_id' => (int)$row['workflow_id'], 'conversation_id' => $row['conversation_id'] !== null ? (int)$row['conversation_id'] : null,
+                'name' => (string)$row['name'], 'color' => (string)$row['color'],
+                'error' => $row['error_json'] !== null ? (array)json_decode((string)$row['error_json'], true) : null,
+            ];
+        }
+        return $out;
+    }
+
+    /** Un passage par son identifiant (toutes exécutions), ou null. */
+    public static function step(int $stepId): ?array
+    {
+        $stmt = Database::getInstance()->prepare('SELECT * FROM workflow_run_steps WHERE id = ?');
+        $stmt->execute([$stepId]);
+        $row = $stmt->fetch();
+        return $row ? self::hydrateStep($row) : null;
     }
 
     public static function attachConversation(int $runId, int $convId): void
@@ -221,6 +306,65 @@ final class WorkflowRun
         $stmt = Database::getInstance()->prepare('SELECT COUNT(*) FROM workflow_runs WHERE workflow_id = ? AND user_id = ? AND id <= ?');
         $stmt->execute([(int)$run['workflow_id'], (int)$run['user_id'], (int)$run['id']]);
         return (int)$stmt->fetchColumn();
+    }
+
+    /**
+     * États qu'une suppression interrompt : l'exécution n'est pas finie. Une
+     * exécution en échec ou en pause (reprenable) en fait partie — après la
+     * suppression, plus rien ne pourrait la reprendre, ses cartes resteraient.
+     */
+    public const UNFINISHED = [self::RUNNING, self::WAITING, self::PAUSED, self::FAILED];
+
+    /** États dits « en cours » dans la fenêtre de suppression (une exécution en échec ne tourne plus). */
+    public const LIVE = [self::RUNNING, self::WAITING, self::PAUSED];
+
+    /**
+     * Ce que la suppression d'un workflow emporte, workflow par workflow, en
+     * UNE lecture : ses lancements (l'historique qui disparaît avec lui) et
+     * ceux encore en cours (qu'elle arrête).
+     *
+     * @return array<int, array{runs: int, live: int}>
+     */
+    public static function deletionFacts(int $userId, ?int $workflowId = null): array
+    {
+        $stmt = Database::getInstance()->prepare(
+            'SELECT workflow_id, status, COUNT(*) AS n FROM workflow_runs WHERE user_id = ?'
+            . ($workflowId !== null ? ' AND workflow_id = ?' : '') . ' GROUP BY workflow_id, status'
+        );
+        $stmt->execute($workflowId !== null ? [$userId, $workflowId] : [$userId]);
+        return self::foldDeletionFacts($stmt->fetchAll());
+    }
+
+    /**
+     * Forme pure de deletionFacts().
+     *
+     * @param list<array{workflow_id: int|string, status: string, n: int|string}> $rows
+     * @return array<int, array{runs: int, live: int}>
+     */
+    public static function foldDeletionFacts(array $rows): array
+    {
+        $out = [];
+        foreach ($rows as $row) {
+            $id = (int)$row['workflow_id'];
+            $n = (int)$row['n'];
+            $out[$id] ??= ['runs' => 0, 'live' => 0];
+            $out[$id]['runs'] += $n;
+            if (in_array((string)$row['status'], self::LIVE, true)) {
+                $out[$id]['live'] += $n;
+            }
+        }
+        return $out;
+    }
+
+    /** Exécutions d'un workflow qui ne sont pas finies (cf. UNFINISHED) — à arrêter avant de le supprimer. */
+    public static function unfinishedFor(int $workflowId, int $userId): array
+    {
+        $in = implode(',', array_fill(0, count(self::UNFINISHED), '?'));
+        $stmt = Database::getInstance()->prepare(
+            "SELECT * FROM workflow_runs WHERE workflow_id = ? AND user_id = ? AND status IN ($in) ORDER BY id"
+        );
+        $stmt->execute([$workflowId, $userId, ...self::UNFINISHED]);
+        return array_map([self::class, 'hydrate'], $stmt->fetchAll());
     }
 
     /**
@@ -446,6 +590,20 @@ final class WorkflowRun
         return $stmt->rowCount() > 0;
     }
 
+    /**
+     * Une tentative en cours change de job (étape qui remet une création : le
+     * tour, puis la fabrication), UNE seule fois : rend false si elle n'était
+     * plus en cours ou plus rattachée à `$fromJob` (fin de job rejouée).
+     */
+    public static function swapStepJob(int $stepId, int $fromJob, int $toJob, array $detail): bool
+    {
+        $stmt = Database::getInstance()->prepare(
+            "UPDATE workflow_run_steps SET job_id = ?, detail_json = ? WHERE id = ? AND status = '" . self::STEP_RUNNING . "' AND job_id = ?"
+        );
+        $stmt->execute([$toJob, json_encode($detail, JSON_UNESCAPED_UNICODE), $stepId, $fromJob]);
+        return $stmt->rowCount() > 0;
+    }
+
     /** Heure de reprise d'une tentative en attente (attente, nouvel essai), null pour l'effacer. */
     public static function setResumeAt(int $stepId, ?\DateTimeImmutable $at): void
     {
@@ -541,6 +699,91 @@ final class WorkflowRun
     }
 
     /** Coût de l'exécution : crédits de toutes les opérations de sa conversation. */
+    /** Exécutions terminées relues pour dire ce qu'un workflow coûte vraiment. */
+    public const RECENT_RUNS = 10;
+
+    /**
+     * Ce qu'ont réellement coûté les dernières exécutions TERMINÉES d'un
+     * workflow (menées au bout ou arrêtées comme prévu) : tout ce que leur
+     * conversation a débité, étapes, conditions, créations comprises. Une
+     * exécution qui n'a rien coûté (aucun appel de modèle) ne compte pas. La
+     * définition a pu changer depuis : c'est un repère, l'estimation reste
+     * celle de la version en cours. Null sans exécution facturée ; ne lève
+     * jamais.
+     *
+     * @return array{runs:int, avg:int, min:int, max:int}|null
+     */
+    public static function recentCredits(int $workflowId, int $limit = self::RECENT_RUNS): ?array
+    {
+        if ($workflowId <= 0) {
+            return null;
+        }
+        try {
+            $stmt = Database::getInstance()->prepare(
+                "SELECT r.id, (SELECT COALESCE(SUM(u.credits_used), 0) FROM usage_logs u WHERE u.conversation_id = r.conversation_id)
+                      + (SELECT COALESCE(SUM(t.credits_used), 0) FROM tool_usage_logs t WHERE t.conversation_id = r.conversation_id) AS credits
+                 FROM workflow_runs r
+                 WHERE r.workflow_id = ? AND r.status IN ('" . self::DONE . "', '" . self::STOPPED . "') AND r.conversation_id IS NOT NULL
+                 ORDER BY r.id DESC
+                 LIMIT " . max(1, min(50, $limit))
+            );
+            $stmt->execute([$workflowId]);
+            // Une exécution paie aussi les workflows qu'elle a appelés (leurs
+            // étapes sont comptées dans LEUR conversation).
+            return self::summarizeCredits(array_map(
+                static fn(array $row): int => (int)$row['credits'] + self::calledCredits((int)$row['id']),
+                $stmt->fetchAll()
+            ));
+        } catch (\Throwable $e) {
+            error_log('[Workflows] coût des dernières exécutions illisible : ' . $e->getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * Moyenne, minimum et maximum de crédits débités (pure) ; les exécutions
+     * à zéro écartées. Null s'il n'en reste aucune.
+     *
+     * @param list<int> $credits
+     * @return array{runs:int, avg:int, min:int, max:int}|null
+     */
+    public static function summarizeCredits(array $credits): ?array
+    {
+        $paid = array_values(array_filter($credits, static fn($c): bool => (int)$c > 0));
+        if ($paid === []) {
+            return null;
+        }
+        return [
+            'runs' => count($paid),
+            'avg'  => (int)round(array_sum($paid) / count($paid)),
+            'min'  => (int)min($paid),
+            'max'  => (int)max($paid),
+        ];
+    }
+
+    /**
+     * Crédits débités par les workflows qu'une exécution a APPELÉS (brique
+     * « Appeler un workflow »), leurs propres appels compris. Ne lève jamais.
+     */
+    public static function calledCredits(int $runId, int $depth = 0): int
+    {
+        if ($runId <= 0 || $depth > 4) {
+            return 0;
+        }
+        try {
+            $stmt = Database::getInstance()->prepare('SELECT id, conversation_id FROM workflow_runs WHERE parent_run_id = ? AND caller_step_id IS NOT NULL');
+            $stmt->execute([$runId]);
+            $total = 0;
+            foreach ($stmt->fetchAll() as $row) {
+                $total += self::credits($row['conversation_id'] !== null ? (int)$row['conversation_id'] : null)
+                    + self::calledCredits((int)$row['id'], $depth + 1);
+            }
+            return $total;
+        } catch (\Throwable) {
+            return 0;
+        }
+    }
+
     public static function credits(?int $convId): int
     {
         if (!$convId) {

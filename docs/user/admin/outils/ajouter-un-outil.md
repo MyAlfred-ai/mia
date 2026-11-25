@@ -10,7 +10,7 @@ sidebar:
 
 ## Avant de commencer
 
-- La clé de l'éditeur du moteur est enregistrée dans **Modèles IA → Clés API** — ou vous avez une
+- La clé de l'éditeur du moteur est enregistrée dans **Modèles IA → Fournisseurs et modèles** — ou vous avez une
   clé dédiée à l'outil.
 - Pour n8n : l'adresse de votre instance n8n et une clé d'API n8n. Pour Gamma : une clé d'API Gamma.
 
@@ -66,6 +66,21 @@ Personnes → Groupes → Droits d'accès → Outils. »
 
 Pour un outil image, n8n ou Gamma destiné à un assistant : cochez-le aussi dans la section
 **Capacités** de la fiche de l'assistant.
+
+### Options des images d'un outil image
+
+Dans la fiche de l'outil (**Modifier**), **Options de l'image** règle, pour toutes ses images :
+
+- **Fond transparent** — le sujet se détache sur un fond vide (logo, pictogramme, produit
+  détouré). Le fichier passe en PNG (ou WebP), seuls formats qui gardent la transparence : le JPEG
+  n'est alors plus proposé. Sur certains modèles, la transparence est encore **en aperçu** chez le
+  fournisseur : la fiche l'indique.
+- **Format du fichier** — celui du modèle (PNG), PNG, JPEG (plus léger, plus rapide) ou WebP.
+- **Format** — non spécifié, carré, paysage ou portrait.
+
+Chaque réglage n'apparaît que si le modèle choisi l'accepte : Nano Banana ne propose que le format,
+DALL-E rien. Un assistant qui se sert de l'outil, ou une brique de workflow, peut préciser ces
+réglages pour lui-même — le plus précis l'emporte.
 
 Un outil **Présentation Gamma** sert aussi, **sans assistant**, le choix **Par Gamma** du bouton
 **Version soignée** des présentations PowerPoint livrées dans le chat : il apparaît pour les

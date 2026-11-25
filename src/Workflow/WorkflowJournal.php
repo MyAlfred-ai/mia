@@ -300,7 +300,7 @@ final class WorkflowJournal
         $done = 0;
         foreach ($steps as $st) {
             if ($st['status'] === WorkflowRun::STEP_DONE && !in_array($st['node_key'], [WorkflowSpec::START_KEY, WorkflowSpec::END_KEY], true)
-                && empty($st['detail']['kind'])) {
+                && in_array((string)($st['detail']['kind'] ?? ''), ['', 'call'], true)) {
                 $done++;
             }
         }
@@ -317,6 +317,8 @@ final class WorkflowJournal
             'conversation_url' => !empty($run['conversation_id']) ? '/chat/' . (int)$run['conversation_id'] : null,
             'error_box' => $error,
             'parent'    => !empty($run['parent_run_id']) ? '/workflows/runs/' . (int)$run['parent_run_id'] : null,
+            // Appelé par une brique d'un autre workflow, ou lancé à la fin d'un autre.
+            'parent_label' => !empty($run['caller_step_id']) ? t('Exécution appelante') : t('Lancement précédent'),
             'open'      => self::openAction($run),
         ];
     }
@@ -373,6 +375,9 @@ final class WorkflowJournal
             }
             $review = str_ends_with($base, WorkflowEngine::REVIEW_SUFFIX);
             $kind = (string)($s['detail']['kind'] ?? '');
+            // Un appel est une brique ordinaire (durée, tentatives) : son
+            // détail ne dit « call » que pour retrouver l'exécution appelée.
+            $kind = $kind === 'call' ? '' : $kind;
             $started = ScheduledTask::fromSqlUtc((string)($s['started_at'] ?? ''))?->setTimezone($tz);
             $finished = ScheduledTask::fromSqlUtc((string)($s['finished_at'] ?? ''))?->setTimezone($tz);
 
@@ -397,6 +402,8 @@ final class WorkflowJournal
                 'cards'    => [],
                 'deliveries' => [],
                 'piece'    => null,
+                // Un appel : le lien vers l'exécution du workflow appelé.
+                'link'     => null,
                 // Fichiers reçus au départ : chacun sa carte de pièce (aperçu, contenu, téléchargement).
                 'files'    => [],
                 'fields'   => [],
@@ -487,8 +494,25 @@ final class WorkflowJournal
         $status = (string)$s['status'];
         $outcome = (string)$s['outcome'];
         $kind = (string)($d['kind'] ?? '');
+        $kind = $kind === 'call' ? '' : $kind;
         $type = (string)$node['type'];
         [$base, $iter] = WorkflowLoop::splitIter((string)$s['node_key']);
+
+        // Appeler un workflow : ce qui lui a été passé et où le suivre valent
+        // pour toutes les issues (en cours, faite, en échec, arrêtée).
+        $called = '';
+        if ($type === WorkflowSpec::TYPE_CALL) {
+            $called = trim((string)($d['workflow'] ?? ''));
+            foreach ((array)($d['params'] ?? []) as $p) {
+                if (is_array($p) && trim((string)($p['label'] ?? '')) !== '') {
+                    $e['fields'][] = ['label' => (string)$p['label'], 'value' => mb_substr((string)($p['value'] ?? ''), 0, 200)];
+                }
+            }
+            $e['fields'] = array_slice($e['fields'], 0, self::MAX_FIELDS);
+            if (!empty($d['child_run'])) {
+                $e['link'] = ['label' => t('Voir son exécution'), 'href' => '/workflows/runs/' . (int)$d['child_run']];
+            }
+        }
 
         if ($status === WorkflowRun::STEP_CANCELLED) {
             $e['status'] = $outcome === 'expired' ? t('Délai de validation dépassé : l’exécution s’est arrêtée') : t('Arrêtée');
@@ -527,6 +551,33 @@ final class WorkflowJournal
             return;
         }
 
+        if ($status === WorkflowRun::STEP_RUNNING && ($d['phase'] ?? '') === 'create') {
+            // Étape qui remet une création : la demande est rédigée, l'outil fabrique.
+            $e['status'] = t('Création en cours avec « {outil} »…', ['outil' => (string)($d['tool'] ?? '')]);
+            return;
+        }
+        if ($status === WorkflowRun::STEP_RUNNING && $type === WorkflowSpec::TYPE_CALL) {
+            // L'état du workflow appelé (lu par le contrôleur) : il travaille,
+            // il attend la personne dans SON exécution, ou il s'est arrêté.
+            $child = (array)($ctx['calls'][(int)($s['id'] ?? 0)] ?? []);
+            $childStatus = (string)($child['status'] ?? '');
+            if ($childStatus === WorkflowRun::WAITING) {
+                $e['status'] = t('« {nom} » attend votre décision', ['nom' => $called]);
+                $e['tone'] = 'wait';
+                if ($e['link'] !== null) {
+                    $e['link']['label'] = t('Décider dans son exécution');
+                }
+            } elseif (in_array($childStatus, [WorkflowRun::FAILED, WorkflowRun::PAUSED], true)) {
+                $e['status'] = $childStatus === WorkflowRun::PAUSED
+                    ? t('« {nom} » est en pause : l’appel reprendra avec lui', ['nom' => $called])
+                    : t('« {nom} » s’est arrêté sur une erreur : l’appel reprendra avec lui', ['nom' => $called]);
+                $e['tone'] = $childStatus === WorkflowRun::PAUSED ? 'warn' : 'err';
+                $e['error'] = self::errorOf(['error' => (array)($child['error'] ?? [])], 'error');
+            } else {
+                $e['status'] = $called !== '' ? t('« {nom} » travaille…', ['nom' => $called]) : t('Appel en préparation…');
+            }
+            return;
+        }
         if ($status === WorkflowRun::STEP_RUNNING) {
             $e['status'] = match ($type) {
                 WorkflowSpec::TYPE_CONDITION => t('MIA examine la question…'),
@@ -707,7 +758,26 @@ final class WorkflowJournal
                 return;
         }
 
-        // Étape, action, création.
+        // Étape, action, création, appel.
+        if ($type === WorkflowSpec::TYPE_CALL && empty($d['skipped_by']) && $outcome !== 'skipped') {
+            if ($outcome === 'stopped') {
+                $e['status'] = ($node['on_stop'] ?? WorkflowSpec::CALL_STOP_STOP) === WorkflowSpec::CALL_STOP_CONTINUE
+                    ? t('« {nom} » s’est arrêté avant son livrable : le workflow a continué sans sa pièce', ['nom' => $called])
+                    : t('« {nom} » s’est arrêté avant son livrable : le workflow s’arrête aussi', ['nom' => $called]);
+                return;
+            }
+            $e['status'] = t('« {nom} » a terminé', ['nom' => $called]);
+            if (isset($node['output']['key']) && !$e['redone']) {
+                $artKey = WorkflowLoop::iterKey((string)$node['output']['key'], $iter);
+                $a = $artifacts[$artKey] ?? null;
+                if ($a !== null) {
+                    $e['piece'] = self::pieceLine($run, $pieces[$node['output']['key']] ?? ['key' => $artKey, 'name' => $a['name'], 'form' => $a['form'], 'fields' => []], $a, $ctx);
+                }
+            } elseif ($e['redone']) {
+                $e['chips'][] = t('Refaite ensuite');
+            }
+            return;
+        }
         if (!empty($d['skipped_by'])) {
             $e['status'] = t('Ignorée, à votre demande');
             $e['tone'] = 'off';
@@ -725,7 +795,7 @@ final class WorkflowJournal
         }
         $e['status'] = match ($type) {
             WorkflowSpec::TYPE_CREATE => t('Créée'),
-            WorkflowSpec::TYPE_ACTION => t('Faite'),
+            WorkflowSpec::TYPE_ACTION => WorkflowSpec::isReadingAction($node) ? t('Messages lus') : t('Faite'),
             default                   => t('Terminée'),
         };
         if (trim((string)($d['remark'] ?? '')) !== '') {
@@ -1038,7 +1108,10 @@ final class WorkflowJournal
             $llm = (string)($s['detail']['llm'] ?? '');
             $model = $llm !== '' ? (string)($ctx['llms'][$llm] ?? self::modelName($llm)) : '';
             $who = $profile !== '' ? $profile : 'MIA';
-            return $model !== '' ? $who . ' · ' . $model : $who;
+            $who = $model !== '' ? $who . ' · ' . $model : $who;
+            // Sa pièce est une création : l'outil qui l'a fabriquée.
+            $tool = trim((string)($s['detail']['tool'] ?? ''));
+            return $tool !== '' ? $who . ' · ' . $tool : $who;
         }
         if ($type === WorkflowSpec::TYPE_CREATE) {
             return trim((string)($s['detail']['tool'] ?? ''));
@@ -1054,6 +1127,10 @@ final class WorkflowJournal
         }
         if (in_array($type, [WorkflowSpec::TYPE_CONDITION, WorkflowSpec::TYPE_ROUTE], true)) {
             return ($node['mode'] ?? '') === 'rule' ? t('Règle') : 'MIA';
+        }
+        if ($type === WorkflowSpec::TYPE_CALL) {
+            $name = trim((string)($s['detail']['workflow'] ?? ''));
+            return $name !== '' ? t('Workflow « {nom} »', ['nom' => $name]) : '';
         }
         return '';
     }
@@ -1176,6 +1253,7 @@ final class WorkflowJournal
             'file'     => 'folder',
             'webhook'  => 'webhook',
             'workflow' => 'chain',
+            'call'     => 'call',
             default    => 'hand',
         };
     }

@@ -2,7 +2,7 @@
 title: Changer sa photo de profil
 description: Choisir une image depuis votre appareil, coller l'adresse d'une image en ligne, ou retirer la photo.
 sidebar:
-  order: 4
+  order: 5
 ---
 
 ## Étapes

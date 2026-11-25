@@ -89,7 +89,9 @@ class QdrantHealth
 
             $row = [
                 'id'           => $kbId,
-                'name'         => (string)$kb['name'],
+                // Une base « Uniquement pour moi » reste dans le bilan (sa
+                // collection n'est pas orpheline), jamais nommée à un autre.
+                'name'         => KnowledgeBase::displayNameFor($kb, Session::currentUser()),
                 'collection'   => $collection,
                 'is_system'    => (int)($kb['is_system'] ?? 0) === 1,
                 'model'        => (string)$kb['embedding_model'],
@@ -282,7 +284,7 @@ class QdrantHealth
     private static function basesWithCounts(): array
     {
         return Database::getInstance()->query(
-            "SELECT kb.id, kb.name, kb.is_system, kb.embedding_model, kb.embedding_dims,
+            "SELECT kb.id, kb.name, kb.is_system, kb.is_private, kb.created_by, kb.embedding_model, kb.embedding_dims,
                     (SELECT COUNT(*) FROM knowledge_base_documents d WHERE d.kb_id = kb.id) AS doc_count,
                     (SELECT COUNT(*) FROM knowledge_base_chunks  c WHERE c.kb_id  = kb.id) AS chunk_count,
                     (SELECT COUNT(*) FROM knowledge_base_documents d
@@ -290,6 +292,7 @@ class QdrantHealth
                     (SELECT COUNT(*) FROM knowledge_base_documents d
                       WHERE d.kb_id = kb.id AND d.vector_status = 'failed') AS failed_docs
              FROM knowledge_bases kb
+             WHERE kb.backend <> 'table'
              ORDER BY kb.name ASC"
         )->fetchAll();
     }

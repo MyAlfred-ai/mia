@@ -84,6 +84,7 @@ final class WorkflowHookController
 
         $vals = WorkflowTriggers::hookValues($def, $body);
         try {
+            WorkflowEngine::asUser($user, static fn() => WorkflowEngine::assertReady($wf, $user));
             $res = WorkflowEngine::launch($wf, $user, $vals['values'], [], 'webhook', null, WorkflowTriggers::timezoneOf($def), [
                 'text' => $vals['text'],
                 'headline' => t('Appel de l’adresse du workflow'),

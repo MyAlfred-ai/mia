@@ -19,7 +19,7 @@ l'**union** des droits de ses groupes actifs, et le **plus élevé** de leurs qu
 2. Ouvrez sa carte. Trois volets :
    - **Paramètres** : **Nom du groupe**, **Quota (k crédits/mois)** — 10 = 10 000 crédits par mois et
      **par membre** —, **Groupe actif** ;
-   - **Membres** : recherchez et cochez les personnes ;
+   - **Membres** : recherchez (par nom ou adresse, sans tenir compte des accents) et cochez les personnes ;
    - **Droits d'accès** : trois colonnes, **Assistants**, **Outils**, **LLMs**, avec les raccourcis
      **Tout** et **Aucun**.
 3. Cochez ce que le groupe autorise. Tout s'enregistre au fil de l'eau.
@@ -57,7 +57,8 @@ droit. Un modèle imposé par un assistant échappe à ces listes.
 coché nulle part, seuls les administrateurs le voient. Voir [Les outils](../outils/index.md).
 
 **Quota.** Le plus élevé des quotas **définis** parmi les groupes actifs de la personne ; un groupe
-sans quota est neutre et ne rend personne illimité. Un quota individuel prime sur tout. Voir
+sans quota est neutre et ne rend personne illimité. Un quota individuel compte avec eux : le plus
+généreux de tous l'emporte, jamais le plus restrictif. Voir
 [Fixer les quotas](../credits/fixer-les-quotas.md).
 
 **Groupe inactif.** Ses droits et son quota sont ignorés, pour tous ses membres.
@@ -77,4 +78,5 @@ sans quota est neutre et ne rend personne illimité. Un quota individuel prime s
 | Tout le monde n'a plus qu'un seul modèle | Aucun groupe n'a de liste et les utilisateurs ne sont que dans ★ Par défaut : cocher des modèles dans ce groupe. |
 | Un nouveau modèle n'apparaît chez personne | Il n'est coché dans aucune liste de groupe. |
 | Un outil ajouté n'apparaît que chez les administrateurs | Il n'est autorisé dans aucun groupe : le cocher dans la colonne **Outils**. |
-| Un membre du groupe *Direction*, sans quota, reste plafonné | Un autre de ses groupes a un quota : c'est lui qui s'applique. Lui donner un quota individuel élevé. |
+| Un membre du groupe *Direction*, sans quota, reste plafonné | Un autre de ses groupes a un quota : c'est lui qui s'applique. Donner un quota à *Direction*, ou un quota individuel élevé. |
+| Le quota d'un groupe a été relevé, mais un membre reste plus bas | Le groupe est-il **actif** ? Un groupe inactif ne compte pas. Sinon, sa consommation du mois a atteint ce quota : un ancien quota individuel plus bas ne le retient pas. |

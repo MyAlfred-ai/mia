@@ -35,7 +35,8 @@ final class DeepSeekV4Test extends TestCase
         $this->assertContains('vision', $info['tags']);
         $this->assertTrue(LlmCatalog::supportsToolUse('deepseek', 'deepseek-flash'));
         $this->assertTrue(LlmCatalog::supportsTemperature('deepseek', 'deepseek-flash'), 'hors réflexion, la température est honorée');
-        $this->assertFalse(LlmCatalog::supportsWebSearch('deepseek', 'deepseek-flash'));
+        $this->assertTrue(LlmCatalog::supportsWebSearch('deepseek', 'deepseek-flash'), 'recherche intégrée depuis le 13/11/2026');
+        $this->assertFalse(LlmCatalog::supportsWebSearchWithTools('deepseek', 'deepseek-flash'), 'jamais avec les outils de MIA');
         $this->assertSame(1000000, LlmCatalog::contextWindow('deepseek', 'deepseek-flash'));
         $this->assertFalse(LlmCatalog::thinkingMode('deepseek', 'deepseek-flash'));
         $this->assertSame(65536, LlmCatalog::maxOutputTokens('deepseek', 'deepseek-flash'));

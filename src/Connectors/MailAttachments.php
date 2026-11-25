@@ -48,6 +48,13 @@ final class MailAttachments
             => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
         'application/vnd.openxmlformats-officedocument.presentationml.presentation'
             => 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+        'application/msword'       => 'application/msword',
+        'application/vnd.ms-excel' => 'application/vnd.ms-excel',
+        'application/vnd.ms-powerpoint' => 'application/vnd.ms-powerpoint',
+        'message/rfc822'               => 'message/rfc822',
+        'application/vnd.ms-outlook'   => 'application/vnd.ms-outlook',
+        'application/zip'              => 'application/zip',
+        'application/x-zip-compressed' => 'application/zip',
         'application/vnd.oasis.opendocument.text'         => 'application/vnd.oasis.opendocument.text',
         'application/vnd.oasis.opendocument.spreadsheet'  => 'application/vnd.oasis.opendocument.spreadsheet',
         'application/vnd.oasis.opendocument.presentation' => 'application/vnd.oasis.opendocument.presentation',
@@ -74,6 +81,12 @@ final class MailAttachments
         'docx' => 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
         'xlsx' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
         'pptx' => 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+        'doc'  => 'application/msword',
+        'xls'  => 'application/vnd.ms-excel',
+        'ppt'  => 'application/vnd.ms-powerpoint', 'pps' => 'application/vnd.ms-powerpoint',
+        'eml'  => 'message/rfc822',
+        'msg'  => 'application/vnd.ms-outlook',
+        'zip'  => 'application/zip',
         'odt'  => 'application/vnd.oasis.opendocument.text',
         'ods'  => 'application/vnd.oasis.opendocument.spreadsheet',
         'odp'  => 'application/vnd.oasis.opendocument.presentation',
@@ -112,6 +125,7 @@ final class MailAttachments
         'application/xml'      => 'XML',
         'application/zip'      => 'archive ZIP',
         'message/rfc822'       => 'email joint',
+        'application/vnd.ms-outlook' => 'email Outlook (.msg)',
     ];
 
     // ===================== Inventaire =====================
@@ -138,16 +152,19 @@ final class MailAttachments
                         $headers[strtolower((string)($h['name'] ?? ''))] = (string)($h['value'] ?? '');
                     }
                 }
+                $type = strtolower(trim((string)($part['mimeType'] ?? '')));
                 $found[] = [
                     'nom'      => self::cleanName($name),
-                    'type'     => strtolower(trim((string)($part['mimeType'] ?? ''))),
+                    'type'     => $type,
                     'taille'   => (int)($body['size'] ?? 0),
                     'ref'      => $attId,
                     'data'     => $attId === '' ? $data : '',
                     // Image collée dans le corps (logo de signature…) : listée,
                     // mais signalée — ce n'est presque jamais « la pièce jointe ».
-                    'en_ligne' => str_starts_with(strtolower($headers['content-disposition'] ?? ''), 'inline')
-                        && isset($headers['content-id']),
+                    'en_ligne' => self::pastedImage(
+                        str_starts_with(strtolower($headers['content-disposition'] ?? ''), 'inline') && isset($headers['content-id']),
+                        $type, $name, (int)($body['size'] ?? 0)
+                    ),
                     'piece'    => 'fichier',
                 ];
             }
@@ -188,11 +205,30 @@ final class MailAttachments
                 'taille'   => (int)($a['size'] ?? 0),
                 'ref'      => (string)$a['id'],
                 'data'     => '',
-                'en_ligne' => !empty($a['isInline']),
+                'en_ligne' => self::pastedImage(!empty($a['isInline']), strtolower(trim((string)($a['contentType'] ?? ''))), (string)($a['name'] ?? ''), (int)($a['size'] ?? 0)),
                 'piece'    => $piece,
             ];
         }
         return self::numbered($found);
+    }
+
+    /** Au-delà, une image « en ligne » est une vraie photo jointe, pas un logo de signature. */
+    public const PASTED_IMAGE_MAX = 150 * 1024;
+
+    /**
+     * Une pièce « en ligne » n'est collée dans le texte que si c'est une
+     * PETITE IMAGE (logo de signature, pictogramme). Apple Mail et l'iPhone
+     * joignent en ligne les PDF, les documents et les photos : les écarter
+     * faisait passer un email muni d'un PDF pour « sans pièce jointe ». Pure.
+     */
+    public static function pastedImage(bool $inline, string $type, string $name, int $size): bool
+    {
+        if (!$inline) {
+            return false;
+        }
+        $ext = strtolower(pathinfo($name, PATHINFO_EXTENSION));
+        $image = str_starts_with($type, 'image/') || in_array($ext, ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg', 'heic', 'heif', 'tif', 'tiff'], true);
+        return $image && ($size <= 0 || $size <= self::PASTED_IMAGE_MAX);
     }
 
     /**
@@ -273,8 +309,9 @@ final class MailAttachments
     public static function unreadableReason(array $a): ?string
     {
         $nom = (string)($a['nom'] ?? '');
+        // Un email joint (Outlook : « itemAttachment ») se lit par son contenu MIME.
         if (($a['piece'] ?? 'fichier') === 'email') {
-            return '« ' . $nom . ' » est un email joint : son contenu ne se lit pas par cet outil.';
+            return null;
         }
         if (($a['piece'] ?? 'fichier') === 'lien') {
             return '« ' . $nom . ' » est un lien de partage (OneDrive, SharePoint…), pas un fichier joint : ouvre-le depuis Outlook.';
@@ -287,11 +324,30 @@ final class MailAttachments
         if (str_starts_with($mime, 'image/')) {
             return '« ' . $nom . ' » est une image : son contenu ne se lit pas comme du texte.';
         }
-        if (!isset(self::READABLE_MIMES[$mime])) {
+        if (self::extractMime((string)($a['type'] ?? ''), $nom) === null) {
             return '« ' . $nom . ' » (' . self::humanType((string)($a['type'] ?? ''), $nom) . ') n\'est pas un format lisible. '
-                . 'Formats lus : PDF, Word (.docx), Excel (.xlsx), PowerPoint (.pptx), OpenDocument, RTF, HTML, texte, CSV, JSON.';
+                . self::FORMATS_READ;
         }
         return null;
+    }
+
+    /** Formats lus, cités par les refus (réponse au modèle). */
+    private const FORMATS_READ = 'Formats lus : PDF, Word (.docx, .doc), Excel (.xlsx, .xls), PowerPoint (.pptx, .ppt), '
+        . 'OpenDocument, EPUB, RTF, HTML, emails (.eml, .msg), archives ZIP et tout fichier texte (CSV, JSON, XML, code, journaux…).';
+
+    /**
+     * MIME à passer à FileExtractor, ou null si la pièce jointe ne se lit pas.
+     * Les formats connus d'abord ; sinon la règle commune de FileExtractor
+     * (`readerFor`) : un type texte, ou un type générique d'extension
+     * inconnue, se TENTE en texte — les octets trancheront.
+     */
+    private static function extractMime(string $mime, string $name): ?string
+    {
+        $canonical = self::canonicalMime($mime, $name);
+        if (str_starts_with($canonical, 'image/')) {
+            return null;
+        }
+        return self::READABLE_MIMES[$canonical] ?? FileExtractor::readerFor($mime, $name);
     }
 
     /**
@@ -307,10 +363,15 @@ final class MailAttachments
         if (strlen($bytes) > self::MAX_BYTES) {
             throw new \RuntimeException('La pièce jointe « ' . $name . ' » est trop volumineuse pour être lue.');
         }
-        $canonical = self::canonicalMime($mime, $name);
-        $extract   = self::READABLE_MIMES[$canonical] ?? null;
+        $extract = self::extractMime($mime, $name);
         if ($extract === null) {
-            throw new \RuntimeException('Format non lisible : « ' . $name . ' ».');
+            throw new \RuntimeException('Format non lisible : « ' . $name . ' ». ' . self::FORMATS_READ);
+        }
+        // Lu comme du texte : les octets doivent en être (un binaire annoncé
+        // en type générique n'est jamais « lu »).
+        if ($extract === 'text/plain' && !FileExtractor::isReadableText(substr($bytes, 0, 65536))) {
+            throw new \RuntimeException('« ' . $name . ' » n\'est pas un fichier texte et son format n\'est pas lu. '
+                . self::FORMATS_READ);
         }
 
         $tmp = tempnam(sys_get_temp_dir(), 'mia_pj_');

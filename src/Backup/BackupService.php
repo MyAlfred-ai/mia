@@ -5,7 +5,7 @@ declare(strict_types=1);
 /**
  * Sauvegarde / restauration complète de la configuration MIA.
  *
- * Périmètre : utilisateurs (comptes, rôles, quotas, mémoires, connexions),
+ * Périmètre : utilisateurs (comptes, rôles, quotas, connexions),
  * groupes et leurs droits, assistants (avec documents de référence et
  * liaisons), bases de connaissances (documents, extraits, partages, config de
  * sync), outils, clés API et paramètres de l'application — PLUS les fichiers
@@ -52,6 +52,10 @@ class BackupService
         'messages',
         'creation_shares',
         'conversation_context_summaries', // résumés du début des longues conversations : du contenu, pas de la config
+        // Tables de travail d'une conversation (collectes d'emails, de fichiers,
+        // de lignes de classeurs) : du contenu, effacé avec la conversation.
+        'work_tables',
+        'work_table_rows',
         'usage_logs',                   // historique de consommation
         'tool_usage_logs',
         'tool_usage_backfill_markers',
@@ -73,6 +77,32 @@ class BackupService
         'workflow_runs',
         'workflow_run_steps',
         'workflow_artifacts',
+        'workflow_versions',
+        // Gestes comptés par la mémoire (MemorySignals) : personnels, sans
+        // texte, et liés aux conversations de l'instance d'origine.
+        'memory_signal_events',
+        // Boîtes mail suivies en push : abonnements ouverts chez Google et
+        // Microsoft pour l'adresse de CETTE instance, recréés d'eux-mêmes.
+        'mail_push_subscriptions',
+        // Nouveautés majeures vues par chaque personne : un état d'écran, pas
+        // de la configuration — restauré ailleurs, il ferait taire la fenêtre
+        // « Quoi de neuf » chez des personnes qui ne l'ont jamais vue là.
+        'user_feature_news',
+        // Mémoire de MIA : ce que MIA sait de chaque personne est STRICTEMENT
+        // personnel, comme ses conversations — un administrateur qui télécharge
+        // la sauvegarde ne doit pas pouvoir le lire. Une restauration ne touche
+        // pas aux souvenirs en place (une ancienne archive qui les contient
+        // n'est pas relue pour cette table).
+        'user_memories',
+        // Questions de MIA : le journal des questions posées à chaque
+        // personne et de ses réponses — personnel, comme la mémoire.
+        'user_memory_questions',
+        // Apprentissage de la mémoire : repères de lecture des conversations
+        // (qui ne sont pas exportées) — sans objet ailleurs.
+        'conversation_memory_scans',
+        // Claude dans Office : jetons personnels, des identifiants de chacun
+        // (empreintes seulement) — régénérés en un clic, jamais transportés.
+        'office_addin_tokens',
     ];
 
     /** Clés de settings éphémères, retirées de l'export. */
@@ -88,6 +118,18 @@ class BackupService
         // cible crée la sienne au premier besoin.
         'push_vapid_public',
         'push_vapid_private_enc',
+        // Dernier entretien quotidien de la mémoire (MemoryLearner::maintain).
+        'memory_maintained_at',
+        // Dernière synchronisation des notifications des boîtes mail (MailPush).
+        'mail_push_sync_at',
+        // Adresse secrète de l'abonnement push Gmail : celle de CETTE instance,
+        // que Google Cloud appelle — l'instance cible crée la sienne.
+        'gmail_push_token_enc',
+        // Dates d'arrêt relevées chez l'éditeur et état du relevé
+        // (LlmShutdownWatch) : propres au compte de l'instance, relevées de
+        // nouveau dans la journée — l'instance cible garde les siennes.
+        'llm_api_shutdowns',
+        'llm_api_shutdowns_check',
     ];
 
     /**

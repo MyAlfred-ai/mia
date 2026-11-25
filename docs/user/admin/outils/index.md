@@ -29,8 +29,8 @@ marketing a la vidéo, tout le monde a l'image.
 | **Automatisation n8n** | Votre instance n8n | Confié à un assistant |
 | **Présentation Gamma** | Votre compte Gamma | Confié à un assistant, et choix **Par Gamma** du bouton **Version soignée** des présentations du chat |
 
-La **Dictée vocale**, la **Conversation vocale**, les **Suggestions de suite**, les **Tâches
-programmées** et les **Workflows** figurent aussi sur cette page, comme outils intégrés.
+La **Dictée vocale**, la **Conversation vocale**, les **Suggestions de suite**, la **Mémoire**, les
+**Tâches programmées** et les **Workflows** figurent aussi sur cette page, comme outils intégrés.
 
 Le moteur d'un outil est **indépendant** du modèle choisi dans la conversation. Il utilise la clé de
 son éditeur enregistrée dans **Modèles IA**, ou une **clé API dédiée** propre à l'outil.
@@ -72,6 +72,7 @@ quota, imputés à l'administrateur qui les lance.
 | Dictée vocale | Outils, carte **Dictée vocale** | Le micro du chat | [Régler la dictée vocale](regler-la-dictee-vocale.md) |
 | Conversation vocale | Outils, carte **Conversation vocale** | Le bouton onde sonore du chat | [Régler la conversation vocale](regler-la-conversation-vocale.md) |
 | Suggestions de suite | Outils, carte **Suggestions de suite** | La suite proposée après chaque réponse | [Régler les suggestions de suite](regler-les-suggestions-de-suite.md) |
+| Mémoire | Outils, carte **Mémoire** | Ce que MIA sait de chaque personne d'une conversation à l'autre | [Régler la mémoire](regler-la-memoire.md) |
 | Tâches programmées | Outils, carte **Tâches programmées** | Les demandes récurrentes des utilisateurs | [Régler les tâches programmées](regler-les-taches-programmees.md) |
 | Workflows | Outils, carte **Workflows** | Les travaux en plusieurs étapes des créateurs | [Régler les workflows](regler-les-workflows.md) |
 

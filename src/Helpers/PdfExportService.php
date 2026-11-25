@@ -8,8 +8,9 @@ class PdfExportService
      * @param array{footer?: string, logo?: ?string} $chrome Habillage de
      *        l'entreprise (CompanyProfile::pdfChrome) : logo en en-tête, mention
      *        et numéro de page en pied. Vide = aucun (rapports d'administration).
+     * @param string $orientation `portrait` ou `landscape` (document à tableau large).
      */
-    public function buildFromHtml(string $html, string $title = 'Export message', array $chrome = []): string
+    public function buildFromHtml(string $html, string $title = 'Export message', array $chrome = [], string $orientation = 'portrait'): string
     {
         if (!class_exists(\Dompdf\Dompdf::class)) {
             throw new RuntimeException('Dompdf n\'est pas disponible (autoload manquant).');
@@ -34,7 +35,7 @@ class PdfExportService
         $options->set('tempDir', $tempDir);
 
         $dompdf = new \Dompdf\Dompdf($options);
-        $dompdf->setPaper('A4', 'portrait');
+        $dompdf->setPaper('A4', $orientation === 'landscape' ? 'landscape' : 'portrait');
         $dompdf->loadHtml(
             '<!doctype html><html lang="fr"><head><meta charset="UTF-8"><style>'
             . $this->basePrintCss()
@@ -78,6 +79,12 @@ class PdfExportService
         $footer = trim((string)($chrome['footer'] ?? ''));
         $html = '';
 
+        // Logo ramené à une taille d'impression AVANT Dompdf : un logo de
+        // plusieurs milliers de pixels à canal alpha épuise la mémoire de PHP
+        // dans Dompdf (erreur fatale, cf. ImageBytes::boundedFile).
+        if (is_string($logo) && $logo !== '') {
+            $logo = ImageBytes::boundedFile($logo, ImageBytes::PRINT_LOGO_SIDE);
+        }
         if (is_string($logo) && $logo !== '' && is_file($logo) && filesize($logo) <= 2_000_000) {
             $mime = (string)(@mime_content_type($logo) ?: 'image/png');
             if (in_array($mime, ['image/png', 'image/jpeg'], true)) {
@@ -103,10 +110,18 @@ class PdfExportService
 CSS;
     }
 
+    /**
+     * Marges de PAGE posées par `@page`, jamais par `html` : Dompdf prend les
+     * marges de l'élément racine pour celles de la page. `html { margin: 0 }`
+     * collait le texte au bord de la feuille et faisait sortir l'en-tête
+     * (logo) et le pied (mention de l'entreprise), placés DANS la marge.
+     * Marge haute et basse assez grandes pour les loger (chromeCss).
+     */
     private function basePrintCss(): string
     {
         return <<<'CSS'
-html, body {
+@page { margin: 20mm 16mm 18mm 16mm; }
+body {
   margin: 0;
   padding: 0;
   color: #111;

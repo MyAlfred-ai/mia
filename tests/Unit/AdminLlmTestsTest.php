@@ -30,6 +30,7 @@ final class AdminLlmTestsTest extends TestCase
     {
         return [
             'gpt-6-astra (hors préfixe gpt-5)' => ['gpt-6-astra', true],
+            'gpt-6.2-sol (hors préfixe gpt-5)' => ['gpt-6.2-sol', true],
             'gpt-5.6'                          => ['gpt-5.6', true],
             'gpt-5.x non listé (catch-all)'    => ['gpt-5.9-inconnu', true],
             'gpt-4o'                           => ['gpt-4o', false],

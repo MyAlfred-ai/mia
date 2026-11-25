@@ -16,27 +16,32 @@ le décrire dans le chat et laisser MIA le composer — voir
 - Le droit de créer des assistants — le rôle **Créateur**, par défaut. La tuile **Assistants**
   figure alors dans la rangée **Espaces** de la barre latérale. Sinon, demandez ce droit à un
   administrateur : il se règle par rôle.
-- Une place libre : un créateur a droit à **10 assistants personnels**. Le compteur **N / 10** de la
-  liste l'indique ; un assistant partagé par un administrateur ne compte plus.
+- Une place libre : un créateur a droit à **10 assistants personnels**. La page **Assistants** dit
+  combien il vous en reste, sous les cartes de création ; un assistant partagé par un administrateur
+  ne compte plus.
 - Les documents que l'assistant doit connaître, s'il y en a : 20 fichiers au plus, 20 Mo chacun.
 
 ## Étapes
 
-1. Ouvrez la liste de vos assistants : la tuile **Assistants** de la barre latérale du chat, dans la
+1. Ouvrez la page **Assistants** : la tuile **Assistants** de la barre latérale du chat, dans la
    rangée **Espaces**.
-2. Cliquez **+ Nouvel assistant**. À droite, le **schéma de l'assistant** se compose au fil de la
-   saisie — voir [Lire le schéma d'un assistant](#lire-le-schéma-dun-assistant).
+2. Cliquez la carte **Nouvel assistant**, sous la recherche. La fiche s'ouvre en pleine page : à
+   gauche le menu de ses sections, en haut une barre qui reste en vue avec **Annuler** et **Créer
+   l'assistant**, et tout en bas la **Vue d'ensemble**, le schéma de l'assistant qui se compose au
+   fil de la saisie — voir [Lire le schéma d'un assistant](#lire-le-schéma-dun-assistant).
 3. **Identité** — renseignez :
    - **Nom** *(obligatoire)* : c'est lui qu'on tape après **@** ;
    - **Couleur** : celle du contour du champ de saisie et de la barre de la conversation ;
-   - **Description** : une phrase affichée sous le nom, qui dit à quoi il sert. Elle n'est **pas**
-     envoyée au modèle ;
+   - **Description** : une phrase qui dit à quoi il sert. La page **Assistants** l'affiche en bulle
+     au survol de sa ligne, ou sur le petit **?** qui suit son nom (au doigt : touchez le **?**).
+     Elle n'est **pas** envoyée au modèle ;
    - **Avatar** : choisissez dans la bibliothèque, ou **＋ Nouveau** pour déposer une image (PNG,
-     JPG, GIF ou WebP, 2 Mo au plus). L'image rejoint la bibliothèque commune.
-4. **Comportement** — rédigez le **System prompt** *(obligatoire)* : ce que l'assistant est et doit
+     JPG, GIF ou WebP, 2 Mo au plus). L'image rejoint la bibliothèque commune ;
+   - **Actif** : laissez l'interrupteur allumé pour qu'il apparaisse dans le chat.
+4. **Consigne** — rédigez le **System prompt** *(obligatoire)* : ce que l'assistant est et doit
    faire. Le bloc **Partir d'un modèle** propose huit points de départ ; **✨ Rédiger avec l'IA**
    écrit une première version à partir de votre description.
-5. Choisissez le **LLM par défaut** : le modèle que l'assistant imposera. La liste montre les modèles
+5. **Modèle** — choisissez le **LLM par défaut** : le modèle que l'assistant imposera. La liste montre les modèles
    que vos groupes vous autorisent. **Défaut application** — le premier choix, qui nomme le modèle
    actuel — fait suivre à l'assistant le modèle par défaut de l'instance, y compris quand
    l'administrateur le change.
@@ -49,21 +54,46 @@ le décrire dans le chat et laisser MIA le composer — voir
    existe sur l'instance. Avec un outil image, les **images** de ses documents de référence et de
    ses bases servent de modèles : il reprend le personnage, le produit ou le logo qu'elles montrent
    — voir [Faire dessiner un assistant d'après vos images](faire-dessiner-un-assistant-d-apres-vos-images.md).
-8. **Connaissances** — cochez ses **Bases de connaissances** et sélectionnez ses **Documents de
-   référence**.
-9. Laissez l'interrupteur en haut sur **Actif**, puis cliquez **Créer**.
+   Sous les outils image cochés, **Options des images de cet assistant** précise celles de l'outil :
+   **Fond transparent** (un logo, un pictogramme, un produit détouré — le fichier passe en PNG),
+   **Format du fichier** (PNG, JPEG, WebP) et **Format** (carré, paysage, portrait). Laissés vides,
+   ces réglages suivent l'outil ; seuls ceux que l'outil accepte s'affichent.
+8. **Connaissances** — cochez ses **Bases de connaissances**, et déposez ses **Documents de
+   référence** sur la zone prévue (ou cliquez-la pour les choisir) : la liste des fichiers choisis
+   se relit avant de créer, **×** pour en retirer un.
+9. Cliquez **Créer l'assistant**, en haut ou en bas de la fiche.
 
 ## Résultat
 
-Le message « Assistant créé. » s'affiche, avec le nombre de documents ajoutés, et la liste s'ouvre
-sur l'assistant, son schéma à droite. Il est **personnel** : vous seul le voyez dans le chat.
+Le message « Assistant créé. » s'affiche, avec le nombre de documents ajoutés, et la **page de
+l'assistant** s'ouvre. Il est **personnel** : vous seul le voyez dans le chat.
 
-Pour l'essayer, cliquez **Utiliser** sur sa ligne, ou tapez **@** et son nom dans le chat.
+Pour l'essayer, tapez une question dans **Posez-lui une question** : une conversation s'ouvre avec
+lui, la question prête à partir. **Discuter** ouvre une conversation vide ; dans le chat, **@** et
+son nom le font aussi.
+
+## La page d'un assistant
+
+Cliquer un assistant dans la page **Assistants** ouvre sa page :
+
+- en tête, son avatar, son nom, sa description, son état, qui le voit, qui l'a créé et sa dernière
+  réponse, avec **Discuter**, **Modifier** et **…** ;
+- **Posez-lui une question** ;
+- ses chiffres des **30 derniers jours** : réponses, personnes, conversations, crédits ;
+- **Sa consigne** (repliée au-delà de douze lignes) et **Ce qu'il connaît** : ses bases — un clic
+  ouvre la page d'une base — et ses documents de référence ;
+- **Il répond avec** (son modèle, et sa température en mots), **Il sait faire** (ses outils),
+  **Qui le voit** ;
+- tout en bas, la **Vue d'ensemble** : son schéma.
+
+Chaque bloc porte **Modifier**, qui ouvre la fiche sur la section concernée.
 
 ## Lire le schéma d'un assistant
 
 Le schéma montre d'un coup d'œil comment l'assistant est composé, avec les couleurs et les icônes du
 schéma des tâches programmées :
+
+![La page de l'assistant « Fiches produits », descendue jusqu'à sa vue d'ensemble : le modèle Claude Opus 5 imposé, l'assistant au centre avec son début de prompt, et dessous sa base de connaissances Catalogue produits 2026 et son outil Image.](../../images/assistant-schema.png)
 
 - **au centre, l'assistant** : avatar, nom, description, début du prompt système, état — **Actif**
   ou **Inactif**, traits en pointillés — et qui le voit : **Personnel**, **Partagé** ou **Global** ;
@@ -74,10 +104,9 @@ schéma des tâches programmées :
   signalée), un pour ses **documents de référence** (tokens, extraction en cours ou en échec) et un
   pour ses **outils**. Au-delà de cinq éléments, le rectangle dit combien il en reste.
 
-Dans la liste, **cliquer un assistant** affiche son schéma à droite ; sur un écran étroit, il se
-déplie sous la ligne, et un second clic le replie. Sur la fiche, le schéma suit chaque geste, reste
-en vue pendant que vous faites défiler, et chacun de ses éléments mène au réglage correspondant :
-**Identité**, **Comportement**, **Connaissances** ou l'interrupteur **Actif**. Il n'enregistre rien.
+Le schéma ferme la **page** de l'assistant et sa **fiche** (**Vue d'ensemble**). Sur la fiche, il
+suit chaque geste, et chacun de ses éléments mène au réglage correspondant : **Identité**,
+**Consigne**, **Modèle**, **Capacités** ou **Connaissances**. Il n'enregistre rien.
 
 ## Documents de référence ou base de connaissances ?
 
@@ -94,14 +123,15 @@ documentation qui vit, ou qui sert à plusieurs assistants, va en base :
 
 ## Faire évoluer l'assistant
 
-- **Modifier** : **Modifier** sur sa ligne ou dans son schéma, ou **Modifier** dans ses
-  caractéristiques depuis le chat. Les changements s'enregistrent seuls — « Assistant mis à jour. » — et valent **tout de
-  suite, pour tous ses utilisateurs**, conversations en cours comprises.
-- **Ajouter un document** après coup : section **Documents de référence**, **Ajouter un document**
-  puis **Uploader**. Le texte est extrait, puis compté en tokens.
-- **Désactiver** : interrupteur **Inactif** en haut de la fiche. Plus personne ne le voit, vous non
-  plus, jusqu'à ce que vous le réactiviez.
-- **Supprimer** : menu **⋯** de la liste, ou **Supprimer cet assistant** en bas de la fiche.
+- **Modifier** : **Modifier** sur sa page, ou dans ses caractéristiques depuis le chat. Les
+  changements s'enregistrent seuls — la barre du haut le dit — et valent **tout de suite, pour tous
+  ses utilisateurs**, conversations en cours comprises. **Terminé** ramène à sa page.
+- **Ajouter un document** après coup : section **Connaissances**, déposez le fichier sur la zone
+  (ou cliquez-la) : il part aussitôt, puis son texte est extrait et compté en tokens.
+- **Désactiver** : interrupteur **Actif** de la section **Identité**. Plus personne ne le voit, vous
+  non plus, jusqu'à ce que vous le réactiviez ; sa page l'annonce en tête.
+- **Supprimer** : menu **⋯** de sa ligne ou de sa page, **Supprimer…**, ou menu **…** de la fiche,
+  **Supprimer cet assistant**.
   **Irréversible** : ses conversations redeviennent des conversations standard.
 
 Il n'y a pas de bouton pour dupliquer un assistant.

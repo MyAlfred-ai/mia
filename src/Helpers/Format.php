@@ -106,6 +106,12 @@ final class Format
         return self::nf($value / 1_000_000, 2) . $sep . 'M';
     }
 
+    /** '12 840' / '12,840' — un nombre entier, séparateur de milliers de la locale. */
+    public static function number(int $value): string
+    {
+        return self::nf((float) $value, 0);
+    }
+
     /** '12 840' / '12,840' — entier avec séparateur de milliers de la locale. */
     public static function credits(int $value): string
     {

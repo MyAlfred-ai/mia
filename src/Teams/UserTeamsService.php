@@ -339,18 +339,33 @@ class UserTeamsService extends MicrosoftUserApiService
             $data = $this->apiJson('GET', $this->channelUrl($target) . '/messages?$top=' . $max . '&$expand=replies');
             $messages = [];
             foreach (self::sortRaw((array)($data['value'] ?? [])) as $m) {
-                if (!is_array($m) || ($row = self::summarizeMessage($m, $this->timeZone)) === null) {
+                if (!is_array($m)) {
                     continue;
                 }
+                $row     = self::summarizeMessage($m, $this->timeZone);
                 $replies = [];
                 foreach (self::sortRaw((array)($m['replies'] ?? [])) as $r) {
                     if (is_array($r) && ($reply = self::summarizeMessage($r, $this->timeZone)) !== null) {
                         $replies[] = $reply;
                     }
                 }
+                if ($row === null) {
+                    // Message d'origine supprimé (ou évènement système) : ses
+                    // réponses VIVANTES restent un fil à lire — le sauter les
+                    // ferait disparaître avec lui.
+                    $row = self::deletedRootRow($m, $this->timeZone);
+                    if ($row === null || $replies === []) {
+                        continue;
+                    }
+                }
                 if ($replies !== []) {
                     $row['reponses']           = count($replies);
                     $row['dernieres_reponses'] = array_slice($replies, -self::INLINE_REPLIES);
+                    // Graph ne joint que 200 réponses par message : au-delà, il
+                    // rend `replies@odata.nextLink` et le compte serait faux.
+                    if (trim((string)($m['replies@odata.nextLink'] ?? '')) !== '') {
+                        $row['reponses_note'] = 'Plus de ' . count($replies) . ' réponses : lis le fil entier avec lire_fil_teams.';
+                    }
                 }
                 $messages[] = $row;
             }
@@ -416,15 +431,27 @@ class UserTeamsService extends MicrosoftUserApiService
             }
         }
 
-        $origin = self::summarizeMessage($root, $this->timeZone);
+        // Pages épuisées alors que Graph en annonçait encore : le fil est plus
+        // long que ce qui a été lu, et il faut le DIRE (les réponses arrivent
+        // des plus récentes aux plus anciennes : ce sont les anciennes qui manquent).
+        $incomplete = $url !== '';
+
+        $origin = self::summarizeMessage($root, $this->timeZone) ?? self::deletedRootRow($root, $this->timeZone);
         $fit    = self::fitToBudget($replies, max(4000, $tokenBudget * 4) - strlen((string)json_encode($origin)));
         $target['message'] = $messageId;
+        $notes = [];
+        if ($incomplete) {
+            $notes[] = 'Fil très long : seules les ' . count($replies) . ' réponses les plus récentes ont été lues.';
+        }
+        if ($fit['tronque']) {
+            $notes[] = 'Réponses les plus anciennes non affichées (budget de lecture atteint).';
+        }
         return [
             'conversation'      => self::publicTarget($target),
             'message_d_origine' => $origin,
             'reponses'          => $fit['messages'],
-            'tronque'           => $fit['tronque'],
-            'note'              => $fit['tronque'] ? 'Réponses les plus anciennes non affichées (budget de lecture atteint).' : '',
+            'tronque'           => $fit['tronque'] || $incomplete,
+            'note'              => implode(' ', $notes),
         ];
     }
 
@@ -437,7 +464,7 @@ class UserTeamsService extends MicrosoftUserApiService
      * converti en HTML ici (MailHtml, comme les emails) : la carte d'approbation
      * a montré ce même texte.
      *
-     * @return array{conversation:string,ref:string,message:string,url:string,fil:bool,lieu:string,compte:string}
+     * @return array{conversation:string,ref:string,message:string,fil_id:string,url:string,fil:bool,lieu:string,compte:string}
      */
     public function postMessage(array $args): array
     {
@@ -475,11 +502,23 @@ class UserTeamsService extends MicrosoftUserApiService
             . ($n['repondre_a'] !== '' ? ' (dans un fil)' : '')
             . ($this->accountEmail !== '' ? ' compte=' . $this->accountEmail : ''));
 
-        $lien = self::isTeamsLink((string)($m['webUrl'] ?? '')) ? (string)$m['webUrl'] : $target['lien'];
+        // Lien : celui du message s'il existe (Graph rend `webUrl: null` pour
+        // un message de conversation), sinon celui que la carte a montré —
+        // résolu avant l'approbation —, sinon celui du lieu.
+        $lien = (string)($m['webUrl'] ?? '');
+        if (!self::isTeamsLink($lien)) {
+            $carte = is_scalar($args['lien'] ?? null) ? trim((string)$args['lien']) : '';
+            $lien  = self::isTeamsLink($carte) ? $carte : (string)$target['lien'];
+        }
         return [
             'conversation' => $nom !== '' ? $nom : ($target['kind'] === 'chat' ? 'conversation Teams' : 'canal Teams'),
             'ref'          => self::targetRef($target, false),
             'message'      => $id,
+            // Message qui OUVRE le fil ('' hors fil). `message` est l'id de la
+            // réponse créée : s'en servir comme référence de fil ferait lire
+            // puis répondre à une réponse, que Graph n'adresse pas ainsi
+            // (POST …/messages/{message d'origine}/replies).
+            'fil_id'       => $n['repondre_a'],
             'url'          => $lien,
             'fil'          => $n['repondre_a'] !== '',
             'lieu'         => $target['kind'] === 'chat' ? 'conversation' : 'canal',
@@ -941,7 +980,14 @@ class UserTeamsService extends MicrosoftUserApiService
         $last    = null;
         $sortKey = (string)($c['lastUpdatedDateTime'] ?? $c['createdDateTime'] ?? '');
         $unread  = false;
-        if ($preview !== null && empty($preview['isDeleted'])) {
+        // Un aperçu peut être un évènement système (arrivée d'un membre…) :
+        // `from: null`, corps `<systemEventMessage/>`. Ce n'est pas un message
+        // à lire — ni auteur « Inconnu », ni « non lu » pour autant.
+        $isMessage = $preview !== null && (string)($preview['messageType'] ?? 'message') === 'message';
+        if ($preview !== null && !$isMessage && trim((string)($preview['createdDateTime'] ?? '')) !== '') {
+            $sortKey = (string)$preview['createdDateTime'];
+        }
+        if ($isMessage && empty($preview['isDeleted'])) {
             $created = (string)($preview['createdDateTime'] ?? '');
             $text    = self::bodyText((array)($preview['body'] ?? []));
             $last = [
@@ -984,6 +1030,25 @@ class UserTeamsService extends MicrosoftUserApiService
             'description' => trim((string)($c['description'] ?? '')),
             'prive'       => in_array((string)($c['membershipType'] ?? ''), ['private', 'shared'], true),
             'lien'        => self::isTeamsLink((string)($c['webUrl'] ?? '')) ? (string)$c['webUrl'] : '',
+        ];
+    }
+
+    /**
+     * Ligne d'un message d'origine SUPPRIMÉ (ou sans texte) dont le fil a
+     * encore des réponses : on garde de quoi désigner le fil. null pour un
+     * évènement système.
+     */
+    public static function deletedRootRow(array $m, string $timeZone = ''): ?array
+    {
+        $id = trim((string)($m['id'] ?? ''));
+        if ($id === '' || (string)($m['messageType'] ?? 'message') !== 'message') {
+            return null;
+        }
+        return [
+            'id'     => $id,
+            'auteur' => self::authorName($m),
+            'date'   => self::formatDate((string)($m['createdDateTime'] ?? ''), $timeZone),
+            'texte'  => '(message supprimé ou sans texte)',
         ];
     }
 

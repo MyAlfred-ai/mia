@@ -127,7 +127,7 @@ final class WorkflowLoop
             $keys[] = $loop['item']['key'];
         }
         foreach ($loop['body'] ?? [] as $child) {
-            if (in_array($child['type'], WorkflowSpec::PRODUCING_TYPES, true)) {
+            if (WorkflowSpec::producesPiece($child)) {
                 $keys[] = $child['output']['key'];
             }
         }

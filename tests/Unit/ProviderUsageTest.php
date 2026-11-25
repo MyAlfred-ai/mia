@@ -104,6 +104,27 @@ final class ProviderUsageTest extends TestCase
     }
 
     /** Lecture de cache de Sonnet 5.5 : 0,10 $ (0,05× l'entrée), pas 0,20 $. */
+    public function testSeulesLesRecherchesOpenAiSontFacturees(): void
+    {
+        // Guide Web search d'OpenAI (relu le 2026-11-10) : « Search actions
+        // incur a tool call cost » — ouvrir une page ou chercher dans une page
+        // ne coûte rien. Un modèle qui raisonne en enchaîne plusieurs par
+        // recherche : les compter surfacturait l'outil.
+        $response = ['output' => [
+            ['type' => 'reasoning'],
+            ['type' => 'web_search_call', 'action' => ['type' => 'search', 'queries' => ['météo Lyon']]],
+            ['type' => 'web_search_call', 'action' => ['type' => 'open_page', 'url' => 'https://exemple.fr']],
+            ['type' => 'web_search_call', 'action' => ['type' => 'find_in_page', 'pattern' => 'pluie']],
+            ['type' => 'web_search_call', 'action' => ['type' => 'search']],
+            ['type' => 'message'],
+        ]];
+        $this->assertSame(2, OpenAIAdapter::countWebSearchCalls($response));
+
+        // Item sans action (forme d'avant) : compté — jamais de sous-facturation.
+        $this->assertSame(1, OpenAIAdapter::countWebSearchCalls(['output' => [['type' => 'web_search_call', 'status' => 'completed']]]));
+        $this->assertSame(0, OpenAIAdapter::countWebSearchCalls(['output' => 'inattendu']));
+    }
+
     public function testLaLectureDeCacheDeSonnet55EstCelleDuTarifOfficiel(): void
     {
         $this->assertEqualsWithDelta(0.10, (float)LlmCatalog::pricing('anthropic', 'claude-sonnet-5-5')['cached_input'], 1e-9);

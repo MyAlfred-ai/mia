@@ -62,6 +62,10 @@ final class PersonalUsageTest extends TestCase
         $this->assertSame(['L0', 'L1', 'L2', 'L3', 'Autres'], array_column($r['slices'], 'label'));
         $this->assertEqualsWithDelta(12.0, (float)$r['slices'][4]['value'], 0.001, '7 + 5, la part nulle écartée');
         $this->assertSame(2, $r['slices'][4]['others']);
+        // « Autres » garde ce qu'il regroupe, du plus gros au plus petit, chacun avec sa part.
+        $this->assertSame(['L4', 'L5'], array_column($r['slices'][4]['members'], 'label'));
+        $this->assertSame([7.0, 5.0], array_column($r['slices'][4]['members'], 'share'));
+        $this->assertArrayNotHasKey('members', $r['slices'][0], 'Une part visible ne regroupe rien');
         $this->assertSame(50.0, $r['slices'][0]['share']);
         $this->assertEqualsWithDelta(2 * M_PI * 40, $r['circumference'], 0.01);
         $this->assertSame(0.0, $r['slices'][0]['offset']);
@@ -104,6 +108,16 @@ final class PersonalUsageTest extends TestCase
         $tools = [['tool_type' => 'image', 'uses' => 20, 'credits' => 1200], ['tool_type' => 'video', 'uses' => 1, 'credits' => 900]];
         $this->assertSame(['answer' => 34, 'image' => 60, 'search' => 13, 'minute' => 20], PersonalUsage::unitCosts($cats, $tools));
         $this->assertSame([], PersonalUsage::unitCosts([], []));
+
+        // Claude dans Office : sa propre catégorie, donc il ne fausse plus le
+        // coût d'une réponse ; une demande coûte la catégorie entière
+        // (recherches comprises) rapportée aux seules demandes.
+        $office = $cats;
+        $office[] = ['category' => UsageSource::CAT_OFFICE, 'requests' => 12, 'credits' => 1100, 'quantity' => 2, 'sources' => [
+            ['source' => UsageSource::OFFICE_ADDIN, 'requests' => 10, 'credits' => 1000],
+            ['source' => UsageSource::OFFICE_SEARCH, 'requests' => 2, 'credits' => 100],
+        ]];
+        $this->assertSame(['answer' => 34, 'image' => 60, 'search' => 13, 'minute' => 20, 'office' => 110], PersonalUsage::unitCosts($office, $tools));
     }
 
     public function testConseilsTiresDeLUsage(): void
@@ -151,5 +165,33 @@ final class PersonalUsageTest extends TestCase
         foreach (['Format::eur', 'creditsToEur', '€', 'chart.umd', 'new Chart('] as $interdit) {
             $this->assertStringNotContainsString($interdit, $tpl, "La page de l'utilisateur ne montre aucun euro et ne charge plus Chart.js ($interdit)");
         }
+    }
+
+    /**
+     * Une petite consommation reste lisible : 625 crédits de Claude dans Office
+     * à côté de 75 000 crédits de conversations tombaient dans « Autres », sans
+     * rien dire de ce qu'il contenait — la consommation semblait absente.
+     */
+    public function testAutresDitCeQuIlRegroupe(): void
+    {
+        $tpl = self::lire('templates/settings/usage.php');
+        $this->assertStringContainsString("if (!empty(\$s['members'])):", $tpl);
+        $this->assertStringContainsString('array_slice($s[\'members\'], 0, PersonalUsage::RING_MEMBERS_SHOWN)', $tpl);
+        $this->assertStringContainsString('class="pu-legend-member"', $tpl);
+        $this->assertStringContainsString("I18n::plural(\$hidden, 'et {n} autre', 'et {n} autres')", $tpl);
+        $this->assertStringContainsString('.pu-legend .pu-legend-member', self::lire('public/assets/css/main.css'));
+
+        // Une consommation de Claude dans Office face à beaucoup plus gros : nommée sous « Autres ».
+        $items = [];
+        foreach (['Conversations' => 45522, 'Créations' => 26978, 'Assistance' => 1684, 'Recherche' => 893,
+                  'Claude dans Office' => 625, 'Voix' => 237, 'Conception' => 134, 'Bases' => 23] as $label => $v) {
+            $items[] = ['label' => $label, 'value' => $v, 'color' => '#123456'];
+        }
+        $autres = PersonalUsage::ring($items, 'Autres')['slices'][PersonalUsage::RING_SLICES - 1];
+        $this->assertSame('Autres', $autres['label']);
+        $this->assertContains('Claude dans Office', array_column($autres['members'], 'label'));
+        $office = array_values(array_filter($autres['members'], static fn(array $m): bool => $m['label'] === 'Claude dans Office'))[0];
+        $this->assertSame(625, $office['value']);
+        $this->assertEqualsWithDelta(0.8, $office['share'], 0.05);
     }
 }

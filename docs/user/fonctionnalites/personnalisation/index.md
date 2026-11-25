@@ -23,15 +23,21 @@ Trois couches s'ajoutent, dans cet ordre, aux consignes de l'assistant ou de la 
 | Couche | Ce qu'elle contient | Où la régler |
 |---|---|---|
 | **Style de réponse** | Concis, détaillé, technique, formel… | **Préférences IA**, partie *Comment MIA vous répond* |
-| **Votre contexte** | Votre métier, vos outils, votre cible, en 500 caractères | **Préférences IA**, partie *Ce que MIA sait de vous* |
-| **MIA pour vous** | Des souvenirs précis, jusqu'à 50 | **Préférences IA** (même partie, sous votre contexte), et en conversation |
+| **Votre contexte** | Votre métier, vos outils, votre cible, en 500 caractères | **Mémoire** |
+| **Vos souvenirs** | Ce que MIA retient de vous — ce que vous lui demandez et ce qu'elle apprend de vos échanges —, rangé par thème, jusqu'à 60 | **Mémoire**, et en conversation |
 | **Voix** | Vitesse de lecture et longueur des réponses dites à voix haute | **Préférences IA**, partie *À l'oral*, et pendant une conversation vocale |
 
 - Laissés vides, ces réglages ne changent rien.
+- **Le modèle qui vous répond** se choisit à part : **Préférences IA**, partie *Qui vous répond*, ou
+  l'étoile du sélecteur de modèle. Voir [Choisir son modèle par défaut](../modeles/choisir-son-modele-par-defaut.md).
 - MIA s'en sert en arrière-plan, sans les citer.
-- **MIA ne retient que ce que vous lui demandez de retenir** : *« souviens-toi que je préfère les
-  réponses courtes »*. Elle ne supprime jamais un souvenir d'elle-même.
-- Personne d'autre — ni les autres utilisateurs, ni les créateurs d'assistants — n'y a accès.
+- **Vous gardez la main sur votre mémoire** : MIA retient, corrige ou oublie ce que vous lui demandez
+  (*« souviens-toi que… »*, *« oublie que… »*), et apprend d'elle-même, après coup, ce que vous dites
+  de vous en conversation — une carte vous prévient avant, et vous pouvez refuser. Ce qu'elle déduit
+  attend votre confirmation avant de servir. Elle vous pose aussi, rarement, une courte question sur ce
+  que vous préférez. Tout se relit et se corrige sur la page **Mémoire**.
+- Personne d'autre — ni les autres utilisateurs, ni les créateurs d'assistants, ni les
+  administrateurs — n'y a accès.
 
 La **langue de l'interface** suit votre compte : choisie une fois, elle vous suit sur tous vos
 appareils. Les assistants répondent dans la langue de votre message.
@@ -44,7 +50,8 @@ sans rien changer pour les autres.
 
 | Vous voulez… | Page |
 |---|---|
-| Régler le style, décrire votre contexte, gérer vos souvenirs | [Personnaliser les réponses](personnaliser-les-reponses.md) |
+| Régler le style des réponses et la voix | [Personnaliser les réponses](personnaliser-les-reponses.md) |
+| Décrire votre contexte, relire, corriger ou retirer ce que MIA sait de vous (**Mémoire**) | [Gérer sa mémoire](gerer-sa-memoire.md) |
 | Passer l'interface en français ou en anglais (sélecteur en haut à droite, ou **Mon profil**) | [Changer la langue](changer-la-langue.md) |
 | Choisir un thème clair, sombre ou automatique, renforcer le contraste, agrandir ou réduire l'interface, envoyer avec Ctrl + Entrée (**Affichage**) | [Régler l'affichage](regler-l-affichage.md) |
 | Mettre une photo de profil — un fichier ou l'adresse d'une image en ligne — ou la retirer (**Mon profil**) | [Changer sa photo de profil](changer-sa-photo.md) |
@@ -66,8 +73,15 @@ vous la rappeliez.
 **Un souvenir en passant.** En pleine conversation : *« retiens que notre exercice comptable se clôt
 au 30 juin »*. Une pastille confirme ; l'information vous suit dans toutes vos conversations.
 
-**Vérifier ce que MIA sait de vous.** *« Que sais-tu de moi ? »* — MIA restitue vos souvenirs et votre
-contexte, tels quels.
+**Une information périmée.** *« Oublie que je travaille sur le projet Atlas »* — la pastille dit
+**Retiré de votre mémoire**, avec **Annuler** en cas d'erreur.
+
+**Une préférence dite en passant.** *« Fais plus court, je lis sur mon téléphone »* : quelques minutes
+après la conversation, la page **Mémoire** porte *« Préfère les réponses courtes »*, marqué *Appris par
+MIA*.
+
+**Vérifier ce que MIA sait de vous.** *« Que sais-tu de moi ? »* — MIA restitue vos souvenirs, par
+thème, et votre contexte, tels quels.
 
 ## Voir aussi
 

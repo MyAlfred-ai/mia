@@ -203,9 +203,16 @@ class UserDriveService extends GoogleUserApiService
         'application/vnd.openxmlformats-officedocument.wordprocessingml.document' => 'docx',
         'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'       => 'xlsx',
         'application/vnd.openxmlformats-officedocument.presentationml.presentation' => 'pptx',
+        'application/msword'       => 'doc',
+        'application/vnd.ms-excel' => 'xls',
+        'application/vnd.ms-powerpoint' => 'ppt',
+        'message/rfc822'             => 'eml',
+        'application/vnd.ms-outlook' => 'msg',
+        'application/zip'            => 'zip',
         'application/vnd.oasis.opendocument.text'         => 'odt',
         'application/vnd.oasis.opendocument.spreadsheet'  => 'ods',
         'application/vnd.oasis.opendocument.presentation' => 'odp',
+        'application/epub+zip' => 'epub',
         'application/pdf'   => 'pdf',
         'application/rtf'   => 'rtf',
         'text/rtf'          => 'rtf',
@@ -214,6 +221,28 @@ class UserDriveService extends GoogleUserApiService
         'text/html'         => 'html',
         'text/csv'          => 'csv',
     ];
+
+    /**
+     * MIME à passer à FileExtractor pour un fichier non natif, ou null s'il ne
+     * se lit pas. Les formats connus d'abord ; sinon la règle commune
+     * (`FileExtractor::readerFor`) : un type texte (Drive annonce souvent
+     * `text/x-python`, `application/x-yaml`…) ou un type générique se lit en
+     * texte, et le contenu tranche après le téléchargement.
+     */
+    private static function readMime(string $mime, string $name): ?string
+    {
+        if (isset(self::READABLE_MIMES[$mime])) {
+            return match ($mime) {
+                'text/csv' => 'text/plain',
+                'text/rtf' => 'application/rtf',
+                default    => $mime,
+            };
+        }
+        if (str_starts_with($mime, 'application/vnd.google-apps.')) {
+            return null;
+        }
+        return FileExtractor::readerFor($mime, $name);
+    }
 
     /** Identifiant réel du dossier racine, résolu à la demande (cf. resolveRootAlias). */
     private ?string $rootFolderId = null;
@@ -922,7 +951,8 @@ class UserDriveService extends GoogleUserApiService
             'modifie' => (string)($f['modifiedTime'] ?? ''),
             'taille'  => isset($f['size']) ? (int)$f['size'] : null,
             'dossier' => $isFolder,
-            'lisible' => !$isFolder && (isset(self::EXPORT_MAP[$mime]) || isset(self::READABLE_MIMES[$mime])),
+            'lisible' => !$isFolder && (isset(self::EXPORT_MAP[$mime])
+                || self::readMime($mime, (string)($f['name'] ?? '')) !== null),
         ];
     }
 
@@ -1082,7 +1112,7 @@ class UserDriveService extends GoogleUserApiService
                 'mimeType' => (string)$export['mime'],
             ]);
             $extractMime = (string)$export['mime'];
-        } elseif (isset(self::READABLE_MIMES[$mime])) {
+        } elseif (($extractMime = self::readMime($mime, $name)) !== null) {
             if ((int)($meta['size'] ?? 0) > self::MAX_FILE_SIZE) {
                 throw new \RuntimeException('Fichier trop volumineux (limite 20 Mo) : ' . $name);
             }
@@ -1090,8 +1120,13 @@ class UserDriveService extends GoogleUserApiService
                 'alt'               => 'media',
                 'supportsAllDrives' => 'true',
             ]);
-            // text/csv n'a pas de branche dédiée dans FileExtractor : lu comme texte brut.
-            $extractMime = $mime === 'text/csv' ? 'text/plain' : $mime;
+            // Lu comme du texte : les octets doivent en être.
+            if ($extractMime === 'text/plain' && !FileExtractor::isReadableText(substr((string)$body, 0, 65536))) {
+                throw new \RuntimeException(
+                    'Type de fichier non pris en charge en lecture : ' . self::humanType($mime) . ' (' . $name . ') '
+                    . 'n\'est pas du texte et son format n\'est pas lu.'
+                );
+            }
         } else {
             throw new \RuntimeException(
                 'Type de fichier non pris en charge en lecture : ' . self::humanType($mime) . ' (' . $name . ').'
@@ -1171,6 +1206,123 @@ class UserDriveService extends GoogleUserApiService
             ];
         }
         return ['dossier' => ['id' => $ref['id'], 'nom' => $ref['nom']], 'fichiers' => $out, 'total' => count($rows)];
+    }
+
+    /** Fichiers qu'une collecte peut rapporter (tables de travail). */
+    public const COLLECT_FILES_MAX = 2000;
+    private const COLLECT_MAX_DEPTH   = 8;
+    private const COLLECT_MAX_FOLDERS = 400;
+    /** Dossiers interrogés par appel (un NIVEAU = peu d'appels, cf. parentsClause). */
+    private const COLLECT_PARENTS_PER_QUERY = 40;
+
+    /**
+     * Collecte EXHAUSTIVE (tables de travail) : tous les fichiers d'un
+     * dossier — et de ses sous-dossiers si `$recursive` —, niveau par niveau
+     * (un appel couvre plusieurs dossiers), pages suivies jusqu'au bout.
+     * Chaque fichier porte son `chemin` relatif au dossier de départ.
+     *
+     * `$progress(int $lus, ?int $estimes): bool` après chaque lot ; `false`
+     * arrête la collecte (bouton Stop).
+     *
+     * @return array{dossier:array{id:string,nom:string},fichiers:list<array{id:string,nom:string,mime:string,type:string,modifie:string,taille:?int,chemin:string,lien:string}>,dossiers:int,tronque:bool,interrompu:bool}
+     */
+    public function collectFiles(string $input, bool $recursive, int $limit, ?\Closure $progress = null): array
+    {
+        $limit = max(1, min(self::COLLECT_FILES_MAX, $limit));
+        $ref   = $this->resolveFolderPath($input);
+        /** @var array<string, string> $level identifiant de dossier → chemin relatif */
+        $level     = [(string)$ref['id'] => ''];
+        $files     = [];
+        $folders   = 1;
+        $truncated = false;
+        $stopped   = false;
+
+        for ($depth = 0; $depth < self::COLLECT_MAX_DEPTH && $level !== []; $depth++) {
+            $next = [];
+            foreach (array_chunk(array_keys($level), self::COLLECT_PARENTS_PER_QUERY) as $parents) {
+                $page = null;
+                do {
+                    $params = [
+                        'q'        => self::parentsClause($parents) . ' and trashed=false',
+                        'corpora'  => 'allDrives',
+                        'includeItemsFromAllDrives' => 'true',
+                        'supportsAllDrives'         => 'true',
+                        'fields'   => 'nextPageToken,files(id,name,mimeType,modifiedTime,size,parents,webViewLink)',
+                        'orderBy'  => 'folder,name',
+                        'pageSize' => (string)self::SCAN_PAGE_SIZE,
+                    ];
+                    if ($page !== null && $page !== '') {
+                        $params['pageToken'] = $page;
+                    }
+                    $data = $this->requestJson('/files', $params, 60);
+                    foreach ((array)($data['files'] ?? []) as $f) {
+                        if (!is_array($f) || (string)($f['id'] ?? '') === '') {
+                            continue;
+                        }
+                        $path = '';
+                        foreach ((array)($f['parents'] ?? []) as $p) {
+                            if (isset($level[(string)$p])) {
+                                $path = $level[(string)$p];
+                                break;
+                            }
+                        }
+                        $name = (string)($f['name'] ?? '');
+                        $mime = (string)($f['mimeType'] ?? '');
+                        if ($mime === self::MIME_FOLDER) {
+                            if ($recursive) {
+                                if ($folders < self::COLLECT_MAX_FOLDERS) {
+                                    $next[(string)$f['id']] = ltrim($path . '/' . $name, '/');
+                                    $folders++;
+                                } else {
+                                    $truncated = true;
+                                }
+                            }
+                            continue;
+                        }
+                        if (count($files) >= $limit) {
+                            $truncated = true;
+                            break 4;
+                        }
+                        $id = (string)$f['id'];
+                        $files[] = [
+                            'id'      => $id,
+                            'nom'     => $name,
+                            'mime'    => $mime,
+                            'type'    => self::humanType($mime),
+                            'modifie' => (string)($f['modifiedTime'] ?? ''),
+                            'taille'  => isset($f['size']) ? (int)$f['size'] : null,
+                            'chemin'  => $path,
+                            'lien'    => (string)($f['webViewLink'] ?? '') !== ''
+                                ? (string)$f['webViewLink']
+                                : 'https://drive.google.com/file/d/' . rawurlencode($id) . '/view',
+                        ];
+                    }
+                    $page = isset($data['nextPageToken']) ? (string)$data['nextPageToken'] : null;
+                } while ($page !== null && $page !== '');
+
+                if ($progress !== null && $progress(count($files), null) === false) {
+                    $stopped = true;
+                    break 2;
+                }
+            }
+            if (!$recursive) {
+                break;
+            }
+            $level = $next;
+            // Arborescence plus profonde que la limite : ce qui reste n'est pas lu, et c'est dit.
+            if ($depth + 1 >= self::COLLECT_MAX_DEPTH && $level !== []) {
+                $truncated = true;
+            }
+        }
+
+        usort($files, static fn(array $a, array $b): int => [$a['chemin'], mb_strtolower($a['nom'])] <=> [$b['chemin'], mb_strtolower($b['nom'])]);
+        return [
+            'dossier'    => ['id' => (string)$ref['id'], 'nom' => (string)$ref['nom']],
+            'fichiers'   => $files,
+            'dossiers'   => $folders,
+            'tronque'    => $truncated,
+            'interrompu' => $stopped,
+        ];
     }
 
     // ===================== ÉCRITURE (Docs API v1 / Sheets API v4) =====================
@@ -2673,6 +2825,8 @@ class UserDriveService extends GoogleUserApiService
             str_contains($mime, 'wordprocessingml')              => 'Word (docx)',
             str_contains($mime, 'spreadsheetml')                 => 'Excel (xlsx)',
             str_contains($mime, 'presentationml')                => 'PowerPoint (pptx)',
+            $mime === 'application/msword'                       => 'Word (doc)',
+            $mime === 'application/vnd.ms-excel'                 => 'Excel (xls)',
             $mime === 'application/pdf'                          => 'PDF',
             str_starts_with($mime, 'image/')                     => 'Image',
             str_starts_with($mime, 'text/')                      => 'Texte',

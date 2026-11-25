@@ -9,6 +9,8 @@ Un **assistant** est une IA préconfigurée pour un usage précis : il porte ses
 impose son modèle, et peut s'appuyer sur des documents, des bases de connaissances et des outils.
 Vous le choisissez au lieu de régler tout cela vous-même.
 
+![La page Assistants d'une créatrice : en tête, « Qui vous aide aujourd’hui ? » et la recherche, les filtres Tous et Inactifs, puis deux cartes, Nouvel assistant et Le décrire à MIA, et ce qu'il lui reste à créer. Dessous, ses quatre assistants personnels, chacun avec son avatar, son modèle, ce qu'il connaît, le cadenas de Personnel et son état — « Veille salons » marqué Inactif.](../../images/assistants.png)
+
 ## À quoi ça sert
 
 À obtenir d'emblée des réponses dans le bon registre, sans réexpliquer le contexte à chaque

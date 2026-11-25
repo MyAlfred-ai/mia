@@ -29,6 +29,8 @@ final class UsageSource
     // --- Conversations ---------------------------------------------------
     public const CHAT       = 'chat';
     public const REGENERATE = 'regenerate';
+    public const OFFICE_ADDIN  = 'office_addin';  // Claude dans Office (add-in Office) passé par MIA
+    public const OFFICE_SEARCH = 'office_search'; // recherches Internet de Claude dans Office
 
     // --- Assistance d'une conversation (appels auxiliaires d'un tour) ----
     public const TITLE        = 'title';        // titre automatique de la conversation
@@ -39,8 +41,10 @@ final class UsageSource
     public const KB_QUERY     = 'kb_query';     // embedding de la question (RAG)
     public const CONTEXT_SUMMARY = 'context_summary'; // résumé du début d'une longue conversation (fenêtre de contexte)
     public const TOOL_CONDENSE   = 'tool_condense';   // condensation d'un résultat d'outil démesuré
+    public const TABLE_ENRICH    = 'table_enrich';    // enrichissement d'une table de travail (une lecture du modèle par lot de lignes)
     public const WORKFLOW_JUDGE  = 'workflow_judge';  // question d'une condition de workflow (oui / non)
     public const FOLLOW_UP       = 'follow_up';       // suggestion de suite proposée dans la zone de saisie
+    public const MEMORY_LEARN    = 'memory_learn';    // apprentissage automatique de la mémoire (hors quota, sans conversation)
 
     // --- Recherche Internet (outil serveur du fournisseur) ---------------
     public const WEB_SEARCH = 'web_search';
@@ -78,6 +82,9 @@ final class UsageSource
     public const TURN_HELPERS = [
         self::TITLE, self::MEMORY, self::TASK_RULES, self::IMAGE_PROMPT,
         self::KB_QUERY, self::CONTEXT_SUMMARY, self::TOOL_CONDENSE,
+        // Enrichissement mené PENDANT la réponse (peu de lignes) ; celui d'une
+        // opération de fond porte déjà le message de son lancement.
+        self::TABLE_ENRICH,
     ];
 
     /** Source par défaut des lignes d'outils (génération demandée au chat). */
@@ -85,6 +92,7 @@ final class UsageSource
 
     // --- Catégories (regroupement lisible) --------------------------------
     public const CAT_CHAT        = 'chat';
+    public const CAT_OFFICE      = 'office';
     public const CAT_CHAT_ASSIST = 'chat_assist';
     public const CAT_WEB_SEARCH  = 'web_search';
     public const CAT_CREATION    = 'creation';
@@ -111,21 +119,25 @@ final class UsageSource
     private const SOURCES = [
         self::CHAT          => ['label' => 'Réponses de chat',                  'category' => self::CAT_CHAT,        'unit' => self::UNIT_TOKENS,   'quota_exempt' => false],
         self::REGENERATE    => ['label' => 'Régénérations',                     'category' => self::CAT_CHAT,        'unit' => self::UNIT_TOKENS,   'quota_exempt' => false],
+        self::OFFICE_ADDIN  => ['label' => 'Claude dans Office',                 'category' => self::CAT_OFFICE,      'unit' => self::UNIT_TOKENS,   'quota_exempt' => false],
+        self::OFFICE_SEARCH => ['label' => 'Recherches Internet de Claude dans Office', 'category' => self::CAT_OFFICE, 'unit' => self::UNIT_SEARCHES, 'quota_exempt' => false],
         self::TITLE         => ['label' => 'Titres de conversation',            'category' => self::CAT_CHAT_ASSIST, 'unit' => self::UNIT_TOKENS,   'quota_exempt' => false],
-        self::MEMORY        => ['label' => 'Mémoire « MIA pour vous »',         'category' => self::CAT_CHAT_ASSIST, 'unit' => self::UNIT_TOKENS,   'quota_exempt' => false],
+        self::MEMORY        => ['label' => 'Mémoire (demandes explicites)',     'category' => self::CAT_CHAT_ASSIST, 'unit' => self::UNIT_TOKENS,   'quota_exempt' => false],
         self::TASK_RULES    => ['label' => 'Règles d\'organisation des tâches', 'category' => self::CAT_CHAT_ASSIST, 'unit' => self::UNIT_TOKENS,   'quota_exempt' => false],
         self::IMAGE_PROMPT  => ['label' => 'Préparation de demandes d\'image',  'category' => self::CAT_CHAT_ASSIST, 'unit' => self::UNIT_TOKENS,   'quota_exempt' => false],
         self::MAIL_ASSIST   => ['label' => 'Amélioration de brouillons d\'email', 'category' => self::CAT_CHAT_ASSIST, 'unit' => self::UNIT_TOKENS,  'quota_exempt' => false],
         self::KB_QUERY      => ['label' => 'Embedding des questions (RAG)',     'category' => self::CAT_CHAT_ASSIST, 'unit' => self::UNIT_TOKENS,   'quota_exempt' => false],
         self::CONTEXT_SUMMARY => ['label' => 'Résumés de longues conversations', 'category' => self::CAT_CHAT_ASSIST, 'unit' => self::UNIT_TOKENS,   'quota_exempt' => false],
         self::TOOL_CONDENSE => ['label' => 'Condensation de résultats d\'outils', 'category' => self::CAT_CHAT_ASSIST, 'unit' => self::UNIT_TOKENS,  'quota_exempt' => false],
+        self::TABLE_ENRICH  => ['label' => 'Enrichissement de tables de travail', 'category' => self::CAT_CHAT_ASSIST, 'unit' => self::UNIT_TOKENS,  'quota_exempt' => false],
         self::WORKFLOW_JUDGE => ['label' => 'Conditions de workflow',           'category' => self::CAT_CHAT_ASSIST, 'unit' => self::UNIT_TOKENS,   'quota_exempt' => false],
         self::FOLLOW_UP     => ['label' => 'Suggestions de suite',              'category' => self::CAT_CHAT_ASSIST, 'unit' => self::UNIT_TOKENS,   'quota_exempt' => false],
+        self::MEMORY_LEARN  => ['label' => 'Mémoire (apprentissage)',           'category' => self::CAT_CHAT_ASSIST, 'unit' => self::UNIT_TOKENS,   'quota_exempt' => true],
         self::WEB_SEARCH    => ['label' => 'Recherches Internet',               'category' => self::CAT_WEB_SEARCH,  'unit' => self::UNIT_SEARCHES, 'quota_exempt' => false],
         self::HTML_TOOL     => ['label' => 'Pages HTML (rédaction)',            'category' => self::CAT_CREATION,    'unit' => self::UNIT_TOKENS,   'quota_exempt' => false],
         self::MAP_TOOL      => ['label' => 'Itinéraires (rédaction)',           'category' => self::CAT_CREATION,    'unit' => self::UNIT_TOKENS,   'quota_exempt' => false],
         self::PRESENTATION_TOOL => ['label' => 'Présentations (rédaction)',     'category' => self::CAT_CREATION,    'unit' => self::UNIT_TOKENS,   'quota_exempt' => false],
-        self::NATIVE_DECK   => ['label' => 'Présentations et classeurs réalisés par le modèle', 'category' => self::CAT_CREATION, 'unit' => self::UNIT_TOKENS,  'quota_exempt' => false],
+        self::NATIVE_DECK   => ['label' => 'Fichiers réalisés par le modèle', 'category' => self::CAT_CREATION, 'unit' => self::UNIT_TOKENS,  'quota_exempt' => false],
         self::TRANSCRIBE    => ['label' => 'Dictée vocale',                     'category' => self::CAT_VOICE,       'unit' => self::UNIT_MINUTES,  'quota_exempt' => false],
         self::SPEECH        => ['label' => 'Lecture à voix haute',              'category' => self::CAT_VOICE,       'unit' => self::UNIT_MINUTES,  'quota_exempt' => false],
         self::KB_CHUNKING   => ['label' => 'Découpage sémantique',              'category' => self::CAT_KNOWLEDGE,   'unit' => self::UNIT_TOKENS,   'quota_exempt' => true],
@@ -144,6 +156,12 @@ final class UsageSource
             'description' => 'Réponses et régénérations des assistants (tokens du modèle).',
             'family'      => self::FAM_CONVERSATION,
             'color'       => '#6366f1',
+        ],
+        self::CAT_OFFICE => [
+            'label'       => 'Claude dans Office',
+            'description' => 'Demandes de l\'add-in Claude dans Excel, Word et PowerPoint passées par MIA : jetons du modèle (cache compris) et recherches Internet.',
+            'family'      => self::FAM_CONVERSATION,
+            'color'       => '#d97757',
         ],
         self::CAT_CHAT_ASSIST => [
             'label'       => 'Assistance de conversation',
@@ -242,6 +260,19 @@ final class UsageSource
     {
         return $source === self::TOOL_TEST ? self::CAT_ADMIN : self::CAT_CREATION;
     }
+
+    /**
+     * Source de la ligne « recherches » d'une opération : celles de Claude
+     * dans Office restent dans SA catégorie (tout ce que l'add-in a coûté se
+     * lit au même endroit) ; les autres sont des « Recherches Internet ».
+     */
+    public static function searchSourceFor(string $source): string
+    {
+        return $source === self::OFFICE_ADDIN ? self::OFFICE_SEARCH : self::WEB_SEARCH;
+    }
+
+    /** Sources de Claude dans Office (jetons et recherches). */
+    public const OFFICE_SOURCES = [self::OFFICE_ADDIN, self::OFFICE_SEARCH];
 
     public static function unit(string $source): string
     {

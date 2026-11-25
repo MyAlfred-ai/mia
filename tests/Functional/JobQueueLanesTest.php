@@ -386,17 +386,54 @@ final class JobQueueLanesTest extends DatabaseTestCase
         }
         $workers = 6;
         $procs = [];
+        $stdin = [];
         $outs  = [];
         for ($w = 0; $w < $workers; $w++) {
             $outs[$w] = tempnam(sys_get_temp_dir(), 'mia-claim-');
             $procs[$w] = proc_open(
-                [PHP_BINARY, ROOT . '/tests/Support/claim_loop.php', '150', '40'],
-                [0 => ['file', '/dev/null', 'r'], 1 => ['file', $outs[$w], 'w'], 2 => ['file', $outs[$w] . '.err', 'w']],
+                [PHP_BINARY, ROOT . '/tests/Support/claim_loop.php', '150', '40', $outs[$w] . '.pret'],
+                [0 => ['pipe', 'r'], 1 => ['file', $outs[$w], 'w'], 2 => ['file', $outs[$w] . '.err', 'w']],
                 $pipes,
                 ROOT,
                 $env
             );
             $this->assertIsResource($procs[$w]);
+            $stdin[$w] = $pipes[0];
+        }
+
+        // Barrière de départ : aucun worker ne réclame avant que TOUS aient
+        // démarré (bootstrap, connexion MySQL). Le démarrage d'un process PHP
+        // dépend de la machine : sans barrière, le premier prêt travaillait
+        // seul un moment, et l'étendue mesurée plus bas comptait ce décalage
+        // (2,62 s puis 2,67 s pour 2,40 s permis sur un runner GitHub, le
+        // 2026-11-10, sans que le code des couloirs ait bougé).
+        $echec  = null;
+        $limite = microtime(true) + 60;
+        while (true) {
+            $prets = 0;
+            foreach ($outs as $w => $f) {
+                if (is_file($f . '.pret')) {
+                    $prets++;
+                } elseif (!proc_get_status($procs[$w])['running']) {
+                    $echec = "Le worker $w s'est arrêté avant d'être prêt.";
+                }
+            }
+            if ($prets === $workers || $echec !== null) {
+                break;
+            }
+            if (microtime(true) > $limite) {
+                $echec = "Workers pas tous prêts en 60 s ($prets/$workers).";
+                break;
+            }
+            usleep(10_000);
+        }
+        // Départ donné à tous d'un coup ; sur échec, l'entrée se ferme sans
+        // « go » et chaque worker sort sans rien réclamer.
+        foreach ($stdin as $in) {
+            if ($echec === null) {
+                fwrite($in, "go\n");
+            }
+            fclose($in);
         }
         foreach ($procs as $p) {
             while (proc_get_status($p)['running']) {
@@ -414,8 +451,21 @@ final class JobQueueLanesTest extends DatabaseTestCase
             $erreurs .= (string)@file_get_contents($f . '.err');
             @unlink($f);
             @unlink($f . '.err');
+            @unlink($f . '.pret');
         }
-        $this->assertSame('', trim($erreurs), $erreurs);
+        if ($echec !== null) {
+            $this->fail($echec . "\n" . $erreurs);
+        }
+        // Une réclamation en échec (`claimNext` journalise et rend null, le
+        // worker réessaie) ne casse aucune garantie vérifiée ici : comptée et
+        // citée, pas fatale. Tout autre message sur la sortie d'erreur l'est.
+        $lignes = preg_split('/\R/', trim($erreurs), -1, PREG_SPLIT_NO_EMPTY) ?: [];
+        $reclamationsRatees = array_values(array_filter(
+            $lignes,
+            static fn ($l) => str_starts_with($l, '[JobQueue] claimNext')
+        ));
+        $autres = array_diff($lignes, $reclamationsRatees);
+        $this->assertSame([], array_values($autres), implode("\n", $autres));
 
         // Chaque job exécuté une fois, aucun oublié.
         $ids = array_column($executions, 'id');
@@ -459,8 +509,60 @@ final class JobQueueLanesTest extends DatabaseTestCase
             $pic = max($pic, $enCours);
         }
         $this->assertGreaterThanOrEqual(4, $pic, 'Pas plus de ' . $pic . ' job(s) à la fois avec 6 workers.');
-        $serie = array_sum(array_map(static fn ($e) => $e['end'] - $e['start'], $executions));
-        $etendue = max(array_column($executions, 'end')) - min(array_column($executions, 'start'));
-        $this->assertLessThan($serie / 2, $etendue, 'Les workers n\'ont pas travaillé en parallèle.');
+
+        // Durée qu'aurait prise une exécution en série, mesurée sur CETTE
+        // machine : le travail de chaque job (150 ms), plus l'enchaînement d'un
+        // job au suivant — clôture du job, réclamation du suivant —, des
+        // allers-retours MySQL qui ne coûtent que quelques millisecondes sur un
+        // poste et bien davantage, par à-coups, quand MySQL partage deux cœurs
+        // avec six workers (runner GitHub). Comparer à la seule somme des
+        // travaux revenait à exiger d'un runner lent qu'il enchaîne aussi vite
+        // qu'un rapide : l'enchaînement allongeait l'étendue mesurée (il est
+        // sur son chemin critique) sans compter dans la référence.
+        // Une exécution en série échoue TOUJOURS ici : un worker seul enchaîne
+        // ses n jobs, l'écart entre deux jobs vaut au moins la clôture du
+        // premier plus la réclamation du second (le seul appel à claimNext :
+        // une attente glissée entre la réclamation et le travail, qui
+        // sérialiserait les workers, n'entre pas dans la référence), donc
+        //   étendue ≥ travail + Σ clôtures + Σ réclamations − la plus longue
+        //            de chaque (le dernier job n'a pas de suivant, le premier
+        //            pas de précédent) = $serie.
+        // Exiger moins de la moitié revient à exiger plus de deux jobs en cours
+        // en moyenne. Plancher du scénario : les 4 tours d'une conversation
+        // puis les 6 maintenances (passées après tout le reste, une à la fois)
+        // font une chaîne de 10 jobs sur 32 — environ 0,31 de la série.
+        $travail = 0.0;
+        $clotures = [];
+        $reclamations = [];
+        foreach ($executions as $e) {
+            $travail += $e['end'] - $e['start'];
+            $clotures[] = max(0.0, $e['closed'] - $e['end']);
+            $reclamations[] = max(0.0, $e['claimed'] - $e['claim']);
+        }
+        $serie = $travail
+            + array_sum($clotures) - max($clotures)
+            + array_sum($reclamations) - max($reclamations);
+        $debut = min(array_column($executions, 'start'));
+        $etendue = max(array_column($executions, 'end')) - $debut;
+        $premiers = [];
+        foreach ($executions as $e) {
+            $premiers[$e['pid']] = min($premiers[$e['pid']] ?? INF, $e['start'] - $debut);
+        }
+        sort($premiers);
+        $this->assertLessThan($serie / 2, $etendue, sprintf(
+            "Les workers n'ont pas travaillé en parallèle : étendue %.2f s pour une série de %.2f s "
+            . "(travail %.2f s, enchaînement moyen %.0f ms = clôture %.0f + réclamation %.0f), pic %d, "
+            . "premier job de chaque worker à +%s s, %d réclamation(s) en échec%s",
+            $etendue,
+            $serie,
+            $travail,
+            (array_sum($clotures) + array_sum($reclamations)) / count($executions) * 1000,
+            array_sum($clotures) / count($executions) * 1000,
+            array_sum($reclamations) / count($executions) * 1000,
+            $pic,
+            implode(' / +', array_map(static fn ($t) => sprintf('%.2f', $t), $premiers)),
+            count($reclamationsRatees),
+            $reclamationsRatees === [] ? '.' : ' : ' . $reclamationsRatees[0]
+        ));
     }
 }

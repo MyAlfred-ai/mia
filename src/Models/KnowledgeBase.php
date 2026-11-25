@@ -16,6 +16,18 @@ declare(strict_types=1);
  * message (KnowledgeBaseRemote, MyBrainContext). La seconde réutilise tout ce
  * qui entoure une base (partage, assistants, sélecteur, compteurs) ; les
  * chemins réservés aux documents la refusent.
+ *
+ * « Uniquement pour moi » (`is_private`, migration 095) : une base réservée à
+ * son créateur. Toutes les lectures de périmètre (forManager,
+ * selectableForUser, ownedBy, manageableBy, canFeed, gateForUser) passent par
+ * hiddenFrom() — aucun droit, pas même celui d'un administrateur, ne l'ouvre
+ * à quelqu'un d'autre.
+ *
+ * Trois niveaux de visibilité (`visibility()`, migration 114) : « Privée »
+ * (`is_private`), « Commune » (des groupes ou des personnes choisis — sans
+ * eux, son créateur et les administrateurs) et « Publique » (`is_public` :
+ * toute l'organisation la voit et la coche dans le chat ; seuls son créateur
+ * et les administrateurs la modifient). La base système est publique.
  */
 class KnowledgeBase
 {
@@ -31,6 +43,21 @@ class KnowledgeBase
     /** Contenu interrogé en direct dans un cerveau MyBrain. */
     public const BACKEND_MYBRAIN = 'mybrain';
 
+    /** Table permanente : des lignes comptées et croisées côté serveur (KbTableStore). */
+    public const BACKEND_TABLE = 'table';
+
+    /** Visibilité : vous seul (`is_private`). */
+    public const VIS_PRIVATE = 'private';
+
+    /** Visibilité : des groupes ou des personnes choisis (sans eux : créateur et administrateurs). */
+    public const VIS_COMMON = 'common';
+
+    /** Visibilité : toute l'organisation (`is_public`). */
+    public const VIS_PUBLIC = 'public';
+
+    /** Les trois niveaux, dans l'ordre où les écrans les présentent. */
+    public const VISIBILITIES = [self::VIS_PRIVATE, self::VIS_COMMON, self::VIS_PUBLIC];
+
     /**
      * Colonnes de la connexion d'une base en direct, jointes aux lectures de
      * liste (écran d'administration, sélecteur du chat). Jamais la clé : elle
@@ -41,33 +68,142 @@ class KnowledgeBase
          r.rights AS remote_rights, r.status AS remote_status, r.status_error AS remote_error,
          r.checked_at AS remote_checked_at, TIMESTAMPDIFF(SECOND, r.checked_at, NOW()) AS remote_checked_age';
 
+    /**
+     * Fiche d'une table permanente, jointe aux mêmes lectures : son nombre de
+     * lignes et de colonnes, si MIA peut y écrire, quand elle a changé. Jamais
+     * ses colonnes ni ses lignes (KbTableStore).
+     */
+    private const TABLE_COLUMNS =
+        'kt.row_count AS table_rows, kt.column_count AS table_columns, kt.mia_write AS table_mia_write,
+         kt.origin_json AS table_origin, TIMESTAMPDIFF(SECOND, kt.updated_at, NOW()) AS table_updated_age';
+
+    private const TABLE_JOIN = ' LEFT JOIN knowledge_base_tables kt ON kt.kb_id = kb.id';
+
     /** Une base en direct (MyBrain) ? PURE — lit la colonne `backend` de la ligne. */
     public static function isRemote(array $kb): bool
     {
         return (string)($kb['backend'] ?? self::BACKEND_LOCAL) === self::BACKEND_MYBRAIN;
     }
 
+    /** Une table permanente (des lignes, pas des documents) ? PURE. */
+    public static function isTable(array $kb): bool
+    {
+        return (string)($kb['backend'] ?? self::BACKEND_LOCAL) === self::BACKEND_TABLE;
+    }
+
     /**
-     * Sépare les bases en direct des bases locales, ordre conservé. PURE.
+     * La base porte-t-elle des DOCUMENTS (dépôt, vectorisation, réindexation,
+     * synchronisation, collection Qdrant) ? Ni un cerveau en direct, ni une
+     * table permanente. PURE.
+     */
+    public static function holdsDocuments(array $kb): bool
+    {
+        return (string)($kb['backend'] ?? self::BACKEND_LOCAL) === self::BACKEND_LOCAL;
+    }
+
+    /**
+     * Sépare les bases par nature, ordre conservé. PURE. Les deux premières
+     * listes gardent leur sens d'origine (en direct, locales à documents) ;
+     * les tables permanentes sortent à part — elles n'ont ni collection
+     * vectorielle ni extraits, la recherche d'une base locale n'y trouverait
+     * rien.
      *
      * @param list<array<string, mixed>> $kbs
-     * @return array{0: list<array<string, mixed>>, 1: list<array<string, mixed>>} [en direct, locales]
+     * @return array{0: list<array<string, mixed>>, 1: list<array<string, mixed>>, 2: list<array<string, mixed>>} [en direct, locales, tables]
      */
     public static function partitionByBackend(array $kbs): array
     {
         $remote = [];
         $local  = [];
+        $tables = [];
         foreach ($kbs as $kb) {
             if (self::isRemote($kb)) {
                 $remote[] = $kb;
+            } elseif (self::isTable($kb)) {
+                $tables[] = $kb;
             } else {
                 $local[] = $kb;
             }
         }
-        return [$remote, $local];
+        return [$remote, $local, $tables];
     }
 
     // ===================== Stockage physique =====================
+
+    /** Base « Uniquement pour moi » ? PURE — lit la colonne `is_private` de la ligne. */
+    public static function isPrivate(array $kb): bool
+    {
+        return (int)($kb['is_private'] ?? 0) === 1;
+    }
+
+    /** Base « Publique » ? PURE — lit la colonne `is_public` (jamais vraie pour une base privée). */
+    public static function isPublic(array $kb): bool
+    {
+        return (int)($kb['is_public'] ?? 0) === 1 && !self::isPrivate($kb);
+    }
+
+    /**
+     * Visibilité d'une base, en un mot : `private`, `common` ou `public`.
+     * PURE. La base système sert tout le monde : publique.
+     */
+    public static function visibility(array $kb): string
+    {
+        if (self::isPrivate($kb)) {
+            return self::VIS_PRIVATE;
+        }
+        if (self::isPublic($kb) || (int)($kb['is_system'] ?? 0) === 1) {
+            return self::VIS_PUBLIC;
+        }
+        return self::VIS_COMMON;
+    }
+
+    /** Une valeur reçue d'un formulaire, ramenée à l'un des trois niveaux (inconnue : null). PURE. */
+    public static function normalizeVisibility(mixed $value): ?string
+    {
+        $value = is_string($value) ? trim($value) : '';
+        return in_array($value, self::VISIBILITIES, true) ? $value : null;
+    }
+
+    /**
+     * Cette base est-elle CACHÉE à cet utilisateur ? PURE. Vrai pour une base
+     * « Uniquement pour moi » dont il n'est pas le créateur — quel que soit son
+     * rôle : la règle passe AVANT tout droit, administrateur compris. Une base
+     * privée sans créateur (compte supprimé hors de l'écran, qui les efface)
+     * est cachée à tout le monde : la règle ne se relâche jamais d'elle-même.
+     */
+    public static function hiddenFrom(array $kb, ?array $user): bool
+    {
+        if (!self::isPrivate($kb)) {
+            return false;
+        }
+        $userId = (int)($user['id'] ?? 0);
+        return $userId <= 0 || (int)($kb['created_by'] ?? 0) !== $userId;
+    }
+
+    /**
+     * Cet utilisateur est-il le CRÉATEUR de la base ? PURE. Seul lui pose ou
+     * retire « Uniquement pour moi » — un administrateur ne réserve pas la base
+     * de quelqu'un d'autre à lui-même, ni ne rouvre celle qu'on s'est réservée.
+     */
+    public static function createdBy(array $kb, ?array $user): bool
+    {
+        $userId = (int)($user['id'] ?? 0);
+        return $userId > 0
+            && (int)($kb['is_system'] ?? 0) !== 1
+            && (int)($kb['created_by'] ?? 0) === $userId;
+    }
+
+    /**
+     * Nom d'une base tel qu'un écran D'ENSEMBLE le montre (consommation, moteur
+     * vectoriel) : le vrai nom, sauf une base « Uniquement pour moi » vue par
+     * quelqu'un d'autre que son créateur — elle reste comptée, jamais nommée.
+     */
+    public static function displayNameFor(array $kb, ?array $viewer): string
+    {
+        return self::hiddenFrom($kb, $viewer)
+            ? t('Base « Uniquement pour moi » n° {id}', ['id' => (int)($kb['id'] ?? $kb['kb_id'] ?? 0)])
+            : (string)($kb['name'] ?? $kb['kb_name'] ?? '');
+    }
 
     public static function storageRoot(): string
     {
@@ -114,7 +250,7 @@ class KnowledgeBase
         // Garde ICI, point d'arrivée de tous les chemins (écran, restauration
         // d'une sauvegarde, script) — sans elle, on créerait une collection
         // Qdrant de dimension 0 pour rien.
-        if (!$kb || self::isRemote($kb)) {
+        if (!$kb || !self::holdsDocuments($kb)) {
             return;
         }
 
@@ -132,6 +268,9 @@ class KnowledgeBase
         $total = count($docs);
         try {
             foreach (array_values($docs) as $i => $doc) {
+                if (!empty($doc['excluded_at'])) {
+                    continue; // exclu : plus d'extraits, rien à vectoriser
+                }
                 self::setActivity($kbId, [
                     'kind'    => 'reindex',
                     'phase'   => 'files',
@@ -224,10 +363,11 @@ class KnowledgeBase
                     (SELECT COUNT(*) FROM knowledge_base_documents d WHERE d.kb_id = kb.id) AS doc_count,
                     (SELECT COALESCE(SUM(file_size), 0) FROM knowledge_base_documents d WHERE d.kb_id = kb.id) AS total_size,
                     (SELECT COUNT(*) FROM knowledge_base_chunks c WHERE c.kb_id = kb.id)    AS chunk_count,
-                    ' . self::REMOTE_COLUMNS . '
+                    TIMESTAMPDIFF(SECOND, kb.last_used_at, NOW()) AS last_used_age,
+                    ' . self::REMOTE_COLUMNS . ', ' . self::TABLE_COLUMNS . '
              FROM knowledge_bases kb
              LEFT JOIN users u ON u.id = kb.created_by
-             LEFT JOIN knowledge_base_remotes r ON r.kb_id = kb.id
+             LEFT JOIN knowledge_base_remotes r ON r.kb_id = kb.id' . self::TABLE_JOIN . '
              ORDER BY kb.name ASC'
         )->fetchAll();
     }
@@ -246,12 +386,15 @@ class KnowledgeBase
     {
         // Toutes les bases de l'organisation : l'administrateur, et tout rôle
         // qui porte le droit « Bases de connaissances — Gérer ».
+        // Hors les bases « Uniquement pour moi » des autres : le droit de tout
+        // gérer ne les ouvre pas.
         if (Role::userCan($user, 'knowledge_bases.manage')) {
-            return array_map(static function (array $kb): array {
+            $mine = array_filter(self::all(), static fn(array $kb): bool => !self::hiddenFrom($kb, $user));
+            return array_values(array_map(static function (array $kb): array {
                 $kb['is_shared']        = 0;
                 $kb['share_can_manage'] = 1;
                 return $kb;
-            }, self::all());
+            }, $mine));
         }
 
         $userId   = (int)$user['id'];
@@ -266,22 +409,24 @@ class KnowledgeBase
                     (SELECT COUNT(*) FROM knowledge_base_documents d WHERE d.kb_id = kb.id) AS doc_count,
                     (SELECT COALESCE(SUM(file_size), 0) FROM knowledge_base_documents d WHERE d.kb_id = kb.id) AS total_size,
                     (SELECT COUNT(*) FROM knowledge_base_chunks c WHERE c.kb_id = kb.id)    AS chunk_count,
+                    TIMESTAMPDIFF(SECOND, kb.last_used_at, NOW()) AS last_used_age,
                     CASE WHEN kb.created_by = ? THEN 0 ELSE 1 END AS is_shared,
                     CASE WHEN kb.created_by = ? THEN 1 ELSE COALESCE((
                         SELECT MAX(s.can_manage) FROM knowledge_base_shares s
                         WHERE s.kb_id = kb.id
                           AND (s.user_id = ? OR s.group_id IN (' . $groupIn . '))
                     ), 0) END AS share_can_manage,
-                    ' . self::REMOTE_COLUMNS . '
+                    ' . self::REMOTE_COLUMNS . ', ' . self::TABLE_COLUMNS . '
              FROM knowledge_bases kb
              LEFT JOIN users u ON u.id = kb.created_by
-             LEFT JOIN knowledge_base_remotes r ON r.kb_id = kb.id
+             LEFT JOIN knowledge_base_remotes r ON r.kb_id = kb.id' . self::TABLE_JOIN . '
              WHERE kb.created_by = ?
-                OR EXISTS (
+                OR (kb.is_private = 0 AND kb.is_public = 1)
+                OR (kb.is_private = 0 AND EXISTS (
                     SELECT 1 FROM knowledge_base_shares s
                     WHERE s.kb_id = kb.id
                       AND (s.user_id = ? OR s.group_id IN (' . $groupIn . '))
-                )
+                ))
              ORDER BY kb.name ASC';
 
         $params = array_merge(
@@ -335,7 +480,7 @@ class KnowledgeBase
         // Une base en direct n'a pas de documents : c'est l'état de sa
         // connexion (remote_status) qui décide si elle se coche.
         $counters .= ',
-              ' . self::REMOTE_COLUMNS;
+              ' . self::REMOTE_COLUMNS . ', ' . self::TABLE_COLUMNS;
 
         // Sans le droit « Bases de connaissances — Utiliser », aucune base à
         // choisir dans la conversation (ni cerveau MyBrain, qui suit la
@@ -346,14 +491,18 @@ class KnowledgeBase
         }
 
         if (Role::userCan($user, 'knowledge_bases.manage')) {
-            return Database::getInstance()->query(
+            // Toutes, sauf les bases « Uniquement pour moi » des autres.
+            $stmt = Database::getInstance()->prepare(
                 'SELECT kb.*, u.name AS creator_name, 0 AS is_shared, ' . $counters . '
                    FROM knowledge_bases kb
                    LEFT JOIN users u ON u.id = kb.created_by
-                   LEFT JOIN knowledge_base_remotes r ON r.kb_id = kb.id
+                   LEFT JOIN knowledge_base_remotes r ON r.kb_id = kb.id' . self::TABLE_JOIN . '
                   WHERE kb.is_active = 1
+                    AND (kb.is_private = 0 OR kb.created_by = ?)
                   ORDER BY kb.name ASC'
-            )->fetchAll();
+            );
+            $stmt->execute([(int)($user['id'] ?? 0)]);
+            return $stmt->fetchAll();
         }
 
         $userId   = (int)$user['id'];
@@ -367,14 +516,15 @@ class KnowledgeBase
                     CASE WHEN kb.created_by = ? THEN 0 ELSE 1 END AS is_shared, ' . $counters . '
                FROM knowledge_bases kb
                LEFT JOIN users u ON u.id = kb.created_by
-               LEFT JOIN knowledge_base_remotes r ON r.kb_id = kb.id
+               LEFT JOIN knowledge_base_remotes r ON r.kb_id = kb.id' . self::TABLE_JOIN . '
               WHERE kb.is_active = 1
                 AND (kb.created_by = ?
-                     OR EXISTS (
+                     OR (kb.is_private = 0 AND kb.is_public = 1)
+                     OR (kb.is_private = 0 AND EXISTS (
                          SELECT 1 FROM knowledge_base_shares s
                          WHERE s.kb_id = kb.id
                            AND (s.user_id = ? OR s.group_id IN (' . $groupIn . '))
-                     ))
+                     )))
               ORDER BY kb.name ASC';
 
         $stmt = Database::getInstance()->prepare($sql);
@@ -423,6 +573,12 @@ class KnowledgeBase
                 : null;
         }
 
+        // Table permanente : ses lignes sont en base, rien à vectoriser. Seule
+        // une table VIDE n'a rien à dire.
+        if (self::isTable($kb)) {
+            return (int)($kb['table_rows'] ?? 0) > 0 ? null : 'Table vide';
+        }
+
         $docs    = (int)($kb['doc_count']    ?? 0);
         $ready   = (int)($kb['ready_docs']   ?? 0);
         $pending = (int)($kb['pending_docs'] ?? 0);
@@ -450,9 +606,9 @@ class KnowledgeBase
         // Colonnes de connexion jointes : le panneau d'état d'une base en
         // direct (KbStatus) les lit sur la ligne, comme celles de la liste.
         $stmt = Database::getInstance()->prepare(
-            'SELECT kb.*, ' . self::REMOTE_COLUMNS . '
+            'SELECT kb.*, ' . self::REMOTE_COLUMNS . ', ' . self::TABLE_COLUMNS . '
                FROM knowledge_bases kb
-               LEFT JOIN knowledge_base_remotes r ON r.kb_id = kb.id
+               LEFT JOIN knowledge_base_remotes r ON r.kb_id = kb.id' . self::TABLE_JOIN . '
               WHERE kb.id = ?'
         );
         $stmt->execute([$id]);
@@ -466,6 +622,10 @@ class KnowledgeBase
      */
     public static function manageableBy(int $kbId, array $user): bool
     {
+        $kb = self::findById($kbId);
+        if ($kb === null || self::hiddenFrom($kb, $user)) {
+            return false;
+        }
         if (self::ownedBy($kbId, $user)) {
             return true;
         }
@@ -475,24 +635,30 @@ class KnowledgeBase
     /**
      * Droit de PROPRIÉTAIRE : suppression de la base et gestion de son partage.
      * Réservé au créateur et aux administrateurs — un partage, même en écriture,
-     * ne permet ni de supprimer la base ni de la re-partager.
+     * ne permet ni de supprimer la base ni de la re-partager. Une base
+     * « Uniquement pour moi » n'appartient qu'à son créateur.
      */
     public static function ownedBy(int $kbId, array $user): bool
     {
-        if (Role::userCan($user, 'knowledge_bases.manage')) {
-            return self::findById($kbId) !== null;
+        $kb = self::findById($kbId);
+        if ($kb === null || self::hiddenFrom($kb, $user)) {
+            return false;
         }
-        $stmt = Database::getInstance()->prepare(
-            'SELECT 1 FROM knowledge_bases WHERE id = ? AND created_by = ?'
-        );
-        $stmt->execute([$kbId, (int)$user['id']]);
-        return (bool)$stmt->fetch();
+        if (Role::userCan($user, 'knowledge_bases.manage')) {
+            return true;
+        }
+        $userId = (int)($user['id'] ?? 0);
+        return $userId > 0 && (int)($kb['created_by'] ?? 0) === $userId;
     }
 
-    /** Base visible par l'utilisateur : créateur, admin, ou partage reçu. */
+    /** Base visible par l'utilisateur : créateur, admin, base publique, ou partage reçu. */
     public static function visibleBy(int $kbId, array $user): bool
     {
-        if (self::ownedBy($kbId, $user)) {
+        $kb = self::findById($kbId);
+        if ($kb === null || self::hiddenFrom($kb, $user)) {
+            return false;
+        }
+        if (self::ownedBy($kbId, $user) || self::visibility($kb) === self::VIS_PUBLIC) {
             return true;
         }
         return self::shareLevel($kbId, $user) !== null;
@@ -541,9 +707,10 @@ class KnowledgeBase
     public static function countByCreator(int $userId): int
     {
         $stmt = Database::getInstance()->prepare(
-            'SELECT COUNT(*) FROM knowledge_bases WHERE created_by = ?'
+            'SELECT COUNT(*) FROM knowledge_bases WHERE created_by = ? AND backend <> ?'
         );
-        $stmt->execute([$userId]);
+        // Les tables permanentes ont leur propre plafond (KbTableStore::MAX_PER_CREATOR).
+        $stmt->execute([$userId, self::BACKEND_TABLE]);
         return (int)$stmt->fetchColumn();
     }
 
@@ -554,23 +721,115 @@ class KnowledgeBase
         $db = Database::getInstance();
         // Une base en direct n'a rien à vectoriser : son trio embedding_* vaut
         // '' / '' / 0, quoi que l'appelant ait passé.
-        $remote = ($data['backend'] ?? self::BACKEND_LOCAL) === self::BACKEND_MYBRAIN;
+        // Une table permanente non plus : ses lignes vivent dans
+        // knowledge_base_tables (KbTableStore), que l'appelant crée ensuite.
+        $backend = (string)($data['backend'] ?? self::BACKEND_LOCAL);
+        $backend = in_array($backend, [self::BACKEND_MYBRAIN, self::BACKEND_TABLE], true) ? $backend : self::BACKEND_LOCAL;
+        $remote  = $backend !== self::BACKEND_LOCAL;
+        $private = !empty($data['is_private']) && empty($data['is_system']) && !empty($data['created_by']);
         $db->prepare(
             'INSERT INTO knowledge_bases
-                (name, description, backend, embedding_provider, embedding_model, embedding_dims, is_active, is_system, created_by)
-             VALUES (?,?,?,?,?,?,?,?,?)'
+                (name, description, backend, embedding_provider, embedding_model, embedding_dims, is_active, is_system, is_private, is_public, created_by)
+             VALUES (?,?,?,?,?,?,?,?,?,?,?)'
         )->execute([
             (string)$data['name'],
             $data['description'] ?? null,
-            $remote ? self::BACKEND_MYBRAIN : self::BACKEND_LOCAL,
+            $backend,
             $remote ? '' : (string)$data['embedding_provider'],
             $remote ? '' : (string)$data['embedding_model'],
             $remote ? 0 : (int)$data['embedding_dims'],
             !empty($data['is_active']) ? 1 : 0,
             !empty($data['is_system']) ? 1 : 0,
+            // « Uniquement pour moi » suppose un créateur ; jamais pour une base système.
+            $private ? 1 : 0,
+            // « Publique » et « Privée » s'excluent : la seconde l'emporte.
+            !$private && !empty($data['is_public']) ? 1 : 0,
             isset($data['created_by']) && $data['created_by'] !== null ? (int)$data['created_by'] : null,
         ]);
         return (int)$db->lastInsertId();
+    }
+
+    /**
+     * Pose ou retire « Uniquement pour moi ». L'appelant a vérifié que
+     * l'utilisateur est le CRÉATEUR (createdBy) ; refusée sur une base système
+     * ou sans créateur. La poser retire, dans la même transaction, tous les
+     * partages accordés : un partage dormant reviendrait au premier retrait de
+     * l'option sans que personne l'ait redécidé. Les liaisons aux assistants
+     * restent : la porte (gateForUser) ne laisse passer la base que pour son
+     * créateur.
+     *
+     * @return int partages retirés
+     */
+    public static function setPrivate(int $id, bool $private): int
+    {
+        $kb = self::findById($id);
+        if ($kb === null || (int)($kb['is_system'] ?? 0) === 1 || empty($kb['created_by'])) {
+            return 0;
+        }
+        $db = Database::getInstance();
+        $db->beginTransaction();
+        try {
+            // Privée exclut publique : la seconde tombe avec la première.
+            $db->prepare('UPDATE knowledge_bases SET is_private = ?, is_public = IF(?, 0, is_public) WHERE id = ?')
+               ->execute([$private ? 1 : 0, $private ? 1 : 0, $id]);
+            $removed = 0;
+            if ($private) {
+                $stmt = $db->prepare('DELETE FROM knowledge_base_shares WHERE kb_id = ?');
+                $stmt->execute([$id]);
+                $removed = $stmt->rowCount();
+            }
+            $db->commit();
+            return $removed;
+        } catch (\Throwable $e) {
+            $db->rollBack();
+            throw $e;
+        }
+    }
+
+    /**
+     * Règle la visibilité d'une base : `private`, `common` ou `public`.
+     * L'appelant a vérifié les droits : PROPRIÉTAIRE pour « Commune » et
+     * « Publique », CRÉATEUR pour poser ou retirer « Privée » (createdBy) —
+     * d'où `$byCreator` : sans lui, une base privée le reste, et « Privée »
+     * n'est jamais posée. Sans effet sur la base système.
+     *
+     * « Privée » et « Publique » retirent les partages accordés, dans la même
+     * transaction : une base publique se lit par tous et ne se modifie que par
+     * son créateur et les administrateurs ; un partage dormant reviendrait au
+     * premier retour à « Commune » sans que personne l'ait redécidé.
+     *
+     * @return int partages retirés
+     */
+    public static function setVisibility(int $id, string $visibility, bool $byCreator): int
+    {
+        $visibility = self::normalizeVisibility($visibility);
+        $kb = self::findById($id);
+        if ($visibility === null || $kb === null || (int)($kb['is_system'] ?? 0) === 1) {
+            return 0;
+        }
+        if (self::isPrivate($kb) && !$byCreator) {
+            return 0;
+        }
+        if ($visibility === self::VIS_PRIVATE) {
+            return $byCreator ? self::setPrivate($id, true) : 0;
+        }
+        $db = Database::getInstance();
+        $db->beginTransaction();
+        try {
+            $public = $visibility === self::VIS_PUBLIC;
+            $db->prepare('UPDATE knowledge_bases SET is_private = 0, is_public = ? WHERE id = ?')->execute([$public ? 1 : 0, $id]);
+            $removed = 0;
+            if ($public) {
+                $stmt = $db->prepare('DELETE FROM knowledge_base_shares WHERE kb_id = ?');
+                $stmt->execute([$id]);
+                $removed = $stmt->rowCount();
+            }
+            $db->commit();
+            return $removed;
+        } catch (\Throwable $e) {
+            $db->rollBack();
+            throw $e;
+        }
     }
 
     /**
@@ -769,6 +1028,51 @@ class KnowledgeBase
         Database::getInstance()->prepare('DELETE FROM knowledge_bases WHERE id = ?')->execute([$id]);
     }
 
+    /**
+     * Supprime la base ET sa collection Qdrant (best effort, avant la ligne).
+     * Une base en direct n'en a pas : sa connexion part avec la ligne
+     * (knowledge_base_remotes, ON DELETE CASCADE).
+     */
+    public static function destroy(int $id): void
+    {
+        $kb = self::findById($id);
+        if ($kb !== null && self::holdsDocuments($kb)) {
+            try {
+                (new QdrantStore())->dropCollection(self::collectionName($id));
+            } catch (\Throwable $e) {
+                error_log('[KB] drop collection kb_' . $id . ' : ' . $e->getMessage());
+            }
+        }
+        self::delete($id);
+    }
+
+    /** Bases « Uniquement pour moi » créées par ce compte. */
+    public static function privateIdsOf(int $userId): array
+    {
+        $stmt = Database::getInstance()->prepare(
+            'SELECT id FROM knowledge_bases WHERE created_by = ? AND is_private = 1 ORDER BY id'
+        );
+        $stmt->execute([$userId]);
+        return array_map('intval', $stmt->fetchAll(PDO::FETCH_COLUMN));
+    }
+
+    /**
+     * Supprime les bases « Uniquement pour moi » d'un compte qu'on supprime.
+     * Elles ne servaient qu'à lui : sans créateur (`created_by` → NULL), plus
+     * personne ne pourrait les voir ni les effacer — exactement comme ses
+     * conversations, qui partent avec le compte.
+     *
+     * @return int bases supprimées
+     */
+    public static function deletePrivateOf(int $userId): int
+    {
+        $ids = self::privateIdsOf($userId);
+        foreach ($ids as $id) {
+            self::destroy($id);
+        }
+        return count($ids);
+    }
+
     // ===================== Partage =====================
 
     /**
@@ -802,7 +1106,7 @@ class KnowledgeBase
     public static function canFeed(array $kb, array $user): bool
     {
         $userId = (int)($user['id'] ?? 0);
-        if ($userId <= 0 || !self::isRemote($kb) || empty($kb['is_active'])) {
+        if ($userId <= 0 || !self::isRemote($kb) || empty($kb['is_active']) || self::hiddenFrom($kb, $user)) {
             return false;
         }
         if (Role::userCan($user, 'knowledge_bases.manage')) {
@@ -923,6 +1227,12 @@ class KnowledgeBase
         $db->prepare('DELETE FROM knowledge_base_shares WHERE kb_id = ?')->execute([$kbId]);
 
         $kb = self::findById($kbId);
+        // « Privée » : aucun partage, quoi que porte le formulaire. « Publique » :
+        // tout le monde la voit, et seuls son créateur et les administrateurs
+        // la modifient — aucun partage non plus.
+        if ($kb === null || self::isPrivate($kb) || self::isPublic($kb)) {
+            return;
+        }
         $creatorId  = $kb !== null && $kb['created_by'] !== null ? (int)$kb['created_by'] : null;
         $remote     = $kb !== null && self::isRemote($kb);
         $defUsers   = $remote ? array_flip(array_map('intval', $defaultOn['users'] ?? [])) : [];
@@ -956,7 +1266,8 @@ class KnowledgeBase
 
     /**
      * Retire des bases données celles EN DIRECT que cet utilisateur n'a pas le
-     * droit d'interroger. Les bases locales passent telles quelles.
+     * droit d'interroger, et toute base « Uniquement pour moi » dont il n'est
+     * pas le créateur. Les autres bases locales passent telles quelles.
      *
      * Le point de la décision : une base MyBrain suit la PERSONNE, jamais
      * l'assistant. Une base locale liée à un assistant sert tous ceux qui
@@ -973,6 +1284,9 @@ class KnowledgeBase
      */
     public static function gateForUser(array $kbs, ?array $user): array
     {
+        // « Uniquement pour moi » : la base ne répond qu'à son créateur, même
+        // liée à un assistant que d'autres ouvrent — locale ou en direct.
+        $kbs = array_values(array_filter($kbs, static fn(array $kb): bool => !self::hiddenFrom($kb, $user)));
         [$remote] = self::partitionByBackend($kbs);
         if ($remote === []) {
             return array_values($kbs);

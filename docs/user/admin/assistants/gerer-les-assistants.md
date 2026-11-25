@@ -10,37 +10,43 @@ de l'instance, y compris les assistants personnels des créateurs.
 
 ## Lire la liste
 
-Deux sections : **Partagés — organisation** et **Personnels**. Chaque ligne montre :
+La page s'ouvre sur une recherche — **Qui vous aide aujourd'hui ?** — qui trouve un assistant par son
+nom, sa description, son modèle ou son créateur. Dessous, un filtre : **Tous**, **Organisation**,
+**Personnels**, et **Inactifs** s'il y en a. Puis deux colonnes, **Organisation** et **Personnels** — un créateur sans assistant partagé ne voit que la sienne.
+Chaque ligne montre :
 
-- l'**identité** : avatar, nom, description, auteur — « créé par Système » quand l'assistant n'a plus
-  de créateur — et les badges **Global** et **Inactif** ;
-- la **nature** : badge **Partagé** ou **Personnel**, avec l'interrupteur **Partage organisation** ;
-- les **réglages clés** en pastilles : modèle, température, documents de référence, bases de
-  connaissances, outils ;
-- les **actions** : **Utiliser**, **Modifier**, et le menu **⋯** — **Autoriser dans les groupes →**,
-  **🗑 Supprimer**.
+- l'**identité** : avatar ou initiale à sa couleur, nom — sa **description** vient en bulle au survol
+  de la ligne, ou sur le petit **?** qui suit le nom (au doigt : toucher le **?**) ;
+- en petit, ce qu'il emploie : son **modèle** (ou « Modèle de l'organisation »), le nombre de
+  **bases**, de **documents de référence** et d'**outils** — et, pour l'assistant personnel d'un
+  autre, **de** son créateur, ou **sans créateur** quand le compte a été supprimé ;
+- une icône pour **qui le voit** — globe **Global**, groupe **Partagé**, cadenas **Personnel**, le
+  détail au survol — et son état, **Actif** ou **Inactif** ;
+- au survol, la bulle **Discuter** et le menu **⋯** : **Partager à l'organisation** ou **Rendre
+  personnel**, **Autoriser dans les groupes →**, **Supprimer…**.
 
-La barre du haut recherche par nom, description, auteur ou modèle, filtre par **Statut** et par
-**LLM**, et trie par nom, auteur, modèle, température ou nombre de documents. Le tri s'applique à
-l'intérieur de chaque section.
+**Cliquer une ligne** ouvre la page de l'assistant : son état, qui le voit, son créateur et sa
+dernière réponse ; ses chiffres des 30 derniers jours (réponses, personnes, conversations, crédits) ;
+sa consigne, ce qu'il connaît, son modèle, ses outils ; **Qui le voit** — pour un assistant partagé,
+les **groupes qui l'autorisent**, ou « Autorisé dans aucun groupe » ; et tout en bas son **schéma** :
+son modèle et sa température, le début de son prompt, son état, qui le voit, ses bases, ses
+documents et ses outils — voir [Lire le schéma d'un assistant](../../fonctionnalites/assistants/creer-un-assistant.md#lire-le-schéma-dun-assistant).
+Une base liée hors du périmètre d'un créateur reste comptée dans son schéma, sans son nom. Son menu
+**…** reprend celui de la ligne ; **Modifier** ouvre sa fiche.
 
-**Cliquer une ligne** affiche à droite le **schéma** de l'assistant : son modèle et sa température,
-le début de son prompt, son état, qui le voit, ses bases, ses documents et ses outils — voir
-[Lire le schéma d'un assistant](../../fonctionnalites/assistants/creer-un-assistant.md#lire-le-schéma-dun-assistant).
-Une base liée hors du périmètre d'un créateur reste comptée dans son schéma, sans son nom.
-
-Vous ne pouvez pas **Utiliser** l'assistant personnel d'un autre : il n'est visible que de son
-créateur dans le chat.
+La bulle **Discuter** n'apparaît pas sur l'assistant personnel d'un autre : il n'est visible que de
+son créateur dans le chat.
 
 ## Désactiver un assistant
 
-Ouvrez sa fiche et passez l'interrupteur du haut sur **Inactif**. Il disparaît du chat pour tout le
+Ouvrez sa fiche et éteignez l'interrupteur **Actif** de la section **Identité**. Il disparaît du chat pour tout le
 monde, créateur compris, et de la colonne **Assistants** des groupes. Ses conversations continuent en
 mode standard. Le réactiver le rend à nouveau visible, dans les mêmes groupes.
 
 ## Supprimer un assistant
 
-Menu **⋯ → 🗑 Supprimer**, ou **Supprimer cet assistant** en bas de sa fiche. **L'action est
+Menu **⋯** de sa ligne ou de sa page → **Supprimer…**, ou menu **…** de sa fiche → **Supprimer cet
+assistant**. **L'action est
 irréversible** : ses documents de référence, ses liens aux bases, aux outils et aux groupes
 disparaissent ; ses conversations redeviennent des conversations standard.
 
@@ -48,19 +54,20 @@ Préférez la désactivation tant que vous n'êtes pas sûr.
 
 ## Reprendre les assistants d'un compte supprimé
 
-Quand un créateur est supprimé, ses assistants restent, marqués « créé par Système » :
+Quand un créateur est supprimé, ses assistants restent ; ses assistants personnels sont marqués
+**sans créateur** :
 
 - ses assistants **partagés** continuent de servir, dans les mêmes groupes ;
 - ses assistants **personnels** ne sont plus visibles de personne dans le chat.
 
-Pour conserver un assistant personnel orphelin, activez son **Partage organisation** et cochez-le
-dans les groupes voulus. Mieux vaut le faire **avant** de supprimer le compte : la fenêtre de
+Pour conserver un assistant personnel orphelin, menu **⋯** de sa ligne → **Partager à
+l'organisation**, puis cochez-le dans les groupes voulus. Mieux vaut le faire **avant** de supprimer le compte : la fenêtre de
 confirmation de suppression annonce le nombre d'assistants qui perdront leur créateur.
 
 ## Tenir la bibliothèque d'avatars
 
-La section **Gestion des avatars d'assistants**, repliée en haut de la liste, rassemble les images
-proposées à la création d'un assistant.
+Le lien **Bibliothèque d'avatars**, en bas de la page, ouvre une fenêtre qui rassemble les images
+proposées à la création d'un assistant. Après chaque geste, la fenêtre se rouvre.
 
 - **Ajouter** : **Image** (PNG, JPG, GIF ou WebP, 2 Mo au plus), un **Nom** facultatif, puis
   **Ajouter**.
@@ -82,5 +89,5 @@ maison : créez-en un nouveau.
 
 | Ce qui arrive | Quoi faire |
 |---|---|
-| Un assistant « créé par Système » que personne ne voit | Son créateur a été supprimé. Le partager et l'autoriser dans un groupe, ou le supprimer. |
+| Un assistant personnel **sans créateur** que personne ne voit | Son créateur a été supprimé. Le partager et l'autoriser dans un groupe, ou le supprimer. |
 | Un avatar a disparu de plusieurs assistants | Il a été supprimé de la bibliothèque. Choisir un autre avatar sur chaque fiche. |

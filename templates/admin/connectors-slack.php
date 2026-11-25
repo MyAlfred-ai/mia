@@ -51,13 +51,18 @@ $md = static function (string $echappe, string ...$liens): string {
 };
 ?>
 <div class="admin-content">
+    <?php require ROOT . '/templates/partials/admin-topbar.php'; ?>
     <div class="connector-page slack-app-page">
         <p style="margin-bottom:10px"><a href="/admin/connectors" style="font-size:13px">← <?= te('Connecteurs') ?></a></p>
-        <h1 style="margin-bottom:6px"><?= te('Application Slack') ?></h1>
-        <p class="connector-intro">
+        <header class="page-head">
+        <div class="page-head-text">
+            <h1 style="margin-bottom:6px"><?= te('Application Slack') ?></h1>
+            <p class="connector-intro page-head-sub">
             <?= teb('Le connecteur Slack laisse les assistants {b}chercher et lire{/b} les conversations Slack d\'un utilisateur, et {b}publier en son nom{/b} après son approbation — toujours avec {b}ses{/b} droits : MIA ne voit que ce qu\'il voit déjà.') ?>
             <?= teb('Cette page règle la seule pièce commune : l\'{b}application Slack{/b} de votre organisation, créée une fois. Elle ne donne accès à rien par elle-même ; chaque utilisateur relie ensuite son propre compte dans {b}Réglages → Comptes connectés{/b}.') ?>
         </p>
+        </div>
+        </header>
 
         <?php /* Où en est le parcours : trois constats, chacun mène à l'endroit où il se règle. */ ?>
         <div class="slack-status" aria-label="<?= te('État du connecteur Slack') ?>">
