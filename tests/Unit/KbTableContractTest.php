@@ -36,6 +36,11 @@ final class KbTableContractTest extends TestCase
         $this->assertSame(2, substr_count($sql, 'ON DELETE CASCADE'), 'Fiche et lignes partent avec la base.');
         $this->assertStringContainsString('mia_write', $sql);
         $this->assertDoesNotMatchRegularExpression('/\bmanual\b/i', $sql, '`manual` est un mot réservé de MySQL 8.4.');
+    }
+
+    #[\PHPUnit\Framework\Attributes\Group('doc-interne')]
+    public function testLeGuideInterneAnnonceLaDerniereMigration(): void
+    {
         // Dernière migration du dépôt : CLAUDE.md annonce le bon numéro suivant.
         $files = glob(dirname(__DIR__, 2) . '/database/migrations/*.sql') ?: [];
         sort($files);

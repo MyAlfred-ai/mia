@@ -615,7 +615,7 @@ final class SpeechEnginesTest extends TestCase
 
     public function testLaDocDitLaNouvelleVoix(): void
     {
-        foreach (['docs/GUIDE-ADMIN.md', 'CLAUDE.md'] as $doc) {
+        foreach (['docs/GUIDE-ADMIN.md'] as $doc) {
             $src = self::src($doc);
             $this->assertStringContainsString('gpt-realtime-2.1-mini', $src, $doc);
             $this->assertStringContainsString('Voxtral TTS', $src, $doc);
@@ -627,5 +627,13 @@ final class SpeechEnginesTest extends TestCase
         }
         $this->assertStringNotContainsString('gpt-realtime', $publie);
         $this->assertStringContainsString('6 janvier 2027', self::src('docs/NOUVEAUTES.md'));
+    }
+
+    #[\PHPUnit\Framework\Attributes\Group('doc-interne')]
+    public function testLeGuideInterneDitLaNouvelleVoix(): void
+    {
+        $src = self::src('CLAUDE.md');
+        $this->assertStringContainsString('gpt-realtime-2.1-mini', $src);
+        $this->assertStringContainsString('Voxtral TTS', $src);
     }
 }

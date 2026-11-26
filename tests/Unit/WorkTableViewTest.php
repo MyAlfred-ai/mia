@@ -546,6 +546,11 @@ final class WorkTableViewTest extends TestCase
             $text = self::read($doc);
             $this->assertStringContainsString('« Voir »', $text, $doc);
         }
+    }
+
+    #[\PHPUnit\Framework\Attributes\Group('doc-interne')]
+    public function testLeGuideInterneEnParle(): void
+    {
         $this->assertStringContainsString('WorkTableView', self::read('CLAUDE.md'));
     }
 

@@ -208,12 +208,18 @@ final class KbPrivateTest extends TestCase
 
     public function testLaDocumentationEnParle(): void
     {
-        foreach (['docs/GUIDE-CREATEUR.md', 'docs/GUIDE-ADMIN.md', 'docs/NOUVEAUTES.md', 'CLAUDE.md'] as $doc) {
+        foreach (['docs/GUIDE-CREATEUR.md', 'docs/GUIDE-ADMIN.md', 'docs/NOUVEAUTES.md'] as $doc) {
             // Piste D : la réserve s'appelle « Privée » (d'abord « Uniquement pour moi »).
             $this->assertStringContainsString('Privée', self::lire($doc), $doc);
         }
         $page = 'docs/user/fonctionnalites/bases-de-connaissances/reserver-une-base.md';
         $this->assertFileExists(dirname(__DIR__, 2) . '/' . $page);
         $this->assertStringContainsString('reserver-une-base.md', self::lire('docs/user/fonctionnalites/bases-de-connaissances/index.md'));
+    }
+
+    #[\PHPUnit\Framework\Attributes\Group('doc-interne')]
+    public function testLeGuideInterneEnParle(): void
+    {
+        $this->assertStringContainsString('Privée', self::lire('CLAUDE.md'));
     }
 }

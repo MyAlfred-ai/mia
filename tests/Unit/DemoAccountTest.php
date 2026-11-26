@@ -226,6 +226,11 @@ final class DemoAccountTest extends TestCase
         $this->assertStringContainsString('Convertir en compte normal', $admin);
         $this->assertStringContainsString('comptes-de-demonstration.md', $this->read('docs/user/admin/utilisateurs/index.md'));
         $this->assertStringContainsString('Comptes de démonstration', $this->read('docs/GUIDE-ADMIN.md'));
+    }
+
+    #[\PHPUnit\Framework\Attributes\Group('doc-interne')]
+    public function testLeGuideInterneEnParle(): void
+    {
         $this->assertStringContainsString('Comptes de démonstration', $this->read('CLAUDE.md'));
     }
 }

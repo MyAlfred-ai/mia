@@ -385,6 +385,11 @@ final class MajorFeaturesTest extends TestCase
         $this->assertStringContainsString('`majeure` : oui', $this->read('docs/NOUVEAUTES.md'));
         $this->assertStringContainsString('Quoi de neuf', $this->read('docs/GUIDE-UTILISATEUR.md'));
         $this->assertStringContainsString('Quoi de neuf', $this->read('docs/user/fonctionnalites/resoudre-un-probleme.md'));
+    }
+
+    #[\PHPUnit\Framework\Attributes\Group('doc-interne')]
+    public function testLeGuideInterneDitLaRegle(): void
+    {
         $this->assertStringContainsString('## Nouveautés MAJEURES', $this->read('CLAUDE.md'));
     }
 }

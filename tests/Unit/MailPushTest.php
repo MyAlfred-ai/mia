@@ -343,6 +343,11 @@ final class MailPushTest extends TestCase
         $this->assertStringContainsString('notifications instantanées', mb_strtolower(self::src('docs/user/fonctionnalites/workflows/demarrer-sur-un-evenement.md')));
         $this->assertStringContainsString('Pub/Sub', self::src('docs/GUIDE-ADMIN.md'));
         $this->assertStringContainsString('id: workflow-email-instantane', self::src('docs/NOUVEAUTES.md'));
+    }
+
+    #[\PHPUnit\Framework\Attributes\Group('doc-interne')]
+    public function testLeGuideInterneEnParle(): void
+    {
         $this->assertStringContainsString('MailPush', self::src('CLAUDE.md'));
     }
 }

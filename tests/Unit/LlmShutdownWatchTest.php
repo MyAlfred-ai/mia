@@ -461,10 +461,17 @@ echo json_encode(["object" => "list", "data" => [["id" => "gpt-5", "object" => "
 
     public function testLaDocumentationLeDit(): void
     {
-        foreach (['docs/GUIDE-ADMIN.md', 'docs/user/admin/modeles/activer-les-modeles.md', 'CLAUDE.md'] as $f) {
+        foreach (['docs/GUIDE-ADMIN.md', 'docs/user/admin/modeles/activer-les-modeles.md'] as $f) {
             $this->assertStringContainsString('relev', (string)file_get_contents(self::root() . '/' . $f), $f);
         }
-        $this->assertStringContainsString('LlmShutdownWatch', (string)file_get_contents(self::root() . '/CLAUDE.md'));
         $this->assertStringContainsString('id: openai-dates-arret-relevees', (string)file_get_contents(self::root() . '/docs/NOUVEAUTES.md'));
+    }
+
+    #[\PHPUnit\Framework\Attributes\Group('doc-interne')]
+    public function testLeGuideInterneLeDit(): void
+    {
+        $claude = (string)file_get_contents(self::root() . '/CLAUDE.md');
+        $this->assertStringContainsString('relev', $claude);
+        $this->assertStringContainsString('LlmShutdownWatch', $claude);
     }
 }

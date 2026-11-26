@@ -16,6 +16,8 @@ storage/**
 !storage/**/
 !storage/**/.gitkeep
 !storage/.htaccess
+# Sessions de connexion (volume storage_sessions).
+storage/sessions/
 # Modèles PowerPoint et Word de l'entreprise (volume storage_branding),
 # nommé à part : un test vérifie qu'il n'est jamais versionné.
 storage/branding/

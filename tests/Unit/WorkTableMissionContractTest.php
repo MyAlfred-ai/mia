@@ -153,11 +153,16 @@ final class WorkTableMissionContractTest extends TestCase
         $this->assertStringContainsString('(traiter-chaque-ligne.md)', self::read('docs/user/fonctionnalites/connecteurs/recouper-des-sources.md'));
         $this->assertStringContainsString('une seule carte', self::read('docs/NOUVEAUTES.md'));
         $this->assertStringContainsString('enrichissement de tables de travail', self::read('docs/GUIDE-ADMIN.md'));
+        // Aucun lien d'une page utilisateur vers l'administration.
+        $this->assertStringNotContainsString('/admin/', $page);
+    }
+
+    #[\PHPUnit\Framework\Attributes\Group('doc-interne')]
+    public function testLeGuideInterneEnParle(): void
+    {
         $claude = self::read('CLAUDE.md');
         $this->assertStringContainsString('Lot 2 — `enrichir_table`', $claude);
         $this->assertStringContainsString('Lot 2 — `agir_sur_table`', $claude);
-        // Aucun lien d'une page utilisateur vers l'administration.
-        $this->assertStringNotContainsString('/admin/', $page);
     }
 }
 

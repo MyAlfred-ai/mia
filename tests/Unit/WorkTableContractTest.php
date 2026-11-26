@@ -146,6 +146,11 @@ final class WorkTableContractTest extends TestCase
         $this->assertStringContainsString('(recouper-des-sources.md)', $index, 'Une page nouvelle est annoncée dans la vue d’ensemble.');
         $this->assertStringContainsString('id: tables-de-travail | genre: nouveaute', self::read('docs/NOUVEAUTES.md'));
         $this->assertStringContainsString('tables de travail', self::read('docs/GUIDE-ADMIN.md'));
+    }
+
+    #[\PHPUnit\Framework\Attributes\Group('doc-interne')]
+    public function testLeGuideInterneEnParle(): void
+    {
         $this->assertStringContainsString('## Tables de travail', self::read('CLAUDE.md'));
     }
 

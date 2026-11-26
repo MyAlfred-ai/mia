@@ -642,6 +642,11 @@ final class WorkflowCallBrickTest extends TestCase
         $this->assertStringContainsString('Appeler un workflow', self::src('docs/GUIDE-CREATEUR.md'));
         $this->assertStringContainsString('Appeler un workflow', self::src('docs/user/fonctionnalites/workflows/index.md'));
         $this->assertFileExists(ROOT . '/docs/user/fonctionnalites/workflows/appeler-un-workflow.md');
+    }
+
+    #[\PHPUnit\Framework\Attributes\Group('doc-interne')]
+    public function testLeGuideInterneCiteLaMigration(): void
+    {
         $this->assertStringContainsString('113_workflow_calls.sql', self::src('CLAUDE.md'));
     }
 }
